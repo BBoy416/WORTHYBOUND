@@ -4,3 +4,4 @@ export { generateWbId, isWbId, parseWbId, WB_ID_PATTERN, type WbId } from "./ids
 export { TRUST_SCORE_DISCLAIMER } from "./trust.js";
 export * from "./lifecycle.js";
 export * from "./verification.js";
+export * from "./passport.js";
