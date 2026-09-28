@@ -10,6 +10,7 @@
     },
     "test": {
       "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/.env"],
       "env": ["TEST_DATABASE_URL"],
       "passThroughEnv": ["CI"],
       "outputs": []
