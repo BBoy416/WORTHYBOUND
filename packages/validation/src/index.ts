@@ -1,4 +1,5 @@
 export * from "./asset.js";
+export * from "./auth.js";
 export {
   dateTimeSchema,
   httpsUrlSchema,

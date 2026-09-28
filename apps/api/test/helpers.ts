@@ -1,0 +1,135 @@
+import { execFileSync } from "node:child_process";
+import { generateKeyPairSync, randomBytes, sign, type KeyObject } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import { getAddressDecoder } from "@solana/addresses";
+import { createPrismaClient, type PrismaClient } from "@worthybound/database";
+import type { FastifyInstance } from "fastify";
+import pg from "pg";
+import { buildApp, type BuildAppOptions } from "../src/app.js";
+import type { SignInInput } from "../src/auth/siws.js";
+import { loadConfig, type Config } from "../src/config.js";
+
+export const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+
+if (!TEST_DATABASE_URL && process.env.CI) {
+  throw new Error("TEST_DATABASE_URL must be set in CI");
+}
+
+const databasePackage = fileURLToPath(new URL("../../../packages/database", import.meta.url));
+
+export interface TestDatabase {
+  prisma: PrismaClient;
+  url: string;
+  drop(): Promise<void>;
+}
+
+/** Creates an isolated database with all migrations applied. */
+export async function createTestDatabase(): Promise<TestDatabase> {
+  if (!TEST_DATABASE_URL) throw new Error("TEST_DATABASE_URL is not set");
+  const name = `wb_test_${randomBytes(6).toString("hex")}`;
+  const admin = new pg.Client({ connectionString: TEST_DATABASE_URL });
+  await admin.connect();
+  await admin.query(`CREATE DATABASE "${name}"`);
+  await admin.end();
+
+  const url = new URL(TEST_DATABASE_URL);
+  url.pathname = `/${name}`;
+  execFileSync("pnpm", ["exec", "prisma", "migrate", "deploy"], {
+    cwd: databasePackage,
+    env: { ...process.env, DATABASE_URL: url.toString() },
+    stdio: "pipe",
+  });
+
+  const prisma = createPrismaClient(url.toString());
+  return {
+    prisma,
+    url: url.toString(),
+    async drop() {
+      await prisma.$disconnect();
+      const cleanup = new pg.Client({ connectionString: TEST_DATABASE_URL });
+      await cleanup.connect();
+      await cleanup.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+      await cleanup.end();
+    },
+  };
+}
+
+export const testConfig = (overrides: Record<string, string> = {}): Config =>
+  loadConfig({
+    NODE_ENV: "test",
+    LOG_LEVEL: "silent",
+    DATABASE_URL: "postgresql://unused@127.0.0.1/unused",
+    AUTH_DOMAIN: "worthybound.test",
+    SESSION_SECRET: "test-session-secret-at-least-32-characters",
+    SOLANA_CLUSTER: "devnet",
+    ...overrides,
+  });
+
+/** A Solana wallet that signs like Phantom or Solflare: Ed25519 over the message bytes. */
+export class TestWallet {
+  readonly address: string;
+  readonly #privateKey: KeyObject;
+
+  constructor() {
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const x = publicKey.export({ format: "jwk" }).x as string;
+    this.address = getAddressDecoder().decode(Buffer.from(x, "base64url"));
+    this.#privateKey = privateKey;
+  }
+
+  sign(message: Uint8Array | string): Buffer {
+    return sign(null, Buffer.from(message), this.#privateKey);
+  }
+}
+
+export interface Clock {
+  now: () => Date;
+  advance(ms: number): void;
+}
+
+export function testClock(): Clock {
+  let current = new Date();
+  return {
+    now: () => current,
+    advance(ms) {
+      current = new Date(current.getTime() + ms);
+    },
+  };
+}
+
+export function testApp(
+  prisma: PrismaClient,
+  options: Partial<BuildAppOptions> = {},
+): Promise<FastifyInstance> {
+  return buildApp({
+    config: testConfig(),
+    prisma,
+    rateLimit: { max: 1000, timeWindowMs: 60_000 },
+    ...options,
+  });
+}
+
+export async function requestNonce(app: FastifyInstance, address: string) {
+  const res = await app.inject({ method: "POST", url: "/auth/nonce", payload: { address } });
+  if (res.statusCode !== 200) throw new Error(`nonce request failed: ${res.statusCode}`);
+  return res.json<{ input: SignInInput; message: string; expiresAt: string }>();
+}
+
+export const verifyPayload = (address: string, message: string, signature: Uint8Array) => ({
+  address,
+  message: Buffer.from(message).toString("base64"),
+  signature: Buffer.from(signature).toString("base64"),
+});
+
+/** Full sign-in; returns the session token from the cookie. */
+export async function signIn(app: FastifyInstance, wallet: TestWallet): Promise<string> {
+  const { message } = await requestNonce(app, wallet.address);
+  const res = await app.inject({
+    method: "POST",
+    url: "/auth/verify",
+    payload: verifyPayload(wallet.address, message, wallet.sign(message)),
+  });
+  const cookie = res.cookies.find((c) => c.name === "wb_session");
+  if (res.statusCode !== 200 || !cookie) throw new Error(`sign-in failed: ${res.statusCode}`);
+  return cookie.value;
+}
