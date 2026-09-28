@@ -1,0 +1,823 @@
+// WorthyBound data model.
+// Integrity rules that Prisma cannot express (append-only tables, check constraints,
+// partial unique indexes, provenance hash chain, authority checks) live in the SQL
+// migrations and are documented in docs/adr/0005-database-integrity.md.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum IdentityStatus {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+  EXPIRED
+}
+
+enum Role {
+  USER
+  VERIFIER
+  VERIFIER_REVIEWER
+  ADMIN
+}
+
+enum AssetCategory {
+  LUXURY_WATCH
+  FINE_ART
+  JEWELRY
+  COLLECTIBLE_CAR
+  COLLECTIBLE
+  EQUIPMENT
+  OTHER
+}
+
+enum AssetStatus {
+  DRAFT
+  TOKENIZED
+  ACTIVE
+  VERIFIED
+  TRANSFER_PENDING
+  REVERIFICATION_REQUIRED
+  DISPUTED
+  REPORTED_LOST
+  REPORTED_STOLEN
+  REVOKED
+}
+
+enum TokenizationStatus {
+  NOT_TOKENIZED
+  PENDING
+  TOKENIZED
+  FAILED
+}
+
+enum VerificationLevel {
+  UNVERIFIED
+  SELF_DOCUMENTED
+  INSPECTED
+  AUTHENTICATED
+  MULTI_VERIFIED
+}
+
+enum OwnershipReason {
+  REGISTRATION
+  TRANSFER
+  RECOVERY
+  ADMIN_CORRECTION
+}
+
+enum TransferStatus {
+  PENDING
+  ACCEPTED
+  COMPLETED
+  REJECTED
+  CANCELLED
+  EXPIRED
+}
+
+enum ProofSource {
+  OWNER
+  THIRD_PARTY
+  VERIFIER
+  MANUFACTURER
+}
+
+enum EvidenceType {
+  PHOTO
+  RECEIPT
+  CERTIFICATE
+  PROVENANCE_DOCUMENT
+  SERIAL_NUMBER
+  INSPECTION_REPORT
+  APPRAISAL_DOCUMENT
+  CONDITION_REPORT
+  OTHER
+}
+
+enum EvidenceVisibility {
+  PRIVATE
+  PUBLIC
+}
+
+enum ReviewStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+enum VerifierStatus {
+  APPLIED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  SUSPENDED
+  REVOKED
+}
+
+enum VerifierEntityType {
+  INDIVIDUAL
+  BUSINESS
+  LABORATORY
+  MANUFACTURER
+}
+
+enum CategoryPermissionStatus {
+  PENDING
+  APPROVED
+  SUSPENDED
+  REVOKED
+}
+
+enum TemplateVersionStatus {
+  DRAFT
+  PUBLISHED
+  RETIRED
+}
+
+enum VerificationRequestStatus {
+  OPEN
+  ASSIGNED
+  COMPLETED
+  CANCELLED
+  EXPIRED
+}
+
+enum ClaimType {
+  SERIAL_NUMBER
+  POSSESSION
+  CONDITION
+  INSPECTION
+  AUTHENTICATION
+  APPRAISAL
+  PROVENANCE
+  CERTIFICATE
+}
+
+enum AttestationResult {
+  CONFIRMED
+  CONTRADICTED
+  INCONCLUSIVE
+}
+
+enum AttestationMethod {
+  IN_PERSON
+  REMOTE
+  LABORATORY
+  DOCUMENT_REVIEW
+}
+
+enum AssuranceLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum AttestationStatus {
+  ACTIVE
+  EXPIRED
+  SUPERSEDED
+  DISPUTED
+  REVOKED
+}
+
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  UPHELD
+  REJECTED
+  WITHDRAWN
+}
+
+enum ProvenanceEventType {
+  REGISTERED
+  TOKENIZED
+  EVIDENCE_ADDED
+  EVIDENCE_COMMITTED
+  ATTESTATION_ADDED
+  ATTESTATION_REVOKED
+  TRANSFER_REQUESTED
+  TRANSFER_COMPLETED
+  STATUS_CHANGED
+  CONDITION_UPDATED
+  REVERIFICATION_REQUIRED
+  REPORTED_LOST
+  REPORTED_STOLEN
+  RECOVERED
+  DISPUTE_OPENED
+  DISPUTE_RESOLVED
+}
+
+enum SolanaCluster {
+  LOCALNET
+  DEVNET
+}
+
+enum ChainTransactionKind {
+  REGISTER_ASSET
+  MINT_ASSET
+  COMMIT_EVIDENCE
+  APPROVE_VERIFIER
+  UPDATE_VERIFIER
+  SUBMIT_ATTESTATION
+  REVOKE_ATTESTATION
+  COMMIT_TRUST_SCORE
+  TRANSFER_ASSET
+  UPDATE_ASSET_STATUS
+}
+
+enum ChainEntityType {
+  ASSET
+  VERIFIER
+  ATTESTATION
+  EVIDENCE_COMMITMENT
+  TRUST_SCORE_SNAPSHOT
+  TRANSFER_REQUEST
+}
+
+enum ChainTransactionStatus {
+  PENDING
+  SUBMITTED
+  CONFIRMED
+  FINALIZED
+  FAILED
+}
+
+// ─── Identity and access ──────────────────────────────────────────────────────
+
+/// A wallet address is never treated as proof of real-world identity.
+/// Only KYC status and the provider reference are stored, never identity documents.
+model User {
+  id                  String         @id @default(uuid(7)) @db.Uuid
+  walletAddress       String         @unique
+  displayName         String?
+  email               String?        @unique
+  identityStatus      IdentityStatus @default(UNVERIFIED)
+  identityProvider    String?
+  identityProviderRef String?
+  identityVerifiedAt  DateTime?      @db.Timestamptz(3)
+  createdAt           DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime       @updatedAt @db.Timestamptz(3)
+
+  sessions                Session[]
+  roles                   RoleAssignment[]              @relation("RoleHolder")
+  rolesGranted            RoleAssignment[]              @relation("RoleGranter")
+  assets                  Asset[]
+  ownerships              Ownership[]
+  transfersSent           TransferRequest[]             @relation("TransferFrom")
+  transfersReceived       TransferRequest[]             @relation("TransferTo")
+  evidenceUploaded        Evidence[]                    @relation("EvidenceUploader")
+  evidenceReviewed        Evidence[]                    @relation("EvidenceReviewer")
+  verifier                Verifier?                     @relation("VerifierUser")
+  verifiersApproved       Verifier[]                    @relation("VerifierApprover")
+  permissionsApproved     VerifierCategoryPermission[]
+  verificationRequests    VerificationRequest[]
+  templateVersionsCreated VerificationTemplateVersion[]
+  disputesOpened          Dispute[]                     @relation("DisputeOpener")
+  disputesResolved        Dispute[]                     @relation("DisputeResolver")
+  assetStatusEvents       AssetStatusEvent[]
+  verifierStatusEvents    VerifierStatusEvent[]
+  attestationStatusEvents AttestationStatusEvent[]
+  provenanceEvents        ProvenanceEvent[]
+  auditLogs               AuditLog[]
+
+  @@map("users")
+}
+
+/// Single-use Sign-In With Solana nonce.
+model AuthNonce {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  walletAddress String
+  nonce         String    @unique
+  domain        String
+  issuedAt      DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt     DateTime  @db.Timestamptz(3)
+  usedAt        DateTime? @db.Timestamptz(3)
+
+  @@index([walletAddress])
+  @@map("auth_nonces")
+}
+
+model Session {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  userId        String    @db.Uuid
+  /// SHA-256 of the session token; the token itself is never stored.
+  tokenHash     String    @unique
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt     DateTime  @db.Timestamptz(3)
+  revokedAt     DateTime? @db.Timestamptz(3)
+  ipHash        String?
+  userAgentHash String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model RoleAssignment {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  userId      String    @db.Uuid
+  role        Role
+  grantedById String?   @db.Uuid
+  grantedAt   DateTime  @default(now()) @db.Timestamptz(3)
+  revokedAt   DateTime? @db.Timestamptz(3)
+
+  user      User  @relation("RoleHolder", fields: [userId], references: [id], onDelete: Restrict)
+  grantedBy User? @relation("RoleGranter", fields: [grantedById], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@map("role_assignments")
+}
+
+// ─── Assets ───────────────────────────────────────────────────────────────────
+
+model Asset {
+  id                          String             @id @default(uuid(7)) @db.Uuid
+  /// Permanent WorthyBound identifier, e.g. WB-7F93A281.
+  wbId                        String             @unique
+  ownerId                     String             @db.Uuid
+  category                    AssetCategory
+  brand                       String?
+  model                       String?
+  /// Private. Never exposed in the public passport or on-chain.
+  serialNumber                String?
+  /// Keyed HMAC of category, brand and normalized serial. Duplicates are flagged, not blocked.
+  serialFingerprint           String?
+  serialFingerprintKeyVersion Int?
+  description                 String?
+  publicDescription           String?
+  attributes                  Json               @default("{}")
+  status                      AssetStatus        @default(DRAFT)
+  tokenizationStatus          TokenizationStatus @default(NOT_TOKENIZED)
+  chainAssetAddress           String?            @unique
+  chainRecordAddress          String?            @unique
+  /// Derived from the latest TrustScoreSnapshot. Never set from user input.
+  currentTrustScore           Int                @default(0)
+  verificationLevel           VerificationLevel  @default(UNVERIFIED)
+  createdAt                   DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt                   DateTime           @updatedAt @db.Timestamptz(3)
+
+  owner                User                  @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  statusEvents         AssetStatusEvent[]
+  ownerships           Ownership[]
+  transferRequests     TransferRequest[]
+  evidence             Evidence[]
+  evidenceCommitments  EvidenceCommitment[]
+  verificationRequests VerificationRequest[]
+  attestations         Attestation[]
+  disputes             Dispute[]
+  trustScoreSnapshots  TrustScoreSnapshot[]
+  provenanceEvents     ProvenanceEvent[]
+
+  @@index([ownerId])
+  @@index([serialFingerprint])
+  @@index([category, status])
+  @@map("assets")
+}
+
+/// Append-only.
+model AssetStatusEvent {
+  id         String       @id @default(uuid(7)) @db.Uuid
+  assetId    String       @db.Uuid
+  fromStatus AssetStatus?
+  toStatus   AssetStatus
+  reason     String?
+  actorId    String?      @db.Uuid
+  createdAt  DateTime     @default(now()) @db.Timestamptz(3)
+
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  actor User? @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([assetId, createdAt])
+  @@map("asset_status_events")
+}
+
+/// Custody periods. At most one open period (endedAt = null) per asset.
+model Ownership {
+  id                String          @id @default(uuid(7)) @db.Uuid
+  assetId           String          @db.Uuid
+  ownerId           String          @db.Uuid
+  reason            OwnershipReason
+  transferRequestId String?         @unique @db.Uuid
+  startedAt         DateTime        @default(now()) @db.Timestamptz(3)
+  endedAt           DateTime?       @db.Timestamptz(3)
+
+  asset           Asset            @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  owner           User             @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  transferRequest TransferRequest? @relation(fields: [transferRequestId], references: [id], onDelete: Restrict)
+
+  @@index([assetId, startedAt])
+  @@map("ownerships")
+}
+
+/// Controlled transfer (ADR 0002). At most one PENDING or ACCEPTED transfer per asset.
+model TransferRequest {
+  id              String         @id @default(uuid(7)) @db.Uuid
+  assetId         String         @db.Uuid
+  fromUserId      String         @db.Uuid
+  toUserId        String?        @db.Uuid
+  toWalletAddress String
+  status          TransferStatus @default(PENDING)
+  expiresAt       DateTime       @db.Timestamptz(3)
+  acceptedAt      DateTime?      @db.Timestamptz(3)
+  completedAt     DateTime?      @db.Timestamptz(3)
+  cancelledAt     DateTime?      @db.Timestamptz(3)
+  createdAt       DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime       @updatedAt @db.Timestamptz(3)
+
+  asset     Asset      @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  fromUser  User       @relation("TransferFrom", fields: [fromUserId], references: [id], onDelete: Restrict)
+  toUser    User?      @relation("TransferTo", fields: [toUserId], references: [id], onDelete: Restrict)
+  ownership Ownership?
+
+  @@index([assetId, status])
+  @@map("transfer_requests")
+}
+
+// ─── Evidence ─────────────────────────────────────────────────────────────────
+
+model Evidence {
+  id               String             @id @default(uuid(7)) @db.Uuid
+  assetId          String             @db.Uuid
+  uploaderId       String             @db.Uuid
+  type             EvidenceType
+  source           ProofSource        @default(OWNER)
+  /// Private object-storage key. Never a public URL.
+  storageKey       String             @unique
+  sha256           String
+  mimeType         String
+  sizeBytes        Int
+  visibility       EvidenceVisibility @default(PRIVATE)
+  reviewStatus     ReviewStatus       @default(PENDING)
+  reviewedById     String?            @db.Uuid
+  reviewedAt       DateTime?          @db.Timestamptz(3)
+  originalFilename String?
+  description      String?
+  capturedAt       DateTime?          @db.Timestamptz(3)
+  createdAt        DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime           @updatedAt @db.Timestamptz(3)
+
+  asset           Asset                    @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  uploader        User                     @relation("EvidenceUploader", fields: [uploaderId], references: [id], onDelete: Restrict)
+  reviewedBy      User?                    @relation("EvidenceReviewer", fields: [reviewedById], references: [id], onDelete: Restrict)
+  commitmentItems EvidenceCommitmentItem[]
+  attestations    AttestationEvidence[]
+  disputes        Dispute[]
+
+  @@index([assetId])
+  @@index([sha256])
+  @@map("evidence")
+}
+
+/// Append-only. Merkle root over a batch of evidence hashes, anchored on-chain.
+model EvidenceCommitment {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  assetId       String   @db.Uuid
+  merkleRoot    String
+  algorithm     String   @default("sha256-merkle-v1")
+  evidenceCount Int
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  asset Asset                    @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  items EvidenceCommitmentItem[]
+
+  @@index([assetId, createdAt])
+  @@map("evidence_commitments")
+}
+
+/// Append-only.
+model EvidenceCommitmentItem {
+  commitmentId String @db.Uuid
+  leafIndex    Int
+  evidenceId   String @db.Uuid
+  sha256       String
+
+  commitment EvidenceCommitment @relation(fields: [commitmentId], references: [id], onDelete: Restrict)
+  evidence   Evidence           @relation(fields: [evidenceId], references: [id], onDelete: Restrict)
+
+  @@id([commitmentId, leafIndex])
+  @@unique([commitmentId, evidenceId])
+  @@map("evidence_commitment_items")
+}
+
+// ─── Verification ─────────────────────────────────────────────────────────────
+
+model Verifier {
+  id                      String             @id @default(uuid(7)) @db.Uuid
+  userId                  String             @unique @db.Uuid
+  status                  VerifierStatus     @default(APPLIED)
+  entityType              VerifierEntityType
+  businessName            String?
+  website                 String?
+  bio                     String?
+  credentialStatus        ReviewStatus       @default(PENDING)
+  attestationCount        Int                @default(0)
+  disputeCount            Int                @default(0)
+  upheldDisputeCount      Int                @default(0)
+  revokedAttestationCount Int                @default(0)
+  approvedById            String?            @db.Uuid
+  approvedAt              DateTime?          @db.Timestamptz(3)
+  chainVerifierAddress    String?            @unique
+  createdAt               DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt               DateTime           @updatedAt @db.Timestamptz(3)
+
+  user                User                         @relation("VerifierUser", fields: [userId], references: [id], onDelete: Restrict)
+  approvedBy          User?                        @relation("VerifierApprover", fields: [approvedById], references: [id], onDelete: Restrict)
+  categoryPermissions VerifierCategoryPermission[]
+  statusEvents        VerifierStatusEvent[]
+  assignedRequests    VerificationRequest[]
+  attestations        Attestation[]
+
+  @@index([status])
+  @@map("verifiers")
+}
+
+/// A watch specialist does not automatically have permission to authenticate fine art.
+model VerifierCategoryPermission {
+  id           String                   @id @default(uuid(7)) @db.Uuid
+  verifierId   String                   @db.Uuid
+  category     AssetCategory
+  status       CategoryPermissionStatus @default(PENDING)
+  approvedById String?                  @db.Uuid
+  approvedAt   DateTime?                @db.Timestamptz(3)
+  revokedAt    DateTime?                @db.Timestamptz(3)
+  reason       String?
+  createdAt    DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime                 @updatedAt @db.Timestamptz(3)
+
+  verifier   Verifier @relation(fields: [verifierId], references: [id], onDelete: Restrict)
+  approvedBy User?    @relation(fields: [approvedById], references: [id], onDelete: Restrict)
+
+  @@unique([verifierId, category])
+  @@map("verifier_category_permissions")
+}
+
+/// Append-only.
+model VerifierStatusEvent {
+  id         String          @id @default(uuid(7)) @db.Uuid
+  verifierId String          @db.Uuid
+  fromStatus VerifierStatus?
+  toStatus   VerifierStatus
+  reason     String?
+  actorId    String?         @db.Uuid
+  createdAt  DateTime        @default(now()) @db.Timestamptz(3)
+
+  verifier Verifier @relation(fields: [verifierId], references: [id], onDelete: Restrict)
+  actor    User?    @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([verifierId, createdAt])
+  @@map("verifier_status_events")
+}
+
+model VerificationTemplate {
+  id          String        @id @default(uuid(7)) @db.Uuid
+  code        String        @unique
+  category    AssetCategory
+  name        String
+  description String?
+  createdAt   DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime      @updatedAt @db.Timestamptz(3)
+
+  versions VerificationTemplateVersion[]
+
+  @@index([category])
+  @@map("verification_templates")
+}
+
+/// Immutable once PUBLISHED (only PUBLISHED -> RETIRED is allowed).
+model VerificationTemplateVersion {
+  id               String                @id @default(uuid(7)) @db.Uuid
+  templateId       String                @db.Uuid
+  version          Int
+  status           TemplateVersionStatus @default(DRAFT)
+  requiredClaims   Json
+  requiredEvidence Json
+  allowedMethods   Json
+  minVerifiers     Int                   @default(1)
+  createdById      String?               @db.Uuid
+  publishedAt      DateTime?             @db.Timestamptz(3)
+  createdAt        DateTime              @default(now()) @db.Timestamptz(3)
+
+  template     VerificationTemplate  @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  createdBy    User?                 @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  requests     VerificationRequest[]
+  attestations Attestation[]
+
+  @@unique([templateId, version])
+  @@map("verification_template_versions")
+}
+
+model VerificationRequest {
+  id                 String                    @id @default(uuid(7)) @db.Uuid
+  assetId            String                    @db.Uuid
+  requesterId        String                    @db.Uuid
+  templateVersionId  String                    @db.Uuid
+  assignedVerifierId String?                   @db.Uuid
+  status             VerificationRequestStatus @default(OPEN)
+  completedAt        DateTime?                 @db.Timestamptz(3)
+  createdAt          DateTime                  @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime                  @updatedAt @db.Timestamptz(3)
+
+  asset            Asset                       @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  requester        User                        @relation(fields: [requesterId], references: [id], onDelete: Restrict)
+  templateVersion  VerificationTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
+  assignedVerifier Verifier?                   @relation(fields: [assignedVerifierId], references: [id], onDelete: Restrict)
+  attestations     Attestation[]
+
+  @@index([assetId, status])
+  @@map("verification_requests")
+}
+
+/// Signed claim by an approved verifier. Claim, signature and payload fields are immutable;
+/// only status may change, and every change is recorded in AttestationStatusEvent.
+model Attestation {
+  id                      String            @id @default(uuid(7)) @db.Uuid
+  assetId                 String            @db.Uuid
+  verifierId              String            @db.Uuid
+  verificationRequestId   String?           @db.Uuid
+  templateVersionId       String            @db.Uuid
+  claimType               ClaimType
+  result                  AttestationResult
+  method                  AttestationMethod
+  assuranceLevel          AssuranceLevel
+  notes                   String?
+  nonce                   String
+  signedPayloadHash       String
+  signature               String
+  issuedAt                DateTime          @db.Timestamptz(3)
+  expiresAt               DateTime?         @db.Timestamptz(3)
+  status                  AttestationStatus @default(ACTIVE)
+  supersedesId            String?           @unique @db.Uuid
+  chainAttestationAddress String?           @unique
+  createdAt               DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt               DateTime          @updatedAt @db.Timestamptz(3)
+
+  asset               Asset                       @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  verifier            Verifier                    @relation(fields: [verifierId], references: [id], onDelete: Restrict)
+  verificationRequest VerificationRequest?        @relation(fields: [verificationRequestId], references: [id], onDelete: Restrict)
+  templateVersion     VerificationTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
+  supersedes          Attestation?                @relation("Supersession", fields: [supersedesId], references: [id], onDelete: Restrict)
+  supersededBy        Attestation?                @relation("Supersession")
+  evidence            AttestationEvidence[]
+  statusEvents        AttestationStatusEvent[]
+  disputes            Dispute[]
+
+  @@unique([verifierId, nonce])
+  @@index([assetId, status])
+  @@map("attestations")
+}
+
+/// Append-only.
+model AttestationEvidence {
+  attestationId String @db.Uuid
+  evidenceId    String @db.Uuid
+  /// Evidence hash at signing time.
+  sha256        String
+
+  attestation Attestation @relation(fields: [attestationId], references: [id], onDelete: Restrict)
+  evidence    Evidence    @relation(fields: [evidenceId], references: [id], onDelete: Restrict)
+
+  @@id([attestationId, evidenceId])
+  @@map("attestation_evidence")
+}
+
+/// Append-only.
+model AttestationStatusEvent {
+  id            String             @id @default(uuid(7)) @db.Uuid
+  attestationId String             @db.Uuid
+  fromStatus    AttestationStatus?
+  toStatus      AttestationStatus
+  reason        String?
+  actorId       String?            @db.Uuid
+  createdAt     DateTime           @default(now()) @db.Timestamptz(3)
+
+  attestation Attestation @relation(fields: [attestationId], references: [id], onDelete: Restrict)
+  actor       User?       @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([attestationId, createdAt])
+  @@map("attestation_status_events")
+}
+
+model Dispute {
+  id            String        @id @default(uuid(7)) @db.Uuid
+  assetId       String        @db.Uuid
+  attestationId String?       @db.Uuid
+  evidenceId    String?       @db.Uuid
+  openedById    String        @db.Uuid
+  reason        String
+  details       String?
+  status        DisputeStatus @default(OPEN)
+  resolution    String?
+  resolvedById  String?       @db.Uuid
+  resolvedAt    DateTime?     @db.Timestamptz(3)
+  createdAt     DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime      @updatedAt @db.Timestamptz(3)
+
+  asset       Asset        @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  attestation Attestation? @relation(fields: [attestationId], references: [id], onDelete: Restrict)
+  evidence    Evidence?    @relation(fields: [evidenceId], references: [id], onDelete: Restrict)
+  openedBy    User         @relation("DisputeOpener", fields: [openedById], references: [id], onDelete: Restrict)
+  resolvedBy  User?        @relation("DisputeResolver", fields: [resolvedById], references: [id], onDelete: Restrict)
+
+  @@index([assetId, status])
+  @@map("disputes")
+}
+
+// ─── Trust ────────────────────────────────────────────────────────────────────
+
+/// Append-only. Output of @worthybound/trust-engine, reproducible from inputsHash.
+model TrustScoreSnapshot {
+  id                String            @id @default(uuid(7)) @db.Uuid
+  assetId           String            @db.Uuid
+  score             Int
+  verificationLevel VerificationLevel
+  factors           Json
+  deductions        Json
+  capsApplied       Json
+  excludedProofs    Json
+  engineVersion     String
+  weightsVersion    String
+  inputsHash        String
+  computedAt        DateTime          @db.Timestamptz(3)
+  createdAt         DateTime          @default(now()) @db.Timestamptz(3)
+
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
+  @@index([assetId, computedAt])
+  @@map("trust_score_snapshots")
+}
+
+// ─── History, chain and audit ─────────────────────────────────────────────────
+
+/// Append-only, hash-chained per asset. sequence, prevHash and hash are set by the database.
+model ProvenanceEvent {
+  id         String              @id @default(uuid(7)) @db.Uuid
+  assetId    String              @db.Uuid
+  sequence   Int                 @default(0)
+  type       ProvenanceEventType
+  actorId    String?             @db.Uuid
+  payload    Json                @default("{}")
+  occurredAt DateTime            @default(now()) @db.Timestamptz(3)
+  prevHash   String?
+  hash       String              @unique @default("")
+  createdAt  DateTime            @default(now()) @db.Timestamptz(3)
+
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  actor User? @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@unique([assetId, sequence])
+  @@map("provenance_events")
+}
+
+/// Every chain action is idempotent through idempotencyKey.
+model ChainTransaction {
+  id             String                 @id @default(uuid(7)) @db.Uuid
+  idempotencyKey String                 @unique
+  kind           ChainTransactionKind
+  cluster        SolanaCluster          @default(DEVNET)
+  entityType     ChainEntityType
+  entityId       String                 @db.Uuid
+  status         ChainTransactionStatus @default(PENDING)
+  signature      String?                @unique
+  slot           BigInt?
+  attempts       Int                    @default(0)
+  lastError      String?
+  submittedAt    DateTime?              @db.Timestamptz(3)
+  confirmedAt    DateTime?              @db.Timestamptz(3)
+  finalizedAt    DateTime?              @db.Timestamptz(3)
+  createdAt      DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime               @updatedAt @db.Timestamptz(3)
+
+  @@index([entityType, entityId])
+  @@index([status])
+  @@map("chain_transactions")
+}
+
+/// Append-only.
+model AuditLog {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  actorId       String?  @db.Uuid
+  action        String
+  targetType    String
+  targetId      String?
+  metadata      Json     @default("{}")
+  ipHash        String?
+  userAgentHash String?
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([targetType, targetId])
+  @@index([actorId, createdAt])
+  @@map("audit_logs")
+}

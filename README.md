@@ -10,13 +10,14 @@ verification by approved professionals raises its Trust Score.
 
 ## Status
 
-Phase 1: engineering foundation and Trust Score engine. Solana work targets **Devnet only**.
+Phase 2: database schema and integrity rules. Solana work targets **Devnet only**.
 
 ## Repository layout
 
 ```text
 apps/                 api, worker, web (added in later phases)
 packages/
+  database/           Prisma schema, migrations and client (PostgreSQL)
   trust-engine/       pure, versioned Trust Score calculation
 programs/             Anchor program (Phase 10)
 docs/adr/             architecture decision records
@@ -24,8 +25,8 @@ tests/                integration and end-to-end tests (later phases)
 docker-compose.yml    local PostgreSQL and S3-compatible storage
 ```
 
-Planned packages (see [ADR 0001](docs/adr/0001-monorepo-and-stack.md)): `database`, `shared`,
-`validation`, `solana`, `storage`.
+Planned packages (see [ADR 0001](docs/adr/0001-monorepo-and-stack.md)): `shared`, `validation`,
+`solana`, `storage`.
 
 ## Requirements
 
@@ -42,22 +43,30 @@ pnpm install          # also enables the gitleaks pre-commit hook
 cp .env.example .env  # then replace every placeholder value
 ```
 
-Start local services when needed:
+Start local services and apply database migrations:
 
 ```sh
 docker compose --env-file .env up -d
+pnpm db:migrate:deploy
 ```
+
+Database integration tests need `TEST_DATABASE_URL` (see `.env.example`); they create and drop
+throwaway databases and are skipped when it is not set.
 
 ## Scripts
 
-| Command             | Purpose                                 |
-| ------------------- | --------------------------------------- |
-| `pnpm test`         | Run all tests                           |
-| `pnpm typecheck`    | Type-check all packages                 |
-| `pnpm lint`         | ESLint                                  |
-| `pnpm format`       | Format with Prettier                    |
-| `pnpm build`        | Build all packages                      |
-| `pnpm secrets:scan` | Scan the Git history for leaked secrets |
+| Command                  | Purpose                                        |
+| ------------------------ | ---------------------------------------------- |
+| `pnpm test`              | Run all tests                                  |
+| `pnpm typecheck`         | Type-check all packages                        |
+| `pnpm lint`              | ESLint                                         |
+| `pnpm format`            | Format with Prettier                           |
+| `pnpm build`             | Build all packages                             |
+| `pnpm secrets:scan`      | Scan the Git history for leaked secrets        |
+| `pnpm db:generate`       | Generate the Prisma client                     |
+| `pnpm db:migrate:dev`    | Create and apply a new migration (development) |
+| `pnpm db:migrate:deploy` | Apply pending migrations                       |
+| `pnpm db:migrate:status` | Show migration status                          |
 
 ## Git workflow
 
@@ -78,3 +87,4 @@ docker compose --env-file .env up -d
 - [0002 Controlled transfer of asset tokens](docs/adr/0002-controlled-transfer.md)
 - [0003 Weighted Trust Score](docs/adr/0003-weighted-trust-score.md)
 - [0004 KYC policy](docs/adr/0004-kyc-policy.md)
+- [0005 Database integrity enforced in PostgreSQL](docs/adr/0005-database-integrity.md)
