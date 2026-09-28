@@ -10,6 +10,7 @@ import type {
   ClaimType,
   EvidenceType,
   EvidenceVisibility,
+  ItemCondition,
   ProvenanceEventType,
   ReviewStatus,
   SolanaCluster,
@@ -36,6 +37,7 @@ export interface PassportSource {
     tokenizationStatus: TokenizationStatus;
     chainAssetAddress: string | null;
     verificationLevel: VerificationLevel;
+    condition: ItemCondition | null;
   };
   trust: { score: number; computedAt: Date; engineVersion: string; weightsVersion: string } | null;
   custody: { currentSince: Date | null; transferCount: number };
@@ -56,6 +58,7 @@ export interface PassportSource {
     result: AttestationResult;
     method: AttestationMethod;
     assuranceLevel: AssuranceLevel;
+    conditionGrade: ItemCondition | null;
     status: AttestationStatus;
     issuedAt: Date;
     expiresAt: Date | null;
@@ -94,6 +97,19 @@ export interface PublicPassport {
   status: AssetStatus;
   verificationLevel: VerificationLevel;
   lastVerifiedAt: string | null;
+  condition: {
+    /** Stated by the owner; not verified. */
+    ownerStated: ItemCondition | null;
+    /** Latest active, confirmed CONDITION attestation. */
+    verified: {
+      grade: ItemCondition;
+      assessedAt: string;
+      attestationId: string;
+      verifier: { id: string; publicName: string | null };
+      /** Assessed before the current owner's custody began. */
+      fromPreviousCustody: boolean;
+    } | null;
+  };
   trust: {
     score: number;
     computedAt: string;
@@ -117,6 +133,7 @@ export interface PublicPassport {
     result: AttestationResult;
     method: AttestationMethod;
     assuranceLevel: AssuranceLevel;
+    conditionGrade: ItemCondition | null;
     status: AttestationStatus;
     issuedAt: string;
     expiresAt: string | null;
@@ -184,6 +201,14 @@ export function toPublicPassport(source: PassportSource): PublicPassport | null 
   const lastVerified = attestations.find(
     (a) => a.result === "CONFIRMED" && ["ACTIVE", "EXPIRED", "SUPERSEDED"].includes(a.status),
   );
+  const conditionAttestation = attestations.find(
+    (a) =>
+      a.claimType === "CONDITION" &&
+      a.result === "CONFIRMED" &&
+      a.status === "ACTIVE" &&
+      a.conditionGrade !== null,
+  );
+  const custodySince = source.custody.currentSince;
 
   return {
     wbId: parseWbId(asset.wbId),
@@ -194,6 +219,24 @@ export function toPublicPassport(source: PassportSource): PublicPassport | null 
     status: asset.status,
     verificationLevel: asset.verificationLevel,
     lastVerifiedAt: lastVerified ? iso(lastVerified.issuedAt) : null,
+    condition: {
+      ownerStated: asset.condition,
+      verified:
+        conditionAttestation?.conditionGrade != null
+          ? {
+              grade: conditionAttestation.conditionGrade,
+              assessedAt: iso(conditionAttestation.issuedAt),
+              attestationId: conditionAttestation.id,
+              verifier: {
+                id: conditionAttestation.verifier.id,
+                publicName: conditionAttestation.verifier.publicName,
+              },
+              fromPreviousCustody:
+                custodySince !== null &&
+                conditionAttestation.issuedAt.getTime() < custodySince.getTime(),
+            }
+          : null,
+    },
     trust: source.trust && {
       score: source.trust.score,
       computedAt: iso(source.trust.computedAt),
@@ -229,6 +272,7 @@ export function toPublicPassport(source: PassportSource): PublicPassport | null 
       result: a.result,
       method: a.method,
       assuranceLevel: a.assuranceLevel,
+      conditionGrade: a.conditionGrade,
       status: a.status,
       issuedAt: iso(a.issuedAt),
       expiresAt: isoOrNull(a.expiresAt),

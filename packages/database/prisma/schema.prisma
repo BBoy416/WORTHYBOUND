@@ -54,6 +54,17 @@ enum AssetStatus {
   REVOKED
 }
 
+/// Overall physical condition. Details belong in notes or a condition report.
+enum ItemCondition {
+  NEW
+  EXCELLENT
+  VERY_GOOD
+  GOOD
+  FAIR
+  POOR
+  FOR_PARTS
+}
+
 enum TokenizationStatus {
   NOT_TOKENIZED
   PENDING
@@ -361,6 +372,8 @@ model Asset {
   description                 String?
   publicDescription           String?
   attributes                  Json               @default("{}")
+  /// Owner-stated. The verified condition comes from CONDITION attestations.
+  condition                   ItemCondition?
   status                      AssetStatus        @default(DRAFT)
   tokenizationStatus          TokenizationStatus @default(NOT_TOKENIZED)
   chainAssetAddress           String?            @unique
@@ -654,6 +667,8 @@ model Attestation {
   result                  AttestationResult
   method                  AttestationMethod
   assuranceLevel          AssuranceLevel
+  /// Assessed condition. Only on CONDITION claims; required when the claim is CONFIRMED.
+  conditionGrade          ItemCondition?
   notes                   String?
   nonce                   String
   signedPayloadHash       String

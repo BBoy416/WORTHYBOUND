@@ -1,4 +1,4 @@
-import { ASSET_CATEGORIES, ASSET_STATUSES } from "@worthybound/shared";
+import { ASSET_CATEGORIES, ASSET_STATUSES, ITEM_CONDITIONS } from "@worthybound/shared";
 import { z } from "zod";
 import { text, wbIdSchema } from "./common.js";
 
@@ -22,6 +22,8 @@ const assetFields = {
   description: text(5000).optional(),
   publicDescription: text(2000).optional(),
   attributes: assetAttributesSchema.optional(),
+  /** Owner-stated; the verified condition comes from CONDITION attestations. */
+  condition: z.enum(ITEM_CONDITIONS).optional(),
 };
 
 /** IDs, status, owner, Trust Score and chain fields are set by the backend and rejected here. */
@@ -33,6 +35,14 @@ export const updateDraftAssetSchema = z
   .partial()
   .refine((input) => Object.keys(input).length > 0, "no fields to update");
 export type UpdateDraftAssetInput = z.infer<typeof updateDraftAssetSchema>;
+
+/** Owner updates the stated condition of a published asset; recorded as CONDITION_UPDATED. */
+export const assetConditionUpdateSchema = z.strictObject({
+  assetId: wbIdSchema,
+  condition: z.enum(ITEM_CONDITIONS),
+  note: text(500).optional(),
+});
+export type AssetConditionUpdateInput = z.infer<typeof assetConditionUpdateSchema>;
 
 /** Requested status change; the lifecycle rules decide whether the caller may make it. */
 export const assetStatusChangeSchema = z.strictObject({

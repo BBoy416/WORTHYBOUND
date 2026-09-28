@@ -629,6 +629,23 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
       );
     });
 
+    it("rejects changes to the assessed condition grade", async () => {
+      const a = await asset();
+      const v = await verifier();
+      const tv = await templateVersion();
+      const att = await db.prisma.attestation.create({
+        data: {
+          ...attestationData(a.id, v.id, tv.id),
+          claimType: "CONDITION",
+          conditionGrade: "VERY_GOOD",
+        },
+      });
+      await expectDbError(
+        db.prisma.attestation.update({ where: { id: att.id }, data: { conditionGrade: "NEW" } }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+    });
+
     it("rejects deletion so the original verification stays visible", async () => {
       const att = await attestation();
       await expectDbError(
@@ -684,6 +701,31 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
   // ─── Check constraints ──────────────────────────────────────────────────────
 
   describe("check constraints", () => {
+    it("requires a condition grade on confirmed CONDITION claims only", async () => {
+      const a = await asset();
+      const v = await verifier();
+      const tv = await templateVersion();
+      const data = () => attestationData(a.id, v.id, tv.id);
+      await expectDbError(
+        db.prisma.attestation.create({ data: { ...data(), claimType: "CONDITION" } }),
+        CHECK_VIOLATION,
+      );
+      await expectDbError(
+        db.prisma.attestation.create({ data: { ...data(), conditionGrade: "GOOD" } }),
+        CHECK_VIOLATION,
+      );
+      await expect(
+        db.prisma.attestation.create({
+          data: { ...data(), claimType: "CONDITION", conditionGrade: "FAIR" },
+        }),
+      ).resolves.toMatchObject({ conditionGrade: "FAIR" });
+      await expect(
+        db.prisma.attestation.create({
+          data: { ...data(), claimType: "CONDITION", result: "INCONCLUSIVE" },
+        }),
+      ).resolves.toMatchObject({ conditionGrade: null });
+    });
+
     it("keeps the cached trust score within 0-100", async () => {
       const a = await asset();
       await expectDbError(

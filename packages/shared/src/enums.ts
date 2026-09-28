@@ -38,6 +38,18 @@ export const ASSET_STATUSES = [
 ] as const;
 export type AssetStatus = (typeof ASSET_STATUSES)[number];
 
+/** Overall physical condition, best first. Does not affect the Trust Score. */
+export const ITEM_CONDITIONS = [
+  "NEW",
+  "EXCELLENT",
+  "VERY_GOOD",
+  "GOOD",
+  "FAIR",
+  "POOR",
+  "FOR_PARTS",
+] as const;
+export type ItemCondition = (typeof ITEM_CONDITIONS)[number];
+
 export const TOKENIZATION_STATUSES = ["NOT_TOKENIZED", "PENDING", "TOKENIZED", "FAILED"] as const;
 export type TokenizationStatus = (typeof TOKENIZATION_STATUSES)[number];
 
@@ -245,6 +257,7 @@ export const DOMAIN_ENUMS = {
   Role: ROLES,
   AssetCategory: ASSET_CATEGORIES,
   AssetStatus: ASSET_STATUSES,
+  ItemCondition: ITEM_CONDITIONS,
   TokenizationStatus: TOKENIZATION_STATUSES,
   VerificationLevel: VERIFICATION_LEVELS,
   OwnershipReason: OWNERSHIP_REASONS,
