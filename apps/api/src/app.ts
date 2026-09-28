@@ -9,18 +9,20 @@ import {
   validatorCompiler,
   type ZodTypeProvider,
 } from "fastify-type-provider-zod";
+import { assetRoutes } from "./assets/routes.js";
 import { createAuthenticate, createRequireRole } from "./auth/guard.js";
 import { authRoutes } from "./auth/routes.js";
 import type { Config } from "./config.js";
-import type { AppContext } from "./context.js";
+import { type AppContext, DEFAULT_RATE_LIMITS, type RateLimits } from "./context.js";
+import { passportRoutes } from "./passport/routes.js";
 
 export interface BuildAppOptions {
   config: Config;
   prisma: PrismaClient;
   /** Clock, replaceable in tests. */
   now?: () => Date;
-  /** Per-IP limit for the sign-in endpoints. */
-  rateLimit?: { max: number; timeWindowMs: number };
+  /** Overrides of the default rate limits. */
+  rateLimits?: Partial<RateLimits>;
   /** Registers extra routes with the same context (used by tests). */
   register?: (app: FastifyInstance, ctx: AppContext) => Promise<void> | void;
 }
@@ -85,7 +87,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     now,
     authenticate,
     requireRole: createRequireRole(authenticate),
-    rateLimit: options.rateLimit ?? { max: 10, timeWindowMs: 60_000 },
+    rateLimits: { ...DEFAULT_RATE_LIMITS, ...options.rateLimits },
   };
 
   app.get("/health", async (_request, reply) => {
@@ -99,6 +101,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   });
 
   await app.register(authRoutes, ctx);
+  await app.register(assetRoutes, ctx);
+  await app.register(passportRoutes, ctx);
   if (options.register) await options.register(app, ctx);
   return app;
 }

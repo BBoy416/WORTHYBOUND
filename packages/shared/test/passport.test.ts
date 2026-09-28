@@ -26,6 +26,7 @@ function source(overrides: Partial<PassportSource> = {}): PassportSource {
     chainAssetAddress: "AssetAddr1111111111111111111111111111111111",
     verificationLevel: "AUTHENTICATED",
     condition: "EXCELLENT",
+    publishedAt: d("2025-12-01T00:00:00Z"),
     id: `${SECRET}-asset-uuid`,
     ownerId: `${SECRET}-owner`,
     serialNumber: `${SECRET}-serial`,
@@ -239,6 +240,16 @@ describe("toPublicPassport", () => {
       const base = source();
       expect(toPublicPassport({ ...base, asset: { ...base.asset, status } })).toBeNull();
     }
+  });
+
+  it("returns null for a discarded draft that was never published", () => {
+    const base = source();
+    expect(
+      toPublicPassport({ ...base, asset: { ...base.asset, status: "REVOKED", publishedAt: null } }),
+    ).toBeNull();
+    expect(
+      toPublicPassport({ ...base, asset: { ...base.asset, status: "REVOKED" } })?.publishedAt,
+    ).toBe("2025-12-01T00:00:00.000Z");
   });
 
   it("still publishes revoked, disputed and stolen assets so their history stays visible", () => {

@@ -1,14 +1,19 @@
+import { randomUUID } from "node:crypto";
 import type { TemplateRequirements } from "@worthybound/shared";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import {
+  assetConditionRequestSchema,
   assetConditionUpdateSchema,
+  assetParamsSchema,
   assetStatusChangeSchema,
+  assetStatusRequestSchema,
   attestationSubmissionSchema,
   authNonceRequestSchema,
   authVerifyRequestSchema,
   EVIDENCE_MAX_BYTES,
   evidenceUploadSchema,
+  idempotencyKeySchema,
   openDisputeSchema,
   registerAssetSchema,
   resolveDisputeSchema,
@@ -360,5 +365,30 @@ describe("wallet sign-in", () => {
     ["an extra field", { userId: UUID }, "unrecognized_keys"],
   ])("rejects %s", (_name, override, issue) => {
     expect(issues(authVerifyRequestSchema, { ...verify, ...override })).toEqual([issue]);
+  });
+});
+
+describe("asset endpoint inputs", () => {
+  it("accepts idempotency keys such as UUIDs and rejects others", () => {
+    expect(idempotencyKeySchema.safeParse(randomUUID()).success).toBe(true);
+    for (const key of ["short", "has space in it", "x".repeat(129), "semi;colon12"]) {
+      expect(idempotencyKeySchema.safeParse(key).success, key).toBe(false);
+    }
+  });
+
+  it("normalizes the asset ID in paths", () => {
+    expect(assetParamsSchema.parse({ wbId: " wb-7f93a281 " })).toEqual({ wbId: "WB-7F93A281" });
+    expect(assetParamsSchema.safeParse({ wbId: "../etc" }).success).toBe(false);
+  });
+
+  it("rejects extra fields in status and condition bodies", () => {
+    expect(assetStatusRequestSchema.safeParse({ toStatus: "REPORTED_LOST" }).success).toBe(true);
+    expect(
+      assetStatusRequestSchema.safeParse({ toStatus: "REPORTED_LOST", actor: "ADMIN" }).success,
+    ).toBe(false);
+    expect(assetConditionRequestSchema.safeParse({ condition: "GOOD" }).success).toBe(true);
+    expect(
+      assetConditionRequestSchema.safeParse({ condition: "GOOD", assetId: "WB-7F93A281" }).success,
+    ).toBe(false);
   });
 });

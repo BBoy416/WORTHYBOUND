@@ -36,18 +36,34 @@ export const updateDraftAssetSchema = z
   .refine((input) => Object.keys(input).length > 0, "no fields to update");
 export type UpdateDraftAssetInput = z.infer<typeof updateDraftAssetSchema>;
 
+const conditionFields = {
+  condition: z.enum(ITEM_CONDITIONS),
+  note: text(500).optional(),
+};
+
+/** Body of `POST /assets/:wbId/condition`. */
+export const assetConditionRequestSchema = z.strictObject(conditionFields);
+export type AssetConditionRequest = z.infer<typeof assetConditionRequestSchema>;
+
 /** Owner updates the stated condition of a published asset; recorded as CONDITION_UPDATED. */
 export const assetConditionUpdateSchema = z.strictObject({
   assetId: wbIdSchema,
-  condition: z.enum(ITEM_CONDITIONS),
-  note: text(500).optional(),
+  ...conditionFields,
 });
 export type AssetConditionUpdateInput = z.infer<typeof assetConditionUpdateSchema>;
 
-/** Requested status change; the lifecycle rules decide whether the caller may make it. */
-export const assetStatusChangeSchema = z.strictObject({
-  assetId: wbIdSchema,
+const statusFields = {
   toStatus: z.enum(ASSET_STATUSES),
   reason: text(500).optional(),
-});
+};
+
+/** Body of `POST /assets/:wbId/status`. */
+export const assetStatusRequestSchema = z.strictObject(statusFields);
+export type AssetStatusRequest = z.infer<typeof assetStatusRequestSchema>;
+
+/** Requested status change; the lifecycle rules decide whether the caller may make it. */
+export const assetStatusChangeSchema = z.strictObject({ assetId: wbIdSchema, ...statusFields });
 export type AssetStatusChangeInput = z.infer<typeof assetStatusChangeSchema>;
+
+/** Path parameter of the asset and passport endpoints. */
+export const assetParamsSchema = z.strictObject({ wbId: wbIdSchema });

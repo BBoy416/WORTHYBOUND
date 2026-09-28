@@ -10,14 +10,13 @@ verification by approved professionals raises its Trust Score.
 
 ## Status
 
-Phase 4: wallet authentication (Sign In With Solana, sessions, roles). Solana work targets
-**Devnet only**.
+Phase 5: asset registration and public passports. Solana work targets **Devnet only**.
 
 ## Repository layout
 
 ```text
 apps/
-  api/                REST API (Fastify): wallet sign-in, sessions, roles
+  api/                REST API (Fastify): wallet sign-in, assets, public passports
 packages/
   database/           Prisma schema, migrations and client (PostgreSQL)
   shared/             domain enums, asset IDs, lifecycle rules, public passport
@@ -56,7 +55,8 @@ pnpm db:migrate:deploy
 Database integration tests need `TEST_DATABASE_URL`, read from the environment or from `.env`
 (see `.env.example`); they create and drop throwaway databases and are skipped when it is not set.
 
-Run the API (needs `SESSION_SECRET` in `.env`, e.g. from `openssl rand -base64 48`):
+Run the API (needs `SESSION_SECRET` and `SERIAL_FINGERPRINT_KEY` in `.env`, each e.g. from
+`openssl rand -base64 48`):
 
 ```sh
 pnpm api:start        # http://127.0.0.1:4000/health
@@ -108,3 +108,4 @@ pnpm admin:grant <wallet address>
 - [0006 Core domain model](docs/adr/0006-core-domain-model.md)
 - [0007 Item condition](docs/adr/0007-item-condition.md)
 - [0008 Wallet authentication](docs/adr/0008-wallet-authentication.md)
+- [0009 Asset registration and passports](docs/adr/0009-asset-registration.md)

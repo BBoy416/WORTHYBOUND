@@ -38,6 +38,7 @@ export interface PassportSource {
     chainAssetAddress: string | null;
     verificationLevel: VerificationLevel;
     condition: ItemCondition | null;
+    publishedAt: Date | null;
   };
   trust: { score: number; computedAt: Date; engineVersion: string; weightsVersion: string } | null;
   custody: { currentSince: Date | null; transferCount: number };
@@ -95,6 +96,7 @@ export interface PublicPassport {
   model: string | null;
   description: string | null;
   status: AssetStatus;
+  publishedAt: string;
   verificationLevel: VerificationLevel;
   lastVerifiedAt: string | null;
   condition: {
@@ -189,13 +191,13 @@ const byTime =
 
 /**
  * Builds the public passport from an explicit allow-list of fields, or returns null if the asset
- * is not published. Private evidence, storage keys, serial numbers, owner identity, attestation
+ * was never published (including discarded drafts) or is not currently published. Private evidence, storage keys, serial numbers, owner identity, attestation
  * notes and provenance payloads are never included. Revoked and disputed attestations stay
  * visible so the history is complete.
  */
 export function toPublicPassport(source: PassportSource): PublicPassport | null {
   const { asset } = source;
-  if (!isPassportPublic(asset.status)) return null;
+  if (!asset.publishedAt || !isPassportPublic(asset.status)) return null;
 
   const attestations = [...source.attestations].sort(byTime((a) => a.issuedAt)).reverse();
   const lastVerified = attestations.find(
@@ -217,6 +219,7 @@ export function toPublicPassport(source: PassportSource): PublicPassport | null 
     model: asset.model,
     description: asset.publicDescription,
     status: asset.status,
+    publishedAt: iso(asset.publishedAt),
     verificationLevel: asset.verificationLevel,
     lastVerifiedAt: lastVerified ? iso(lastVerified.issuedAt) : null,
     condition: {

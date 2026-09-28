@@ -12,6 +12,8 @@ const configSchema = z.object({
     .regex(/^[a-z0-9.-]+(:\d{1,5})?$/, "expected a host such as worthybound.com or localhost:3000"),
   /** Keys the HMAC of IP addresses and user agents in sessions and audit logs. */
   SESSION_SECRET: z.string().min(32, "must be at least 32 characters"),
+  /** Keys the HMAC of serial numbers used to stop the same item being registered twice. */
+  SERIAL_FINGERPRINT_KEY: z.string().min(32, "must be at least 32 characters"),
   SOLANA_CLUSTER: z.literal("devnet", { error: "only devnet is supported" }),
 });
 
@@ -20,6 +22,8 @@ export type Config = z.infer<typeof configSchema> & {
   authUri: string;
   /** CAIP-2 style chain ID written into sign-in messages. */
   chainId: "solana:devnet";
+  /** Website that serves public passports (QR codes link here); same origin as sign-in. */
+  publicWebUrl: string;
 };
 
 /** Validates the environment. Throws one error listing every invalid setting, never their values. */
@@ -34,9 +38,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   if (config.NODE_ENV === "production" && local) {
     throw new Error("Invalid configuration:\n  AUTH_DOMAIN: must be a public domain in production");
   }
-  return {
-    ...config,
-    authUri: `${local ? "http" : "https"}://${config.AUTH_DOMAIN}`,
-    chainId: "solana:devnet",
-  };
+  const authUri = `${local ? "http" : "https"}://${config.AUTH_DOMAIN}`;
+  return { ...config, authUri, chainId: "solana:devnet", publicWebUrl: authUri };
 }

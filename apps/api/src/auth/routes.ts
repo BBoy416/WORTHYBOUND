@@ -48,8 +48,10 @@ const me = (auth: AuthContext) => ({
 const errorSchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
 
 export const authRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx) => {
-  const { config, prisma, now, authenticate, rateLimit } = ctx;
-  const limited = { rateLimit: { max: rateLimit.max, timeWindow: rateLimit.timeWindowMs } };
+  const { config, prisma, now, authenticate, rateLimits } = ctx;
+  const limited = {
+    rateLimit: { max: rateLimits.auth.max, timeWindow: rateLimits.auth.timeWindowMs },
+  };
 
   app.post(
     "/auth/nonce",
