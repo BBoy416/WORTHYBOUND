@@ -10,13 +10,14 @@ verification by approved professionals raises its Trust Score.
 
 ## Status
 
-Phase 3: core domain model (lifecycle rules, public passport, input validation). Solana work
-targets **Devnet only**.
+Phase 4: wallet authentication (Sign In With Solana, sessions, roles). Solana work targets
+**Devnet only**.
 
 ## Repository layout
 
 ```text
-apps/                 api, worker, web (added in later phases)
+apps/
+  api/                REST API (Fastify): wallet sign-in, sessions, roles
 packages/
   database/           Prisma schema, migrations and client (PostgreSQL)
   shared/             domain enums, asset IDs, lifecycle rules, public passport
@@ -55,6 +56,18 @@ pnpm db:migrate:deploy
 Database integration tests need `TEST_DATABASE_URL`, read from the environment or from `.env`
 (see `.env.example`); they create and drop throwaway databases and are skipped when it is not set.
 
+Run the API (needs `SESSION_SECRET` in `.env`, e.g. from `openssl rand -base64 48`):
+
+```sh
+pnpm api:start        # http://127.0.0.1:4000/health
+```
+
+Grant the first administrator (server operators only; there is no API for this):
+
+```sh
+pnpm admin:grant <wallet address>
+```
+
 ## Scripts
 
 | Command                  | Purpose                                        |
@@ -69,6 +82,8 @@ Database integration tests need `TEST_DATABASE_URL`, read from the environment o
 | `pnpm db:migrate:dev`    | Create and apply a new migration (development) |
 | `pnpm db:migrate:deploy` | Apply pending migrations                       |
 | `pnpm db:migrate:status` | Show migration status                          |
+| `pnpm api:start`         | Build and start the API                        |
+| `pnpm admin:grant`       | Grant ADMIN to a wallet (operators only)       |
 
 ## Git workflow
 
@@ -92,3 +107,4 @@ Database integration tests need `TEST_DATABASE_URL`, read from the environment o
 - [0005 Database integrity enforced in PostgreSQL](docs/adr/0005-database-integrity.md)
 - [0006 Core domain model](docs/adr/0006-core-domain-model.md)
 - [0007 Item condition](docs/adr/0007-item-condition.md)
+- [0008 Wallet authentication](docs/adr/0008-wallet-authentication.md)

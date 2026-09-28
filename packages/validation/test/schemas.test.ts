@@ -5,6 +5,8 @@ import {
   assetConditionUpdateSchema,
   assetStatusChangeSchema,
   attestationSubmissionSchema,
+  authNonceRequestSchema,
+  authVerifyRequestSchema,
   EVIDENCE_MAX_BYTES,
   evidenceUploadSchema,
   openDisputeSchema,
@@ -340,5 +342,23 @@ describe("requests, transfers and disputes", () => {
     expect(issues(resolveDisputeSchema, { outcome: "UPHELD", resolution: " " })).toEqual([
       "too_small:resolution",
     ]);
+  });
+});
+
+describe("wallet sign-in", () => {
+  const verify = { address: WALLET, message: "bG9jYWxob3N0", signature: "A".repeat(86) + "==" };
+
+  it("accepts a nonce request and a verify request", () => {
+    expect(authNonceRequestSchema.parse({ address: WALLET })).toEqual({ address: WALLET });
+    expect(authVerifyRequestSchema.parse(verify)).toEqual(verify);
+  });
+
+  it.each([
+    ["a non-base58 address", { address: "0OIl" + WALLET.slice(4) }, "invalid_format:address"],
+    ["a non-base64 message", { message: "not base64!" }, "invalid_format:message"],
+    ["an oversized signature", { signature: "A".repeat(89) }, "too_big:signature"],
+    ["an extra field", { userId: UUID }, "unrecognized_keys"],
+  ])("rejects %s", (_name, override, issue) => {
+    expect(issues(authVerifyRequestSchema, { ...verify, ...override })).toEqual([issue]);
   });
 });
