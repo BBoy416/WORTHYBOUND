@@ -22,7 +22,8 @@ shared without duplication.
   archived in 2026. Local development uses the community-maintained drop-in fork
   `pgsty/minio` (same `MINIO_*` configuration and S3 API), pinned to a release tag. Application code
   talks only to the S3 API through `packages/storage`, so the server can be swapped without code
-  changes. Revisit in Phase 6.
+  changes. Revisited in Phase 6: the fork was renamed Silo (`pgsty/silo`) in August 2026 and is
+  still maintained; the project now uses it (ADR 0010).
 - **Secret hygiene:** gitleaks as a pre-commit hook (`.githooks/`) and in CI over the full history.
   Keypairs and `.env` files are never committed.
 

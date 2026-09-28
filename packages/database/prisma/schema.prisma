@@ -112,6 +112,10 @@ enum EvidenceType {
   INSPECTION_REPORT
   APPRAISAL_DOCUMENT
   CONDITION_REPORT
+  SERVICE_RECORD
+  OWNERSHIP_DOCUMENT
+  MANUFACTURER_DOCUMENT
+  VIDEO
   OTHER
 }
 
@@ -217,6 +221,7 @@ enum ProvenanceEventType {
   REGISTERED
   TOKENIZED
   EVIDENCE_ADDED
+  EVIDENCE_VISIBILITY_CHANGED
   EVIDENCE_COMMITTED
   ATTESTATION_ADDED
   ATTESTATION_REVOKED
@@ -293,6 +298,7 @@ model User {
   transfersReceived       TransferRequest[]             @relation("TransferTo")
   evidenceUploaded        Evidence[]                    @relation("EvidenceUploader")
   evidenceReviewed        Evidence[]                    @relation("EvidenceReviewer")
+  evidenceUploads         EvidenceUpload[]
   verifier                Verifier?                     @relation("VerifierUser")
   verifiersApproved       Verifier[]                    @relation("VerifierApprover")
   permissionsApproved     VerifierCategoryPermission[]
@@ -393,6 +399,7 @@ model Asset {
   ownerships           Ownership[]
   transferRequests     TransferRequest[]
   evidence             Evidence[]
+  evidenceUploads      EvidenceUpload[]
   evidenceCommitments  EvidenceCommitment[]
   verificationRequests VerificationRequest[]
   attestations         Attestation[]
@@ -475,6 +482,10 @@ model Evidence {
   source           ProofSource        @default(OWNER)
   /// Private object-storage key. Never a public URL.
   storageKey       String             @unique
+  /// Storage key of the metadata-free public copy; set only while the photo is public.
+  publicStorageKey String?            @unique
+  /// Earliest evidence with the same file on another asset; flagged for admin review.
+  duplicateOfId    String?            @db.Uuid
   sha256           String
   mimeType         String
   sizeBytes        Int
@@ -489,15 +500,56 @@ model Evidence {
   updatedAt        DateTime           @updatedAt @db.Timestamptz(3)
 
   asset           Asset                    @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  duplicateOf     Evidence?                @relation("EvidenceDuplicate", fields: [duplicateOfId], references: [id], onDelete: Restrict)
+  duplicates      Evidence[]               @relation("EvidenceDuplicate")
+  upload          EvidenceUpload?
   uploader        User                     @relation("EvidenceUploader", fields: [uploaderId], references: [id], onDelete: Restrict)
   reviewedBy      User?                    @relation("EvidenceReviewer", fields: [reviewedById], references: [id], onDelete: Restrict)
   commitmentItems EvidenceCommitmentItem[]
   attestations    AttestationEvidence[]
   disputes        Dispute[]
 
-  @@index([assetId])
+  @@unique([assetId, sha256])
   @@index([sha256])
   @@map("evidence")
+}
+
+enum EvidenceUploadStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+/// A requested upload. Evidence is created only after the server has checked the stored file.
+model EvidenceUpload {
+  id               String               @id @default(uuid(7)) @db.Uuid
+  assetId          String               @db.Uuid
+  uploaderId       String               @db.Uuid
+  type             EvidenceType
+  /// Declared by the client; checked against the stored file.
+  mimeType         String
+  sizeBytes        Int
+  sha256           String
+  visibility       EvidenceVisibility
+  originalFilename String?
+  description      String?
+  capturedAt       DateTime?            @db.Timestamptz(3)
+  /// Holding-area key the client uploads to. Never a public URL.
+  stagingKey       String               @unique
+  status           EvidenceUploadStatus @default(PENDING)
+  failureReason    String?
+  evidenceId       String?              @unique @db.Uuid
+  expiresAt        DateTime             @db.Timestamptz(3)
+  createdAt        DateTime             @default(now()) @db.Timestamptz(3)
+  completedAt      DateTime?            @db.Timestamptz(3)
+
+  asset    Asset     @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  uploader User      @relation(fields: [uploaderId], references: [id], onDelete: Restrict)
+  evidence Evidence? @relation(fields: [evidenceId], references: [id], onDelete: Restrict)
+
+  @@index([assetId, status])
+  @@index([uploaderId, createdAt])
+  @@map("evidence_uploads")
 }
 
 /// Append-only. Merkle root over a batch of evidence hashes, anchored on-chain.

@@ -6,3 +6,4 @@ export * from "./lifecycle.js";
 export * from "./assets.js";
 export * from "./verification.js";
 export * from "./passport.js";
+export * from "./evidence.js";

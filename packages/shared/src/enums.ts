@@ -98,12 +98,19 @@ export const EVIDENCE_TYPES = [
   "INSPECTION_REPORT",
   "APPRAISAL_DOCUMENT",
   "CONDITION_REPORT",
+  "SERVICE_RECORD",
+  "OWNERSHIP_DOCUMENT",
+  "MANUFACTURER_DOCUMENT",
+  "VIDEO",
   "OTHER",
 ] as const;
 export type EvidenceType = (typeof EVIDENCE_TYPES)[number];
 
 export const EVIDENCE_VISIBILITIES = ["PRIVATE", "PUBLIC"] as const;
 export type EvidenceVisibility = (typeof EVIDENCE_VISIBILITIES)[number];
+
+export const EVIDENCE_UPLOAD_STATUSES = ["PENDING", "COMPLETED", "FAILED"] as const;
+export type EvidenceUploadStatus = (typeof EVIDENCE_UPLOAD_STATUSES)[number];
 
 export const REVIEW_STATUSES = ["PENDING", "ACCEPTED", "REJECTED"] as const;
 export type ReviewStatus = (typeof REVIEW_STATUSES)[number];
@@ -199,6 +206,7 @@ export const PROVENANCE_EVENT_TYPES = [
   "REGISTERED",
   "TOKENIZED",
   "EVIDENCE_ADDED",
+  "EVIDENCE_VISIBILITY_CHANGED",
   "EVIDENCE_COMMITTED",
   "ATTESTATION_ADDED",
   "ATTESTATION_REVOKED",
@@ -266,6 +274,7 @@ export const DOMAIN_ENUMS = {
   ProofSource: PROOF_SOURCES,
   EvidenceType: EVIDENCE_TYPES,
   EvidenceVisibility: EVIDENCE_VISIBILITIES,
+  EvidenceUploadStatus: EVIDENCE_UPLOAD_STATUSES,
   ReviewStatus: REVIEW_STATUSES,
   VerifierStatus: VERIFIER_STATUSES,
   VerifierEntityType: VERIFIER_ENTITY_TYPES,

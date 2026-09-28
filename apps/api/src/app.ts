@@ -2,6 +2,7 @@ import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import type { PrismaClient } from "@worthybound/database";
+import type { Storage } from "@worthybound/storage";
 import Fastify, { type FastifyInstance } from "fastify";
 import {
   hasZodFastifySchemaValidationErrors,
@@ -14,11 +15,13 @@ import { createAuthenticate, createRequireRole } from "./auth/guard.js";
 import { authRoutes } from "./auth/routes.js";
 import type { Config } from "./config.js";
 import { type AppContext, DEFAULT_RATE_LIMITS, type RateLimits } from "./context.js";
+import { evidenceRoutes } from "./evidence/routes.js";
 import { passportRoutes } from "./passport/routes.js";
 
 export interface BuildAppOptions {
   config: Config;
   prisma: PrismaClient;
+  storage: Storage;
   /** Clock, replaceable in tests. */
   now?: () => Date;
   /** Overrides of the default rate limits. */
@@ -28,7 +31,7 @@ export interface BuildAppOptions {
 }
 
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
-  const { config, prisma } = options;
+  const { config, prisma, storage } = options;
   const now = options.now ?? (() => new Date());
 
   const app = Fastify({
@@ -84,6 +87,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   const ctx: AppContext = {
     config,
     prisma,
+    storage,
     now,
     authenticate,
     requireRole: createRequireRole(authenticate),
@@ -102,6 +106,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
   await app.register(authRoutes, ctx);
   await app.register(assetRoutes, ctx);
+  await app.register(evidenceRoutes, ctx);
   await app.register(passportRoutes, ctx);
   if (options.register) await options.register(app, ctx);
   return app;

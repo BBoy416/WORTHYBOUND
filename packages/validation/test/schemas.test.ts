@@ -12,7 +12,10 @@ import {
   authNonceRequestSchema,
   authVerifyRequestSchema,
   EVIDENCE_MAX_BYTES,
+  evidenceParamsSchema,
+  evidenceUploadParamsSchema,
   evidenceUploadSchema,
+  evidenceVisibilitySchema,
   idempotencyKeySchema,
   openDisputeSchema,
   registerAssetSchema,
@@ -163,10 +166,50 @@ describe("evidenceUploadSchema", () => {
     expect(
       evidenceUploadSchema.safeParse({
         ...valid,
+        type: "VIDEO",
         mimeType: "video/mp4",
         sizeBytes: 400 * 1024 * 1024,
       }).success,
     ).toBe(true);
+  });
+
+  it("allows only JPEG, PNG and WebP photos to be public", () => {
+    const photo = { ...valid, type: "PHOTO", mimeType: "image/jpeg", visibility: "PUBLIC" };
+    expect(issues(evidenceUploadSchema, photo)).toEqual([]);
+    expect(issues(evidenceUploadSchema, { ...photo, mimeType: "image/heic" })).toEqual([
+      "custom:visibility",
+    ]);
+    expect(issues(evidenceUploadSchema, { ...photo, type: "RECEIPT" })).toEqual([
+      "custom:visibility",
+    ]);
+    expect(issues(evidenceUploadSchema, { ...valid, visibility: "PUBLIC" })).toEqual([
+      "custom:visibility",
+    ]);
+  });
+
+  it("accepts the evidence types from the master plan", () => {
+    for (const type of ["SERVICE_RECORD", "OWNERSHIP_DOCUMENT", "MANUFACTURER_DOCUMENT", "VIDEO"]) {
+      expect(issues(evidenceUploadSchema, { ...valid, type }), type).toEqual([]);
+    }
+  });
+});
+
+describe("evidence request schemas", () => {
+  it("accepts only a visibility change", () => {
+    expect(issues(evidenceVisibilitySchema, { visibility: "PUBLIC" })).toEqual([]);
+    expect(issues(evidenceVisibilitySchema, { visibility: "PUBLIC", sha256: SHA })).toEqual([
+      "unrecognized_keys",
+    ]);
+  });
+
+  it("validates evidence and upload IDs", () => {
+    expect(issues(evidenceParamsSchema, { wbId: "WB-7F93A281", evidenceId: UUID })).toEqual([]);
+    expect(issues(evidenceParamsSchema, { wbId: "WB-7F93A281", evidenceId: "../x" })).toEqual([
+      "invalid_format:evidenceId",
+    ]);
+    expect(issues(evidenceUploadParamsSchema, { uploadId: "1" })).toEqual([
+      "invalid_format:uploadId",
+    ]);
   });
 });
 

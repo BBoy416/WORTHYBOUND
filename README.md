@@ -10,16 +10,17 @@ verification by approved professionals raises its Trust Score.
 
 ## Status
 
-Phase 5: asset registration and public passports. Solana work targets **Devnet only**.
+Phase 6: Evidence Vault (evidence uploads, hashing and seals). Solana work targets **Devnet only**.
 
 ## Repository layout
 
 ```text
 apps/
-  api/                REST API (Fastify): wallet sign-in, assets, public passports
+  api/                REST API (Fastify): wallet sign-in, assets, evidence, public passports
 packages/
   database/           Prisma schema, migrations and client (PostgreSQL)
-  shared/             domain enums, asset IDs, lifecycle rules, public passport
+  shared/             domain enums, asset IDs, lifecycle rules, public passport, evidence seals
+  storage/            S3-compatible object storage for evidence
   trust-engine/       pure, versioned Trust Score calculation
   validation/         request validation schemas (Zod)
 programs/             Anchor program (Phase 10)
@@ -28,7 +29,7 @@ tests/                integration and end-to-end tests (later phases)
 docker-compose.yml    local PostgreSQL and S3-compatible storage
 ```
 
-Planned packages (see [ADR 0001](docs/adr/0001-monorepo-and-stack.md)): `solana`, `storage`.
+Planned packages (see [ADR 0001](docs/adr/0001-monorepo-and-stack.md)): `solana`.
 
 ## Requirements
 
@@ -45,15 +46,18 @@ pnpm install          # also enables the gitleaks pre-commit hook
 cp .env.example .env  # then replace every placeholder value
 ```
 
-Start local services and apply database migrations:
+Start local services, apply database migrations and create the evidence bucket:
 
 ```sh
 docker compose --env-file .env up -d
 pnpm db:migrate:deploy
+pnpm storage:setup
 ```
 
-Database integration tests need `TEST_DATABASE_URL`, read from the environment or from `.env`
-(see `.env.example`); they create and drop throwaway databases and are skipped when it is not set.
+Database integration tests need `TEST_DATABASE_URL`, and evidence tests also need `S3_ENDPOINT`,
+`S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY`, read from the environment or from `.env` (see
+`.env.example`). They create and delete throwaway databases and buckets, and are skipped when
+these are not set.
 
 Run the API (needs `SESSION_SECRET` and `SERIAL_FINGERPRINT_KEY` in `.env`, each e.g. from
 `openssl rand -base64 48`):
@@ -84,6 +88,7 @@ pnpm admin:grant <wallet address>
 | `pnpm db:migrate:status` | Show migration status                          |
 | `pnpm api:start`         | Build and start the API                        |
 | `pnpm admin:grant`       | Grant ADMIN to a wallet (operators only)       |
+| `pnpm storage:setup`     | Create and configure the evidence bucket       |
 
 ## Git workflow
 
@@ -109,3 +114,4 @@ pnpm admin:grant <wallet address>
 - [0007 Item condition](docs/adr/0007-item-condition.md)
 - [0008 Wallet authentication](docs/adr/0008-wallet-authentication.md)
 - [0009 Asset registration and passports](docs/adr/0009-asset-registration.md)
+- [0010 Evidence Vault](docs/adr/0010-evidence-vault.md)

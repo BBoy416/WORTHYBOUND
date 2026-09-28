@@ -19,6 +19,7 @@ import type {
   VerifierEntityType,
   VerifierStatus,
 } from "./enums.js";
+import { publicEvidencePath } from "./evidence.js";
 import { parseWbId } from "./ids.js";
 import { TRUST_SCORE_DISCLAIMER } from "./trust.js";
 
@@ -124,9 +125,12 @@ export interface PublicPassport {
   publicEvidence: {
     evidenceId: string;
     type: EvidenceType;
+    /** Hash of the original file, as sealed. The public copy has its metadata removed. */
     sha256: string;
     mimeType: string;
     capturedAt: string | null;
+    /** Where the API serves the public copy. */
+    path: string;
   }[];
   evidenceCommitments: { merkleRoot: string; evidenceCount: number; createdAt: string }[];
   attestations: {
@@ -261,6 +265,7 @@ export function toPublicPassport(source: PassportSource): PublicPassport | null 
         sha256: e.sha256,
         mimeType: e.mimeType,
         capturedAt: isoOrNull(e.capturedAt),
+        path: publicEvidencePath(asset.wbId, e.id),
       })),
     evidenceCommitments: [...source.evidenceCommitments]
       .sort(byTime((c) => c.createdAt))
