@@ -39,3 +39,8 @@ export const httpsUrlSchema = z
 /** Array without duplicates. */
 export const uniqueArray = <T extends z.ZodType>(item: T) =>
   z.array(item).refine((values) => new Set(values).size === values.length, "duplicate values");
+
+/** Client-chosen `Idempotency-Key` header, e.g. a UUID. */
+export const idempotencyKeySchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{8,128}$/, "expected 8-128 letters, digits, '-' or '_'");

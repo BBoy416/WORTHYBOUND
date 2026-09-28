@@ -841,4 +841,129 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
       });
     });
   });
+
+  // ─── Asset registration ─────────────────────────────────────────────────────
+
+  describe("asset registration", () => {
+    const withSerial = async (fingerprint = randomHex64()) =>
+      db.prisma.asset.create({
+        data: {
+          wbId: wbId(),
+          category: "LUXURY_WATCH",
+          ownerId: (await user()).id,
+          brand: "Rolex",
+          model: "Submariner",
+          serialNumber: "AB1234",
+          serialFingerprint: fingerprint,
+          serialFingerprintKeyVersion: 1,
+        },
+      });
+
+    const publishedAsset = async () => {
+      const a = await withSerial();
+      return db.prisma.asset.update({
+        where: { id: a.id },
+        data: { status: "ACTIVE", publishedAt: new Date() },
+      });
+    };
+
+    it.each([
+      ["a serial without a fingerprint", { serialNumber: "AB1234" }],
+      [
+        "a fingerprint without a serial",
+        { serialFingerprint: randomHex64(), serialFingerprintKeyVersion: 1 },
+      ],
+      [
+        "a serial with a malformed fingerprint",
+        { serialNumber: "AB1234", serialFingerprint: "AB1234", serialFingerprintKeyVersion: 1 },
+      ],
+      [
+        "a serial without a key version",
+        { serialNumber: "AB1234", serialFingerprint: randomHex64() },
+      ],
+    ])("rejects %s", async (_name, fields) => {
+      await expectDbError(
+        db.prisma.asset.create({
+          data: { wbId: wbId(), category: "OTHER", ownerId: (await user()).id, ...fields },
+        }),
+        CHECK_VIOLATION,
+      );
+    });
+
+    it("allows each item only once until it is revoked", async () => {
+      const fingerprint = randomHex64();
+      const first = await withSerial(fingerprint);
+      await expect(withSerial(fingerprint)).rejects.toMatchObject({ code: "P2002" });
+      await db.prisma.asset.update({ where: { id: first.id }, data: { status: "REVOKED" } });
+      await expect(withSerial(fingerprint)).resolves.toBeDefined();
+    });
+
+    it("requires publishedAt for published statuses", async () => {
+      const a = await withSerial();
+      await expectDbError(
+        db.prisma.asset.update({ where: { id: a.id }, data: { status: "ACTIVE" } }),
+        CHECK_VIOLATION,
+      );
+    });
+
+    it.each([
+      ["category", { category: "JEWELRY" as const }],
+      ["brand", { brand: "Omega" }],
+      ["model", { model: "Daytona" }],
+      ["serial", { serialNumber: "ZZ9999" }],
+      ["publication date", { publishedAt: new Date(0) }],
+    ])("locks the %s of a published asset", async (_name, change) => {
+      const a = await publishedAsset();
+      await expectDbError(
+        db.prisma.asset.update({ where: { id: a.id }, data: change }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+    });
+
+    it("still allows public details, condition and status to change after publishing", async () => {
+      const a = await publishedAsset();
+      await expect(
+        db.prisma.asset.update({
+          where: { id: a.id },
+          data: { publicDescription: "Serviced", condition: "GOOD", status: "REPORTED_LOST" },
+        }),
+      ).resolves.toMatchObject({ status: "REPORTED_LOST" });
+    });
+
+    it("never changes the WorthyBound ID, never deletes assets and keeps REVOKED final", async () => {
+      const a = await asset();
+      await expectDbError(
+        db.prisma.asset.update({ where: { id: a.id }, data: { wbId: wbId() } }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      await expectDbError(
+        db.prisma.asset.delete({ where: { id: a.id } }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      await db.prisma.asset.update({ where: { id: a.id }, data: { status: "REVOKED" } });
+      await expectDbError(
+        db.prisma.asset.update({ where: { id: a.id }, data: { status: "DRAFT" } }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+    });
+
+    it("stores well-formed idempotency keys once per user and operation", async () => {
+      const u = await user();
+      const data = {
+        userId: u.id,
+        scope: "asset.register",
+        key: randomUUID(),
+        requestHash: randomHex64(),
+        resourceId: randomUUID(),
+      };
+      await db.prisma.idempotencyKey.create({ data });
+      await expect(db.prisma.idempotencyKey.create({ data })).rejects.toMatchObject({
+        code: "P2002",
+      });
+      await expectDbError(
+        db.prisma.idempotencyKey.create({ data: { ...data, key: "bad key!" } }),
+        CHECK_VIOLATION,
+      );
+    });
+  });
 });

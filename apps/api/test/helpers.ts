@@ -61,6 +61,7 @@ export const testConfig = (overrides: Record<string, string> = {}): Config =>
     DATABASE_URL: "postgresql://unused@127.0.0.1/unused",
     AUTH_DOMAIN: "worthybound.test",
     SESSION_SECRET: "test-session-secret-at-least-32-characters",
+    SERIAL_FINGERPRINT_KEY: "test-serial-fingerprint-key-at-least-32-chars",
     SOLANA_CLUSTER: "devnet",
     ...overrides,
   });
@@ -104,7 +105,12 @@ export function testApp(
   return buildApp({
     config: testConfig(),
     prisma,
-    rateLimit: { max: 1000, timeWindowMs: 60_000 },
+    rateLimits: {
+      auth: { max: 1000, timeWindowMs: 60_000 },
+      register: { max: 1000, timeWindowMs: 60_000 },
+      write: { max: 1000, timeWindowMs: 60_000 },
+      public: { max: 1000, timeWindowMs: 60_000 },
+    },
     ...options,
   });
 }

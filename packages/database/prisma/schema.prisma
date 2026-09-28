@@ -224,6 +224,7 @@ enum ProvenanceEventType {
   TRANSFER_COMPLETED
   STATUS_CHANGED
   CONDITION_UPDATED
+  DETAILS_UPDATED
   REVERIFICATION_REQUIRED
   REPORTED_LOST
   REPORTED_STOLEN
@@ -304,6 +305,7 @@ model User {
   attestationStatusEvents AttestationStatusEvent[]
   provenanceEvents        ProvenanceEvent[]
   auditLogs               AuditLog[]
+  idempotencyKeys         IdempotencyKey[]
 
   @@map("users")
 }
@@ -366,7 +368,7 @@ model Asset {
   model                       String?
   /// Private. Never exposed in the public passport or on-chain.
   serialNumber                String?
-  /// Keyed HMAC of category, brand and normalized serial. Duplicates are flagged, not blocked.
+  /// Keyed HMAC of category, brand and normalized serial. Unique among assets that are not REVOKED.
   serialFingerprint           String?
   serialFingerprintKeyVersion Int?
   description                 String?
@@ -381,6 +383,8 @@ model Asset {
   /// Derived from the latest TrustScoreSnapshot. Never set from user input.
   currentTrustScore           Int                @default(0)
   verificationLevel           VerificationLevel  @default(UNVERIFIED)
+  /// Set once when the owner publishes the passport. Identity fields are locked from then on.
+  publishedAt                 DateTime?          @db.Timestamptz(3)
   createdAt                   DateTime           @default(now()) @db.Timestamptz(3)
   updatedAt                   DateTime           @updatedAt @db.Timestamptz(3)
 
@@ -839,4 +843,22 @@ model AuditLog {
   @@index([targetType, targetId])
   @@index([actorId, createdAt])
   @@map("audit_logs")
+}
+
+/// Replays of a create request with the same Idempotency-Key return the original result.
+model IdempotencyKey {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  userId      String   @db.Uuid
+  /// Operation the key belongs to, e.g. asset.register.
+  scope       String
+  key         String
+  /// SHA-256 of the canonical request body; a reused key with a different body is rejected.
+  requestHash String
+  resourceId  String   @db.Uuid
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, scope, key])
+  @@map("idempotency_keys")
 }

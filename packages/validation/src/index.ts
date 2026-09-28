@@ -3,6 +3,7 @@ export * from "./auth.js";
 export {
   dateTimeSchema,
   httpsUrlSchema,
+  idempotencyKeySchema,
   sha256Schema,
   solanaAddressSchema,
   solanaSignatureSchema,

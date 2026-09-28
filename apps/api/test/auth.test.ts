@@ -357,7 +357,14 @@ describe.skipIf(!TEST_DATABASE_URL)("rate limiting", () => {
 
   beforeAll(async () => {
     db = await createTestDatabase();
-    app = await testApp(db.prisma, { rateLimit: { max: 3, timeWindowMs: 60_000 } });
+    app = await testApp(db.prisma, {
+      rateLimits: {
+        auth: { max: 3, timeWindowMs: 60_000 },
+        register: { max: 1000, timeWindowMs: 60_000 },
+        write: { max: 1000, timeWindowMs: 60_000 },
+        public: { max: 1000, timeWindowMs: 60_000 },
+      },
+    });
   });
 
   afterAll(async () => {
