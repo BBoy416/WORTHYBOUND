@@ -91,3 +91,4 @@ Database integration tests need `TEST_DATABASE_URL`, read from the environment o
 - [0004 KYC policy](docs/adr/0004-kyc-policy.md)
 - [0005 Database integrity enforced in PostgreSQL](docs/adr/0005-database-integrity.md)
 - [0006 Core domain model](docs/adr/0006-core-domain-model.md)
+- [0007 Item condition](docs/adr/0007-item-condition.md)

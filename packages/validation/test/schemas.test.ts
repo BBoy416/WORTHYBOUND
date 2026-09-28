@@ -2,6 +2,7 @@ import type { TemplateRequirements } from "@worthybound/shared";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import {
+  assetConditionUpdateSchema,
   assetStatusChangeSchema,
   attestationSubmissionSchema,
   EVIDENCE_MAX_BYTES,
@@ -74,6 +75,28 @@ describe("registerAssetSchema", () => {
   it("requires at least one field for draft updates", () => {
     expect(issues(updateDraftAssetSchema, {})).toEqual(["custom"]);
     expect(updateDraftAssetSchema.parse({ model: "GMT" })).toEqual({ model: "GMT" });
+  });
+
+  it("accepts an owner-stated condition and rejects unknown grades", () => {
+    expect(registerAssetSchema.parse({ ...valid, condition: "VERY_GOOD" }).condition).toBe(
+      "VERY_GOOD",
+    );
+    expect(issues(registerAssetSchema, { ...valid, condition: "MINT" })).toEqual([
+      "invalid_value:condition",
+    ]);
+    expect(updateDraftAssetSchema.parse({ condition: "FAIR" })).toEqual({ condition: "FAIR" });
+  });
+
+  it("validates condition updates on published assets", () => {
+    expect(assetConditionUpdateSchema.parse({ assetId: "wb-7f93a281", condition: "POOR" })).toEqual(
+      {
+        assetId: "WB-7F93A281",
+        condition: "POOR",
+      },
+    );
+    expect(issues(assetConditionUpdateSchema, { assetId: "WB-7F93A281" })).toEqual([
+      "invalid_value:condition",
+    ]);
   });
 
   it("normalizes the asset ID in status changes", () => {
@@ -228,6 +251,17 @@ describe("attestationSubmissionSchema", () => {
     expect(parsed.issuedAt).toBeInstanceOf(Date);
   });
 
+  it("accepts condition claims with a grade, or inconclusive ones without", () => {
+    const condition = { ...valid, claimType: "CONDITION" };
+    expect(
+      attestationSubmissionSchema.parse({ ...condition, conditionGrade: "FOR_PARTS" })
+        .conditionGrade,
+    ).toBe("FOR_PARTS");
+    expect(
+      attestationSubmissionSchema.safeParse({ ...condition, result: "INCONCLUSIVE" }).success,
+    ).toBe(true);
+  });
+
   it.each(["verifierId", "status", "chainAttestationAddress", "trustScore", "verified"])(
     "rejects the backend-controlled field %s",
     (field) => {
@@ -243,6 +277,21 @@ describe("attestationSubmissionSchema", () => {
     ["duplicate evidence", { evidence: [valid.evidence[0], valid.evidence[0]] }, "custom:evidence"],
     ["a short nonce", { nonce: "f".repeat(16) }, "invalid_format:nonce"],
     ["a malformed signature", { signature: "0".repeat(88) }, "invalid_format:signature"],
+    [
+      "a condition grade on a non-condition claim",
+      { conditionGrade: "GOOD" },
+      "custom:conditionGrade",
+    ],
+    [
+      "a confirmed condition claim without a grade",
+      { claimType: "CONDITION" },
+      "custom:conditionGrade",
+    ],
+    [
+      "an unknown condition grade",
+      { claimType: "CONDITION", conditionGrade: "MINT" },
+      "invalid_value:conditionGrade",
+    ],
   ])("rejects %s", (_label, change, issue) => {
     expect(issues(attestationSubmissionSchema, { ...valid, ...change })).toEqual([issue]);
   });

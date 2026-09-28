@@ -5,6 +5,7 @@ import {
   ATTESTATION_RESULTS,
   CLAIM_TYPES,
   EVIDENCE_TYPES,
+  ITEM_CONDITIONS,
   VERIFIER_ENTITY_TYPES,
 } from "@worthybound/shared";
 import { z } from "zod";
@@ -70,6 +71,8 @@ export const attestationSubmissionSchema = z
     result: z.enum(ATTESTATION_RESULTS),
     method: z.enum(ATTESTATION_METHODS),
     assuranceLevel: z.enum(ASSURANCE_LEVELS),
+    /** Only for CONDITION claims; required when the claim is CONFIRMED. */
+    conditionGrade: z.enum(ITEM_CONDITIONS).optional(),
     notes: text(2000).optional(),
     issuedAt: dateTimeSchema,
     expiresAt: dateTimeSchema.optional(),
@@ -87,5 +90,16 @@ export const attestationSubmissionSchema = z
   .refine((input) => !input.expiresAt || input.expiresAt > input.issuedAt, {
     message: "expiresAt must be after issuedAt",
     path: ["expiresAt"],
-  });
+  })
+  .refine((input) => input.conditionGrade === undefined || input.claimType === "CONDITION", {
+    message: "conditionGrade is only allowed on CONDITION claims",
+    path: ["conditionGrade"],
+  })
+  .refine(
+    (input) =>
+      input.claimType !== "CONDITION" ||
+      input.result !== "CONFIRMED" ||
+      input.conditionGrade !== undefined,
+    { message: "a confirmed CONDITION claim requires conditionGrade", path: ["conditionGrade"] },
+  );
 export type AttestationSubmissionInput = z.infer<typeof attestationSubmissionSchema>;

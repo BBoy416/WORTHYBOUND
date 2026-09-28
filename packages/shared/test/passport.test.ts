@@ -25,6 +25,7 @@ function source(overrides: Partial<PassportSource> = {}): PassportSource {
     tokenizationStatus: "TOKENIZED",
     chainAssetAddress: "AssetAddr1111111111111111111111111111111111",
     verificationLevel: "AUTHENTICATED",
+    condition: "EXCELLENT",
     id: `${SECRET}-asset-uuid`,
     ownerId: `${SECRET}-owner`,
     serialNumber: `${SECRET}-serial`,
@@ -76,6 +77,7 @@ function source(overrides: Partial<PassportSource> = {}): PassportSource {
     result: "CONFIRMED",
     method: "IN_PERSON",
     assuranceLevel: "HIGH",
+    conditionGrade: null,
     status: "ACTIVE",
     issuedAt: d("2026-03-01T00:00:00Z"),
     expiresAt: d("2031-03-01T00:00:00Z"),
@@ -250,6 +252,76 @@ describe("toPublicPassport", () => {
       "REPORTED_STOLEN",
       "REVOKED",
     ]);
+  });
+  describe("condition", () => {
+    const conditionCheck = (overrides: {
+      id: string;
+      grade: "NEW" | "VERY_GOOD" | "GOOD" | "FAIR";
+      issuedAt: string;
+      status?: "ACTIVE" | "REVOKED";
+    }) => {
+      const base = source().attestations[0];
+      if (!base) throw new Error("fixture has no attestation");
+      return {
+        ...base,
+        id: overrides.id,
+        claimType: "CONDITION" as const,
+        conditionGrade: overrides.grade,
+        issuedAt: d(overrides.issuedAt),
+        status: overrides.status ?? ("ACTIVE" as const),
+      };
+    };
+
+    it("shows the owner-stated condition separately when nothing is verified", () => {
+      expect(toPublicPassport(source())?.condition).toEqual({
+        ownerStated: "EXCELLENT",
+        verified: null,
+      });
+    });
+
+    it("shows the latest active verified grade with its verifier and date", () => {
+      const passport = toPublicPassport(
+        source({
+          attestations: [
+            conditionCheck({ id: "c-old", grade: "VERY_GOOD", issuedAt: "2026-02-01T00:00:00Z" }),
+            conditionCheck({ id: "c-new", grade: "GOOD", issuedAt: "2026-05-01T00:00:00Z" }),
+            conditionCheck({
+              id: "c-revoked",
+              grade: "NEW",
+              issuedAt: "2026-06-01T00:00:00Z",
+              status: "REVOKED",
+            }),
+          ],
+        }),
+      );
+      expect(passport?.condition).toEqual({
+        ownerStated: "EXCELLENT",
+        verified: {
+          grade: "GOOD",
+          assessedAt: "2026-05-01T00:00:00.000Z",
+          attestationId: "c-new",
+          verifier: { id: "verifier-1", publicName: "Geneva Watch Lab" },
+          fromPreviousCustody: false,
+        },
+      });
+      expect(passport?.attestations.map((a) => a.conditionGrade)).toEqual([
+        "NEW",
+        "GOOD",
+        "VERY_GOOD",
+      ]);
+    });
+
+    it("flags a grade assessed before the current owner's custody", () => {
+      const passport = toPublicPassport(
+        source({
+          custody: { currentSince: d("2026-07-01T00:00:00Z"), transferCount: 1 },
+          attestations: [
+            conditionCheck({ id: "c-1", grade: "FAIR", issuedAt: "2026-05-01T00:00:00Z" }),
+          ],
+        }),
+      );
+      expect(passport?.condition.verified?.fromPreviousCustody).toBe(true);
+    });
   });
 });
 
