@@ -10,16 +10,18 @@ verification by approved professionals raises its Trust Score.
 
 ## Status
 
-Phase 6: Evidence Vault (evidence uploads, hashing and seals). Solana work targets **Devnet only**.
+Phase 7: Verifier system (applications, review, category permissions, public verifier profiles).
+Solana work targets **Devnet only**.
 
 ## Repository layout
 
 ```text
 apps/
-  api/                REST API (Fastify): wallet sign-in, assets, evidence, public passports
+  api/                REST API (Fastify): wallet sign-in, assets, evidence, verifiers, passports
 packages/
   database/           Prisma schema, migrations and client (PostgreSQL)
-  shared/             domain enums, asset IDs, lifecycle rules, public passport, evidence seals
+  shared/             domain enums, asset IDs, lifecycle rules, public passport and verifier
+                      profile, evidence seals
   storage/            S3-compatible object storage for evidence
   trust-engine/       pure, versioned Trust Score calculation
   validation/         request validation schemas (Zod)
@@ -72,6 +74,13 @@ Grant the first administrator (server operators only; there is no API for this):
 pnpm admin:grant <wallet address>
 ```
 
+Record a KYC provider's result for a user who has signed in (server operators only, until a
+provider is integrated; verifiers can only be approved with a verified identity):
+
+```sh
+pnpm kyc:record <wallet address> <provider> <reference> [VERIFIED|REJECTED|EXPIRED]
+```
+
 ## Scripts
 
 | Command                  | Purpose                                        |
@@ -88,6 +97,7 @@ pnpm admin:grant <wallet address>
 | `pnpm db:migrate:status` | Show migration status                          |
 | `pnpm api:start`         | Build and start the API                        |
 | `pnpm admin:grant`       | Grant ADMIN to a wallet (operators only)       |
+| `pnpm kyc:record`        | Record a KYC result (operators only)           |
 | `pnpm storage:setup`     | Create and configure the evidence bucket       |
 
 ## Git workflow
@@ -115,3 +125,4 @@ pnpm admin:grant <wallet address>
 - [0008 Wallet authentication](docs/adr/0008-wallet-authentication.md)
 - [0009 Asset registration and passports](docs/adr/0009-asset-registration.md)
 - [0010 Evidence Vault](docs/adr/0010-evidence-vault.md)
+- [0011 Verifier system](docs/adr/0011-verifier-system.md)

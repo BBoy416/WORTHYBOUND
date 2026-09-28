@@ -37,6 +37,18 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
 
   const user = () => db.prisma.user.create({ data: { walletAddress: wallet() } });
 
+  /** A user whose identity was verified by a KYC provider (ADR 0004). */
+  const kycUser = () =>
+    db.prisma.user.create({
+      data: {
+        walletAddress: wallet(),
+        identityStatus: "VERIFIED",
+        identityProvider: "test-kyc",
+        identityProviderRef: randomUUID(),
+        identityVerifiedAt: new Date(),
+      },
+    });
+
   const asset = async (category: AssetCategory = "LUXURY_WATCH", ownerId?: string) =>
     db.prisma.asset.create({
       data: { wbId: wbId(), category, ownerId: ownerId ?? (await user()).id },
@@ -46,15 +58,16 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
     options: { status?: VerifierStatus; categories?: AssetCategory[] } = {},
   ) => {
     const admin = await user();
-    const account = await user();
+    const account = await kycUser();
     const status = options.status ?? "APPROVED";
-    const approved = status === "APPROVED";
-    const record = await db.prisma.verifier.create({
+    // Categories are approved while the verifier is approved; the status is set afterwards.
+    let record = await db.prisma.verifier.create({
       data: {
         userId: account.id,
         entityType: "BUSINESS",
-        status,
-        ...(approved ? { approvedById: admin.id, approvedAt: new Date() } : {}),
+        status: "APPROVED",
+        approvedById: admin.id,
+        approvedAt: new Date(),
       },
     });
     for (const category of options.categories ?? ["LUXURY_WATCH"]) {
@@ -67,6 +80,9 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
           approvedAt: new Date(),
         },
       });
+    }
+    if (status !== "APPROVED") {
+      record = await db.prisma.verifier.update({ where: { id: record.id }, data: { status } });
     }
     return { ...record, admin };
   };
@@ -154,6 +170,7 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
     const tables = [
       "asset_status_events",
       "verifier_status_events",
+      "verifier_category_permission_events",
       "attestation_status_events",
       "attestation_evidence",
       "evidence_commitments",
@@ -197,6 +214,12 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
       });
       await db.prisma.verifierStatusEvent.create({
         data: { verifierId: v.id, fromStatus: "UNDER_REVIEW", toStatus: "APPROVED" },
+      });
+      const permission = await db.prisma.verifierCategoryPermission.findFirstOrThrow({
+        where: { verifierId: v.id },
+      });
+      await db.prisma.verifierCategoryPermissionEvent.create({
+        data: { permissionId: permission.id, fromStatus: "PENDING", toStatus: "APPROVED" },
       });
       await db.prisma.attestationStatusEvent.create({
         data: { attestationId: att.id, toStatus: "ACTIVE" },
@@ -505,7 +528,7 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
     });
 
     it("prevents verifiers approving themselves", async () => {
-      const u = await user();
+      const u = await kycUser();
       await expectDbError(
         db.prisma.verifier.create({
           data: {
@@ -550,6 +573,18 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
         );
       },
     );
+
+    it("rejects attestations from a verifier whose identity is no longer verified", async () => {
+      const [a, v, tv] = [await asset(), await verifier(), await templateVersion()];
+      await db.prisma.user.update({
+        where: { id: v.userId },
+        data: { identityStatus: "EXPIRED" },
+      });
+      await expectDbError(
+        db.prisma.attestation.create({ data: attestationData(a.id, v.id, tv.id) }),
+        DatabaseErrorCode.AUTHORITY,
+      );
+    });
 
     it("rejects attestations outside the verifier's permitted categories", async () => {
       const a = await asset("FINE_ART");
@@ -1129,6 +1164,182 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
       );
       await expectDbError(
         db.prisma.evidenceUpload.delete({ where: { id: u.id } }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+    });
+  });
+
+  // ─── Verifier system ────────────────────────────────────────────────────────
+
+  describe("verifier system", () => {
+    const applicant = async (entityType: "INDIVIDUAL" | "BUSINESS" = "BUSINESS") =>
+      db.prisma.verifier.create({
+        data: { userId: (await kycUser()).id, entityType, status: "UNDER_REVIEW" },
+      });
+
+    const approve = async (verifierId: string) => {
+      const admin = await user();
+      return db.prisma.verifier.update({
+        where: { id: verifierId },
+        data: { status: "APPROVED", approvedById: admin.id, approvedAt: new Date() },
+      });
+    };
+
+    const permission = async (verifierId: string, category: AssetCategory = "FINE_ART") =>
+      db.prisma.verifierCategoryPermission.create({ data: { verifierId, category } });
+
+    it("approves a verifier only with a verified identity", async () => {
+      const [admin, unverified] = [await user(), await user()];
+      await expectDbError(
+        db.prisma.verifier.create({
+          data: {
+            userId: unverified.id,
+            entityType: "INDIVIDUAL",
+            status: "APPROVED",
+            approvedById: admin.id,
+            approvedAt: new Date(),
+          },
+        }),
+        DatabaseErrorCode.AUTHORITY,
+      );
+      const pending = await db.prisma.verifier.create({
+        data: { userId: unverified.id, entityType: "INDIVIDUAL", status: "UNDER_REVIEW" },
+      });
+      await expectDbError(approve(pending.id), DatabaseErrorCode.AUTHORITY);
+      await expect(approve((await applicant()).id)).resolves.toMatchObject({ status: "APPROVED" });
+    });
+
+    it("keeps an approved verifier usable after their identity expires", async () => {
+      const v = await approve((await applicant()).id);
+      await db.prisma.user.update({ where: { id: v.userId }, data: { identityStatus: "EXPIRED" } });
+      await expect(
+        db.prisma.verifier.update({ where: { id: v.id }, data: { status: "SUSPENDED" } }),
+      ).resolves.toMatchObject({ status: "SUSPENDED" });
+      await expectDbError(
+        db.prisma.verifier.update({ where: { id: v.id }, data: { status: "APPROVED" } }),
+        DatabaseErrorCode.AUTHORITY,
+      );
+    });
+
+    it("never deletes a verifier, never moves it to another user and keeps REVOKED final", async () => {
+      const v = await approve((await applicant()).id);
+      await expectDbError(
+        db.prisma.verifier.delete({ where: { id: v.id } }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      await expectDbError(
+        db.prisma.verifier.update({ where: { id: v.id }, data: { userId: (await user()).id } }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      await db.prisma.verifier.update({ where: { id: v.id }, data: { status: "REVOKED" } });
+      await expectDbError(
+        db.prisma.verifier.update({ where: { id: v.id }, data: { status: "SUSPENDED" } }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+    });
+
+    it("lets an applicant change the entity type until approval, then locks it and the approval", async () => {
+      const v = await applicant("INDIVIDUAL");
+      await db.prisma.verifier.update({
+        where: { id: v.id },
+        data: { entityType: "BUSINESS", businessName: "Acme Appraisals" },
+      });
+      await approve(v.id);
+      await expectDbError(
+        db.prisma.verifier.update({ where: { id: v.id }, data: { entityType: "INDIVIDUAL" } }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      await expectDbError(
+        db.prisma.verifier.update({ where: { id: v.id }, data: { approvedAt: new Date(0) } }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      await expectDbError(
+        db.prisma.verifier.update({
+          where: { id: v.id },
+          data: { approvedById: (await user()).id },
+        }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+    });
+
+    it.each(["APPLIED", "UNDER_REVIEW", "REJECTED", "REVOKED"] as const)(
+      "approves no category for a %s verifier",
+      async (status) => {
+        const v = await approve((await applicant()).id);
+        const p = await permission(v.id);
+        const admin = await user();
+        await db.prisma.verifier.update({ where: { id: v.id }, data: { status } });
+        await expectDbError(
+          db.prisma.verifierCategoryPermission.update({
+            where: { id: p.id },
+            data: { status: "APPROVED", approvedById: admin.id, approvedAt: new Date() },
+          }),
+          DatabaseErrorCode.AUTHORITY,
+        );
+      },
+    );
+
+    it("approves categories for approved and suspended verifiers", async () => {
+      const v = await approve((await applicant()).id);
+      const admin = await user();
+      const approved = {
+        status: "APPROVED" as const,
+        approvedById: admin.id,
+        approvedAt: new Date(),
+      };
+      const p = await permission(v.id, "FINE_ART");
+      await expect(
+        db.prisma.verifierCategoryPermission.update({ where: { id: p.id }, data: approved }),
+      ).resolves.toMatchObject({ status: "APPROVED" });
+      await db.prisma.verifier.update({ where: { id: v.id }, data: { status: "SUSPENDED" } });
+      await expect(
+        db.prisma.verifierCategoryPermission.create({
+          data: { verifierId: v.id, category: "JEWELRY", ...approved },
+        }),
+      ).resolves.toMatchObject({ status: "APPROVED" });
+    });
+
+    it("allows one open permission per category and a new request after revocation", async () => {
+      const v = await applicant();
+      const first = await permission(v.id, "FINE_ART");
+      await expect(permission(v.id, "FINE_ART")).rejects.toMatchObject({ code: "P2002" });
+      await db.prisma.verifierCategoryPermission.update({
+        where: { id: first.id },
+        data: { status: "REVOKED", revokedAt: new Date(), reason: "Not qualified" },
+      });
+      await expect(permission(v.id, "FINE_ART")).resolves.toMatchObject({ status: "PENDING" });
+    });
+
+    it("never deletes a permission, never moves it and keeps REVOKED final", async () => {
+      const v = await applicant();
+      const p = await permission(v.id, "FINE_ART");
+      await expectDbError(
+        db.prisma.verifierCategoryPermission.delete({ where: { id: p.id } }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      await expectDbError(
+        db.prisma.verifierCategoryPermission.update({
+          where: { id: p.id },
+          data: { category: "JEWELRY" },
+        }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      await expectDbError(
+        db.prisma.verifierCategoryPermission.update({
+          where: { id: p.id },
+          data: { verifierId: (await applicant()).id },
+        }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      await db.prisma.verifierCategoryPermission.update({
+        where: { id: p.id },
+        data: { status: "REVOKED", revokedAt: new Date() },
+      });
+      await expectDbError(
+        db.prisma.verifierCategoryPermission.update({
+          where: { id: p.id },
+          data: { status: "PENDING" },
+        }),
         DatabaseErrorCode.IMMUTABLE,
       );
     });

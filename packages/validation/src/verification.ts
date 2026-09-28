@@ -1,18 +1,24 @@
 import {
+  API_MANAGED_ROLES,
   ASSET_CATEGORIES,
   ASSURANCE_LEVELS,
   ATTESTATION_METHODS,
   ATTESTATION_RESULTS,
+  CATEGORY_PERMISSION_STATUSES,
   CLAIM_TYPES,
   EVIDENCE_TYPES,
   ITEM_CONDITIONS,
+  PERMISSION_STATUSES_REQUIRING_REASON,
   VERIFIER_ENTITY_TYPES,
+  VERIFIER_STATUSES,
+  VERIFIER_STATUSES_REQUIRING_REASON,
 } from "@worthybound/shared";
 import { z } from "zod";
 import {
   dateTimeSchema,
   httpsUrlSchema,
   sha256Schema,
+  solanaAddressSchema,
   solanaSignatureSchema,
   text,
   uniqueArray,
@@ -34,6 +40,56 @@ export const verifierApplicationSchema = z
     path: ["businessName"],
   });
 export type VerifierApplicationInput = z.infer<typeof verifierApplicationSchema>;
+
+/** Body of `POST /verifier/me/categories`: further categories requested by an approved verifier. */
+export const verifierCategoryRequestSchema = z.strictObject({
+  categories: uniqueArray(z.enum(ASSET_CATEGORIES)).min(1),
+});
+export type VerifierCategoryRequestInput = z.infer<typeof verifierCategoryRequestSchema>;
+
+/** Body of `POST /review/verifiers/:verifierId/status`. */
+export const verifierStatusChangeSchema = z
+  .strictObject({ status: z.enum(VERIFIER_STATUSES), reason: text(500).optional() })
+  .refine((input) => !VERIFIER_STATUSES_REQUIRING_REASON.includes(input.status) || !!input.reason, {
+    message: "a reason is required for this status",
+    path: ["reason"],
+  });
+export type VerifierStatusChangeInput = z.infer<typeof verifierStatusChangeSchema>;
+
+/** Body of `POST /review/verifiers/:verifierId/categories/:category`. */
+export const categoryPermissionChangeSchema = z
+  .strictObject({ status: z.enum(CATEGORY_PERMISSION_STATUSES), reason: text(500).optional() })
+  .refine(
+    (input) => !PERMISSION_STATUSES_REQUIRING_REASON.includes(input.status) || !!input.reason,
+    { message: "a reason is required for this status", path: ["reason"] },
+  );
+export type CategoryPermissionChangeInput = z.infer<typeof categoryPermissionChangeSchema>;
+
+export const verifierParamsSchema = z.strictObject({ verifierId: uuidSchema });
+
+export const verifierCategoryParamsSchema = z.strictObject({
+  verifierId: uuidSchema,
+  category: z.enum(ASSET_CATEGORIES),
+});
+
+/** Review queue, oldest first. `cursor` is the last verifier ID of the previous page. */
+export const verifierListQuerySchema = z.strictObject({
+  status: z.enum(VERIFIER_STATUSES).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  cursor: uuidSchema.optional(),
+});
+export type VerifierListQuery = z.infer<typeof verifierListQuerySchema>;
+
+/** Body of `POST /admin/roles`. ADMIN itself is granted only with the CLI (ADR 0008). */
+export const roleGrantSchema = z.strictObject({
+  walletAddress: solanaAddressSchema,
+  role: z.enum(API_MANAGED_ROLES),
+});
+export type RoleGrantInput = z.infer<typeof roleGrantSchema>;
+
+export const roleListQuerySchema = z.strictObject({ role: z.enum(API_MANAGED_ROLES) });
+
+export const roleAssignmentParamsSchema = z.strictObject({ assignmentId: uuidSchema });
 
 export const MAX_VERIFIERS_PER_CLAIM = 5;
 

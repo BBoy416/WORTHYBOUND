@@ -21,6 +21,7 @@
     "db:migrate:status": "pnpm --filter @worthybound/database db:migrate:status",
     "api:start": "turbo run build --filter=@worthybound/api --output-logs=errors-only && pnpm --filter @worthybound/api start",
     "admin:grant": "turbo run build --filter=@worthybound/api --output-logs=errors-only && pnpm --filter @worthybound/api admin:grant",
+    "kyc:record": "turbo run build --filter=@worthybound/api --output-logs=errors-only && pnpm --filter @worthybound/api kyc:record",
     "storage:setup": "turbo run build --filter=@worthybound/api --output-logs=errors-only && pnpm --filter @worthybound/api storage:setup",
     "prepare": "git config core.hooksPath .githooks || true"
   },

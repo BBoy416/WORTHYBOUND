@@ -134,6 +134,7 @@ export function testApp(
       register: { max: 1000, timeWindowMs: 60_000 },
       write: { max: 1000, timeWindowMs: 60_000 },
       upload: { max: 1000, timeWindowMs: 60_000 },
+      apply: { max: 1000, timeWindowMs: 60_000 },
       public: { max: 1000, timeWindowMs: 60_000 },
     },
     // Tests that do not touch evidence never reach this address.

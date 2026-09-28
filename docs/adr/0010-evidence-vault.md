@@ -82,5 +82,5 @@ replacement with the same `MINIO_*` settings and data format. All storage access
 - Serving public photos through the API costs API bandwidth; a CDN can be added in front later.
 - Uploads that are requested but never completed stay as pending records; the storage copy is
   removed after a day, and a cleanup job for the records comes with the worker (later phase).
-- Evidence can only be added by the owner in this phase; verifiers add evidence in Phases 7-8,
-  when evidence review also starts.
+- Evidence can only be added by the owner in this phase; verifiers add evidence in Phase 8, with
+  verification requests, when evidence review also starts (ADR 0011).

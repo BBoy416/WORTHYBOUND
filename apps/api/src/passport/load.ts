@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@worthybound/database";
-import type { PassportSource } from "@worthybound/shared";
+import { type PassportSource, verifierPublicName } from "@worthybound/shared";
 
 /**
  * Reads only the columns the public passport may show. Private columns (serials, storage keys,
@@ -97,8 +97,7 @@ export async function loadPassportSource(
       ...a,
       verifier: {
         id: verifier.id,
-        // Individuals are not named publicly; organisations are.
-        publicName: verifier.entityType === "INDIVIDUAL" ? null : verifier.businessName,
+        publicName: verifierPublicName(verifier),
         entityType: verifier.entityType,
         status: verifier.status,
       },

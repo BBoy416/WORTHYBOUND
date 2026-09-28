@@ -16,10 +16,10 @@ application. Prisma 7.10 with the `pg` driver adapter manages the schema; rules 
 express are written in SQL.
 
 **Append-only tables** reject `UPDATE`, `DELETE` and `TRUNCATE` (SQLSTATE `WB001`):
-`asset_status_events`, `verifier_status_events`, `attestation_status_events`,
-`attestation_evidence`, `evidence_commitments`, `evidence_commitment_items`,
-`trust_score_snapshots`, `provenance_events`, `audit_logs`. Parent rows referenced by history use
-`ON DELETE RESTRICT`.
+`asset_status_events`, `verifier_status_events`, `verifier_category_permission_events`,
+`attestation_status_events`, `attestation_evidence`, `evidence_commitments`,
+`evidence_commitment_items`, `trust_score_snapshots`, `provenance_events`, `audit_logs`. Parent
+rows referenced by history use `ON DELETE RESTRICT`.
 
 **Provenance hash chain.** On insert the database assigns a per-asset `sequence`, sets `prevHash`
 to the previous event's hash and computes
@@ -34,11 +34,15 @@ tampering by a privileged user who bypasses the triggers is detectable.
   `REVOKED` and `SUPERSEDED` are final; attestations cannot be deleted.
 - Published template versions: only `PUBLISHED → RETIRED` is allowed; they cannot be deleted.
 - Login nonces: single use; binding fields are immutable.
+- Verifiers and category permissions (ADR 0011): never deleted, never moved to another user,
+  verifier or category; `REVOKED` is final; the first approval and the entity type of an approved
+  verifier never change.
 
 **Authority checks** (SQLSTATE `WB003`): an attestation is accepted only if the verifier is
-`APPROVED`, holds an `APPROVED` permission for the asset's category, does not own the asset, and
-the template version is `PUBLISHED` for that category. Verifiers cannot approve their own category
-permissions.
+`APPROVED` with a `VERIFIED` identity, holds an `APPROVED` permission for the asset's category,
+does not own the asset, and the template version is `PUBLISHED` for that category. Verifiers
+cannot approve their own category permissions. A verifier is approved only with a `VERIFIED`
+identity, and a category only while the verifier is `APPROVED` or `SUSPENDED` (ADR 0011).
 
 **Check constraints:** `WB-XXXXXXXX` ID format; trust scores 0-100; SHA-256 hex formats; evidence
 storage keys cannot be URLs; no self-approval of verifiers, self-granted roles, self-reviewed
@@ -46,7 +50,7 @@ evidence or self-resolved disputes; a verified identity requires a KYC provider 
 tokenized assets require a chain address; submitted chain transactions require a signature.
 
 **Partial unique indexes:** one open custody period per asset, one open transfer per asset, one
-active assignment of each role per user.
+active assignment of each role per user, one open permission per verifier and category.
 
 ## Consequences
 

@@ -11,6 +11,7 @@ import {
   attestationSubmissionSchema,
   authNonceRequestSchema,
   authVerifyRequestSchema,
+  categoryPermissionChangeSchema,
   EVIDENCE_MAX_BYTES,
   evidenceParamsSchema,
   evidenceUploadParamsSchema,
@@ -20,11 +21,19 @@ import {
   openDisputeSchema,
   registerAssetSchema,
   resolveDisputeSchema,
+  roleAssignmentParamsSchema,
+  roleGrantSchema,
+  roleListQuerySchema,
   templateRequirementsSchema,
   transferRequestSchema,
   updateDraftAssetSchema,
   verificationRequestSchema,
   verifierApplicationSchema,
+  verifierCategoryParamsSchema,
+  verifierCategoryRequestSchema,
+  verifierListQuerySchema,
+  verifierParamsSchema,
+  verifierStatusChangeSchema,
 } from "../src/index.js";
 
 const SHA = "a".repeat(64);
@@ -244,6 +253,104 @@ describe("verifierApplicationSchema", () => {
         website: "http://example.com",
       }),
     ).toEqual(["custom:website"]);
+  });
+});
+
+describe("verifier review schemas", () => {
+  it.each(["REJECTED", "SUSPENDED", "REVOKED"])(
+    "requires a reason to set a verifier %s",
+    (status) => {
+      expect(issues(verifierStatusChangeSchema, { status })).toEqual(["custom:reason"]);
+      expect(issues(verifierStatusChangeSchema, { status, reason: "   " })).toContain(
+        "too_small:reason",
+      );
+      expect(
+        issues(verifierStatusChangeSchema, { status, reason: "Credentials not verifiable" }),
+      ).toEqual([]);
+    },
+  );
+
+  it("does not require a reason to start a review or approve", () => {
+    expect(issues(verifierStatusChangeSchema, { status: "UNDER_REVIEW" })).toEqual([]);
+    expect(issues(verifierStatusChangeSchema, { status: "APPROVED" })).toEqual([]);
+  });
+
+  it("requires a reason to suspend or revoke a category, not to approve it", () => {
+    expect(issues(categoryPermissionChangeSchema, { status: "SUSPENDED" })).toEqual([
+      "custom:reason",
+    ]);
+    expect(issues(categoryPermissionChangeSchema, { status: "REVOKED" })).toEqual([
+      "custom:reason",
+    ]);
+    expect(issues(categoryPermissionChangeSchema, { status: "APPROVED" })).toEqual([]);
+  });
+
+  it.each(["approvedById", "verifierId", "actorId", "approvedAt"])(
+    "rejects the backend-controlled field %s",
+    (field) => {
+      expect(issues(verifierStatusChangeSchema, { status: "APPROVED", [field]: UUID })).toEqual([
+        "unrecognized_keys",
+      ]);
+      expect(issues(categoryPermissionChangeSchema, { status: "APPROVED", [field]: UUID })).toEqual(
+        ["unrecognized_keys"],
+      );
+    },
+  );
+
+  it("requests at least one new, unique category", () => {
+    expect(issues(verifierCategoryRequestSchema, { categories: ["FINE_ART"] })).toEqual([]);
+    expect(issues(verifierCategoryRequestSchema, { categories: [] })).toEqual([
+      "too_small:categories",
+    ]);
+    expect(issues(verifierCategoryRequestSchema, { categories: ["FINE_ART", "FINE_ART"] })).toEqual(
+      ["custom:categories"],
+    );
+  });
+
+  it("validates verifier IDs, categories and the review queue query", () => {
+    expect(issues(verifierParamsSchema, { verifierId: UUID })).toEqual([]);
+    expect(issues(verifierParamsSchema, { verifierId: "1" })).toEqual([
+      "invalid_format:verifierId",
+    ]);
+    expect(
+      issues(verifierCategoryParamsSchema, { verifierId: UUID, category: "SPACESHIP" }),
+    ).toEqual(["invalid_value:category"]);
+    expect(verifierListQuerySchema.parse({})).toEqual({ limit: 20 });
+    expect(verifierListQuerySchema.parse({ status: "APPLIED", limit: "5" })).toEqual({
+      status: "APPLIED",
+      limit: 5,
+    });
+    expect(issues(verifierListQuerySchema, { limit: "101" })).toEqual(["too_big:limit"]);
+  });
+});
+
+describe("role schemas", () => {
+  it("grants only roles managed through the API", () => {
+    expect(issues(roleGrantSchema, { walletAddress: WALLET, role: "VERIFIER_REVIEWER" })).toEqual(
+      [],
+    );
+    for (const role of ["ADMIN", "VERIFIER", "USER"]) {
+      expect(issues(roleGrantSchema, { walletAddress: WALLET, role })).toEqual([
+        "invalid_value:role",
+      ]);
+      expect(issues(roleListQuerySchema, { role })).toEqual(["invalid_value:role"]);
+    }
+  });
+
+  it("rejects malformed wallets, unknown fields and assignment IDs", () => {
+    expect(issues(roleGrantSchema, { walletAddress: "0xabc", role: "VERIFIER_REVIEWER" })).toEqual([
+      "invalid_format:walletAddress",
+    ]);
+    expect(
+      issues(roleGrantSchema, {
+        walletAddress: WALLET,
+        role: "VERIFIER_REVIEWER",
+        grantedById: UUID,
+      }),
+    ).toEqual(["unrecognized_keys"]);
+    expect(issues(roleAssignmentParamsSchema, { assignmentId: "x" })).toEqual([
+      "invalid_format:assignmentId",
+    ]);
   });
 });
 

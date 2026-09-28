@@ -5,5 +5,6 @@ export { TRUST_SCORE_DISCLAIMER } from "./trust.js";
 export * from "./lifecycle.js";
 export * from "./assets.js";
 export * from "./verification.js";
+export * from "./verifiers.js";
 export * from "./passport.js";
 export * from "./evidence.js";
