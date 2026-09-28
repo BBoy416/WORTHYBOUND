@@ -50,8 +50,8 @@ docker compose --env-file .env up -d
 pnpm db:migrate:deploy
 ```
 
-Database integration tests need `TEST_DATABASE_URL` (see `.env.example`); they create and drop
-throwaway databases and are skipped when it is not set.
+Database integration tests need `TEST_DATABASE_URL`, read from the environment or from `.env`
+(see `.env.example`); they create and drop throwaway databases and are skipped when it is not set.
 
 ## Scripts
 
