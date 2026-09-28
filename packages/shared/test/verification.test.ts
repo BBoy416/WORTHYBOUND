@@ -20,6 +20,7 @@ function authority(
     verifier: {
       userId: "verifier-user",
       status: "APPROVED",
+      identityStatus: "VERIFIED",
       approvedCategories: ["LUXURY_WATCH"],
       ...overrides.verifier,
     },
@@ -50,6 +51,11 @@ describe("attestationAuthorityViolations", () => {
       "an unapproved verifier",
       authority({ verifier: { status: "SUSPENDED" } }),
       "VERIFIER_NOT_APPROVED",
+    ],
+    [
+      "a verifier whose identity verification expired",
+      authority({ verifier: { identityStatus: "EXPIRED" } }),
+      "VERIFIER_IDENTITY_NOT_VERIFIED",
     ],
     [
       "a verifier without permission for the category (watch specialist on fine art)",

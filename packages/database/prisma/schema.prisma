@@ -308,6 +308,7 @@ model User {
   disputesResolved        Dispute[]                     @relation("DisputeResolver")
   assetStatusEvents       AssetStatusEvent[]
   verifierStatusEvents    VerifierStatusEvent[]
+  permissionEvents        VerifierCategoryPermissionEvent[]
   attestationStatusEvents AttestationStatusEvent[]
   provenanceEvents        ProvenanceEvent[]
   auditLogs               AuditLog[]
@@ -616,6 +617,7 @@ model Verifier {
 }
 
 /// A watch specialist does not automatically have permission to authenticate fine art.
+/// At most one permission per verifier and category that is not REVOKED; revoked rows stay as history.
 model VerifierCategoryPermission {
   id           String                   @id @default(uuid(7)) @db.Uuid
   verifierId   String                   @db.Uuid
@@ -628,11 +630,29 @@ model VerifierCategoryPermission {
   createdAt    DateTime                 @default(now()) @db.Timestamptz(3)
   updatedAt    DateTime                 @updatedAt @db.Timestamptz(3)
 
-  verifier   Verifier @relation(fields: [verifierId], references: [id], onDelete: Restrict)
-  approvedBy User?    @relation(fields: [approvedById], references: [id], onDelete: Restrict)
+  verifier   Verifier                          @relation(fields: [verifierId], references: [id], onDelete: Restrict)
+  approvedBy User?                             @relation(fields: [approvedById], references: [id], onDelete: Restrict)
+  events     VerifierCategoryPermissionEvent[]
 
-  @@unique([verifierId, category])
+  @@index([verifierId, category])
   @@map("verifier_category_permissions")
+}
+
+/// Append-only.
+model VerifierCategoryPermissionEvent {
+  id           String                    @id @default(uuid(7)) @db.Uuid
+  permissionId String                    @db.Uuid
+  fromStatus   CategoryPermissionStatus?
+  toStatus     CategoryPermissionStatus
+  reason       String?
+  actorId      String?                   @db.Uuid
+  createdAt    DateTime                  @default(now()) @db.Timestamptz(3)
+
+  permission VerifierCategoryPermission @relation(fields: [permissionId], references: [id], onDelete: Restrict)
+  actor      User?                      @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([permissionId, createdAt])
+  @@map("verifier_category_permission_events")
 }
 
 /// Append-only.

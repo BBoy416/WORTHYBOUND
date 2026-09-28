@@ -6,6 +6,7 @@ import type {
   AttestationStatus,
   ClaimType,
   EvidenceType,
+  IdentityStatus,
   ReviewStatus,
   TemplateVersionStatus,
   VerifierStatus,
@@ -30,6 +31,7 @@ export const ATTESTABLE_ASSET_STATUSES: readonly AssetStatus[] = [
 
 export const ATTESTATION_AUTHORITY_VIOLATIONS = [
   "VERIFIER_NOT_APPROVED",
+  "VERIFIER_IDENTITY_NOT_VERIFIED",
   "NO_CATEGORY_PERMISSION",
   "OWN_ASSET",
   "ASSET_NOT_ATTESTABLE",
@@ -44,6 +46,8 @@ export interface AttestationAuthorityContext {
   verifier: {
     userId: string;
     status: VerifierStatus;
+    /** KYC status of the verifier's user; must still be VERIFIED (ADR 0004). */
+    identityStatus: IdentityStatus;
     /** Categories with an APPROVED permission. */
     approvedCategories: readonly AssetCategory[];
   };
@@ -67,6 +71,7 @@ export function attestationAuthorityViolations(
 ): AttestationAuthorityViolation[] {
   const violations: AttestationAuthorityViolation[] = [];
   if (ctx.verifier.status !== "APPROVED") violations.push("VERIFIER_NOT_APPROVED");
+  if (ctx.verifier.identityStatus !== "VERIFIED") violations.push("VERIFIER_IDENTITY_NOT_VERIFIED");
   if (!ctx.verifier.approvedCategories.includes(ctx.asset.category)) {
     violations.push("NO_CATEGORY_PERMISSION");
   }

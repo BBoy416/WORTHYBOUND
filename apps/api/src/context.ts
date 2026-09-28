@@ -27,6 +27,8 @@ export interface RateLimits {
   write: RateLimit;
   /** Evidence upload requests, per user. */
   upload: RateLimit;
+  /** Verifier applications, per user. */
+  apply: RateLimit;
   /** Public passports, per IP address. */
   public: RateLimit;
 }
@@ -36,5 +38,6 @@ export const DEFAULT_RATE_LIMITS: RateLimits = {
   register: { max: 20, timeWindowMs: 60 * 60_000 },
   write: { max: 60, timeWindowMs: 60_000 },
   upload: { max: 30, timeWindowMs: 60 * 60_000 },
+  apply: { max: 5, timeWindowMs: 60 * 60_000 },
   public: { max: 120, timeWindowMs: 60_000 },
 };

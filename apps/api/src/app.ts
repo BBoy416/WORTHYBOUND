@@ -10,6 +10,7 @@ import {
   validatorCompiler,
   type ZodTypeProvider,
 } from "fastify-type-provider-zod";
+import { adminRoutes } from "./admin/routes.js";
 import { assetRoutes } from "./assets/routes.js";
 import { createAuthenticate, createRequireRole } from "./auth/guard.js";
 import { authRoutes } from "./auth/routes.js";
@@ -17,6 +18,7 @@ import type { Config } from "./config.js";
 import { type AppContext, DEFAULT_RATE_LIMITS, type RateLimits } from "./context.js";
 import { evidenceRoutes } from "./evidence/routes.js";
 import { passportRoutes } from "./passport/routes.js";
+import { verifierRoutes } from "./verifiers/routes.js";
 
 export interface BuildAppOptions {
   config: Config;
@@ -108,6 +110,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await app.register(assetRoutes, ctx);
   await app.register(evidenceRoutes, ctx);
   await app.register(passportRoutes, ctx);
+  await app.register(verifierRoutes, ctx);
+  await app.register(adminRoutes, ctx);
   if (options.register) await options.register(app, ctx);
   return app;
 }

@@ -11,6 +11,7 @@
     "test": "vitest run",
     "start": "node dist/server.js",
     "admin:grant": "node dist/cli/admin-grant.js",
+    "kyc:record": "node dist/cli/kyc-record.js",
     "storage:setup": "node dist/cli/storage-setup.js"
   },
   "dependencies": {
