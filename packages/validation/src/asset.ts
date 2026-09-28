@@ -1,0 +1,43 @@
+import { ASSET_CATEGORIES, ASSET_STATUSES } from "@worthybound/shared";
+import { z } from "zod";
+import { text, wbIdSchema } from "./common.js";
+
+export const MAX_ASSET_ATTRIBUTES = 50;
+
+/** Flat key/value details such as dial colour or year; stored as a JSON object. */
+export const assetAttributesSchema = z
+  .record(z.string().trim().min(1).max(64), z.union([z.string().max(500), z.number(), z.boolean()]))
+  .refine(
+    (attributes) => Object.keys(attributes).length <= MAX_ASSET_ATTRIBUTES,
+    `at most ${MAX_ASSET_ATTRIBUTES} attributes`,
+  );
+
+const assetFields = {
+  category: z.enum(ASSET_CATEGORIES),
+  brand: text(100).optional(),
+  model: text(100).optional(),
+  /** Private: never shown publicly or written on-chain. */
+  serialNumber: text(100).optional(),
+  /** Private notes for the owner and verifiers. */
+  description: text(5000).optional(),
+  publicDescription: text(2000).optional(),
+  attributes: assetAttributesSchema.optional(),
+};
+
+/** IDs, status, owner, Trust Score and chain fields are set by the backend and rejected here. */
+export const registerAssetSchema = z.strictObject(assetFields);
+export type RegisterAssetInput = z.infer<typeof registerAssetSchema>;
+
+export const updateDraftAssetSchema = z
+  .strictObject(assetFields)
+  .partial()
+  .refine((input) => Object.keys(input).length > 0, "no fields to update");
+export type UpdateDraftAssetInput = z.infer<typeof updateDraftAssetSchema>;
+
+/** Requested status change; the lifecycle rules decide whether the caller may make it. */
+export const assetStatusChangeSchema = z.strictObject({
+  assetId: wbIdSchema,
+  toStatus: z.enum(ASSET_STATUSES),
+  reason: text(500).optional(),
+});
+export type AssetStatusChangeInput = z.infer<typeof assetStatusChangeSchema>;

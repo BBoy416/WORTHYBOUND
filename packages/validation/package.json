@@ -1,0 +1,32 @@
+{
+  "name": "@worthybound/validation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Reusable request validation schemas for WorthyBound inputs",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.0",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.2"
+  },
+  "dependencies": {
+    "@worthybound/shared": "workspace:*",
+    "zod": "^4.6.5"
+  }
+}
