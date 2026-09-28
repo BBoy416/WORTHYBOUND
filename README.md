@@ -1,0 +1,80 @@
+# WorthyBound
+
+WorthyBound lets anyone create a digital identity for a physical asset and tokenize it on Solana.
+Owners add evidence, ownership details and provenance to build the asset's digital passport;
+verification by approved professionals raises its Trust Score.
+
+> **Anyone can create and tokenize an asset. Trust must be earned.**
+> A token is not proof of authenticity. The Trust Score measures recorded evidence and verification;
+> it does not guarantee authenticity, ownership, legal title or value.
+
+## Status
+
+Phase 1: engineering foundation and Trust Score engine. Solana work targets **Devnet only**.
+
+## Repository layout
+
+```text
+apps/                 api, worker, web (added in later phases)
+packages/
+  trust-engine/       pure, versioned Trust Score calculation
+programs/             Anchor program (Phase 10)
+docs/adr/             architecture decision records
+tests/                integration and end-to-end tests (later phases)
+docker-compose.yml    local PostgreSQL and S3-compatible storage
+```
+
+Planned packages (see [ADR 0001](docs/adr/0001-monorepo-and-stack.md)): `database`, `shared`,
+`validation`, `solana`, `storage`.
+
+## Requirements
+
+- Node.js 24 LTS (`.nvmrc`)
+- pnpm (`corepack enable`)
+- [gitleaks](https://github.com/gitleaks/gitleaks#installing) (required by the pre-commit hook)
+- Docker (for local services)
+
+## Getting started
+
+```sh
+corepack enable
+pnpm install          # also enables the gitleaks pre-commit hook
+cp .env.example .env  # then replace every placeholder value
+```
+
+Start local services when needed:
+
+```sh
+docker compose --env-file .env up -d
+```
+
+## Scripts
+
+| Command             | Purpose                                 |
+| ------------------- | --------------------------------------- |
+| `pnpm test`         | Run all tests                           |
+| `pnpm typecheck`    | Type-check all packages                 |
+| `pnpm lint`         | ESLint                                  |
+| `pnpm format`       | Format with Prettier                    |
+| `pnpm build`        | Build all packages                      |
+| `pnpm secrets:scan` | Scan the Git history for leaked secrets |
+
+## Git workflow
+
+- `main` is stable, `dev` is active development. Never commit directly to `main`.
+- Work on feature branches off `dev` (e.g. `feature/wallet-auth`) and open pull requests into `dev`.
+- No force pushes or history rewrites.
+
+## Security
+
+- Never commit `.env` files, keypairs or credentials. Keypairs live outside the repository
+  (e.g. `~/.config/solana/`).
+- The Trust Score is calculated only by the backend; clients never submit it.
+- Private evidence and identity data never go on-chain or into the public passport.
+
+## Architecture decisions
+
+- [0001 Monorepo and technology stack](docs/adr/0001-monorepo-and-stack.md)
+- [0002 Controlled transfer of asset tokens](docs/adr/0002-controlled-transfer.md)
+- [0003 Weighted Trust Score](docs/adr/0003-weighted-trust-score.md)
+- [0004 KYC policy](docs/adr/0004-kyc-policy.md)

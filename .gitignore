@@ -5,12 +5,16 @@
 
 # Dependencies
 node_modules/
+.pnpm-store/
 
 # Builds
 dist/
 build/
 .next/
 target/
+coverage/
+.turbo/
+*.tsbuildinfo
 
 # Logs
 *.log
@@ -18,17 +22,30 @@ target/
 # macOS
 .DS_Store
 
-# VS Code
+# Editors
 .vscode/
+.idea/
 
-# Solana keys
+# Keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+**/keys/
+**/keypairs/
+
+# Solana keys and local state
 *-keypair.json
 id.json
+.anchor/
+test-ledger/
 
-# WorthyBound private evidence/data
-uploads/
-private/
-evidence/
+# WorthyBound private evidence/data (root-anchored so source folders named
+# evidence/, private/ or uploads/ are not ignored)
+/storage/
+/uploads/
+/private/
+/evidence/
 
 # Local databases
 *.db
