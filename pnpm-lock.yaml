@@ -215,6 +215,9 @@ importers:
       '@types/pg':
         specifier: ^8.23.1
         version: 8.23.1
+      '@worthybound/shared':
+        specifier: workspace:*
+        version: link:../shared
       pg:
         specifier: ^8.23.0
         version: 8.23.0
@@ -228,7 +231,23 @@ importers:
         specifier: ^5.0.2
         version: 5.0.2(@types/node@24.19.0)(@vitest/coverage-v8@5.0.2)(vite@8.3.1(@types/node@24.19.0)(jiti@2.7.0))
 
+  packages/shared:
+    devDependencies:
+      '@types/node':
+        specifier: ^24.19.0
+        version: 24.19.0
+      typescript:
+        specifier: ~6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^5.0.2
+        version: 5.0.2(@types/node@24.19.0)(@vitest/coverage-v8@5.0.2)(vite@8.3.1(@types/node@24.19.0)(jiti@2.7.0))
+
   packages/trust-engine:
+    dependencies:
+      '@worthybound/shared':
+        specifier: workspace:*
+        version: link:../shared
     devDependencies:
       '@types/node':
         specifier: ^24.19.0
