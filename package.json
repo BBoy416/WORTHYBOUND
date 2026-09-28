@@ -15,6 +15,10 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "secrets:scan": "gitleaks git --redact --verbose",
+    "db:generate": "pnpm --filter @worthybound/database generate",
+    "db:migrate:dev": "pnpm --filter @worthybound/database db:migrate:dev",
+    "db:migrate:deploy": "pnpm --filter @worthybound/database db:migrate:deploy",
+    "db:migrate:status": "pnpm --filter @worthybound/database db:migrate:status",
     "prepare": "git config core.hooksPath .githooks || true"
   },
   "devDependencies": {

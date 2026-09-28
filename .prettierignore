@@ -4,3 +4,4 @@ coverage/
 .turbo/
 target/
 pnpm-lock.yaml
+**/src/generated/
