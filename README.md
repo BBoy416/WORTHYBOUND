@@ -10,7 +10,8 @@ verification by approved professionals raises its Trust Score.
 
 ## Status
 
-Phase 2: database schema and integrity rules. Solana work targets **Devnet only**.
+Phase 3: core domain model (lifecycle rules, public passport, input validation). Solana work
+targets **Devnet only**.
 
 ## Repository layout
 
@@ -18,15 +19,16 @@ Phase 2: database schema and integrity rules. Solana work targets **Devnet only*
 apps/                 api, worker, web (added in later phases)
 packages/
   database/           Prisma schema, migrations and client (PostgreSQL)
+  shared/             domain enums, asset IDs, lifecycle rules, public passport
   trust-engine/       pure, versioned Trust Score calculation
+  validation/         request validation schemas (Zod)
 programs/             Anchor program (Phase 10)
 docs/adr/             architecture decision records
 tests/                integration and end-to-end tests (later phases)
 docker-compose.yml    local PostgreSQL and S3-compatible storage
 ```
 
-Planned packages (see [ADR 0001](docs/adr/0001-monorepo-and-stack.md)): `shared`, `validation`,
-`solana`, `storage`.
+Planned packages (see [ADR 0001](docs/adr/0001-monorepo-and-stack.md)): `solana`, `storage`.
 
 ## Requirements
 
@@ -88,3 +90,4 @@ Database integration tests need `TEST_DATABASE_URL`, read from the environment o
 - [0003 Weighted Trust Score](docs/adr/0003-weighted-trust-score.md)
 - [0004 KYC policy](docs/adr/0004-kyc-policy.md)
 - [0005 Database integrity enforced in PostgreSQL](docs/adr/0005-database-integrity.md)
+- [0006 Core domain model](docs/adr/0006-core-domain-model.md)

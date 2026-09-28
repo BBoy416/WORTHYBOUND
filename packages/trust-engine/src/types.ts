@@ -1,40 +1,18 @@
-export const ASSET_STATUSES = [
-  "DRAFT",
-  "TOKENIZED",
-  "ACTIVE",
-  "VERIFIED",
-  "TRANSFER_PENDING",
-  "REVERIFICATION_REQUIRED",
-  "DISPUTED",
-  "REPORTED_LOST",
-  "REPORTED_STOLEN",
-  "REVOKED",
-] as const;
-export type AssetStatus = (typeof ASSET_STATUSES)[number];
+import {
+  ASSET_STATUSES,
+  CLAIM_TYPES,
+  PROOF_SOURCES,
+  type AssetStatus,
+  type ProofSource,
+  type VerificationLevel,
+} from "@worthybound/shared";
 
-/** What a proof demonstrates. */
-export const PROOF_TYPES = [
-  "PHOTO",
-  "RECEIPT",
-  "CERTIFICATE",
-  "PROVENANCE",
-  "SERIAL_NUMBER",
-  "POSSESSION",
-  "CONDITION",
-  "INSPECTION",
-  "AUTHENTICATION",
-  "APPRAISAL",
-] as const;
+export { ASSET_STATUSES, PROOF_SOURCES };
+export type { AssetStatus, ProofSource, VerificationLevel };
+
+/** What a proof demonstrates: owner-submitted photos and receipts, plus every claim type. */
+export const PROOF_TYPES = ["PHOTO", "RECEIPT", ...CLAIM_TYPES] as const;
 export type ProofType = (typeof PROOF_TYPES)[number];
-
-/**
- * Who stands behind a proof.
- * OWNER: self-submitted. THIRD_PARTY: independent document from a known issuer
- * (e.g. dealer, auction house). VERIFIER: approved WorthyBound verifier.
- * MANUFACTURER: the brand or maker itself.
- */
-export const PROOF_SOURCES = ["OWNER", "THIRD_PARTY", "VERIFIER", "MANUFACTURER"] as const;
-export type ProofSource = (typeof PROOF_SOURCES)[number];
 
 export type ProofStatus = "ACTIVE" | "REVOKED" | "SUPERSEDED" | "REJECTED";
 
@@ -128,9 +106,6 @@ export interface TrustWeights {
     staleVerification: number;
   };
 }
-
-export type VerificationLevel =
-  "UNVERIFIED" | "SELF_DOCUMENTED" | "INSPECTED" | "AUTHENTICATED" | "MULTI_VERIFIED";
 
 export interface TrustFactor {
   code: string;
