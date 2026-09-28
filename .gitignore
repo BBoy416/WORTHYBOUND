@@ -1,0 +1,35 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Builds
+dist/
+build/
+.next/
+target/
+
+# Logs
+*.log
+
+# macOS
+.DS_Store
+
+# VS Code
+.vscode/
+
+# Solana keys
+*-keypair.json
+id.json
+
+# WorthyBound private evidence/data
+uploads/
+private/
+evidence/
+
+# Local databases
+*.db
+*.sqlite
