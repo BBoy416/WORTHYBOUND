@@ -1,3 +1,4 @@
+import { CLAIM_TYPES } from "@worthybound/shared";
 import { describe, expect, it } from "vitest";
 import {
   computeTrust,
@@ -218,6 +219,30 @@ describe("computeTrust: trust must be earned (tier caps)", () => {
     expect(kyc.score).toBe(DEFAULT_WEIGHTS.caps.selfDocumentedIdentityVerified);
   });
 
+  it("does not treat existence, presenter, documentation or ownership claims as an inspection", () => {
+    const result = computeTrust(
+      inputs({
+        proofs: [
+          "PHYSICAL_EXISTENCE",
+          "IDENTITY_OF_PRESENTER",
+          "DOCUMENTATION",
+          "OWNERSHIP_CLAIM",
+        ].map((type) =>
+          proof({ type: type as Proof["type"], source: "VERIFIER", sourceId: "v-a" }),
+        ),
+      }),
+    );
+    expect(result.verificationLevel).toBe("SELF_DOCUMENTED");
+    expect(result.score).toBeLessThanOrEqual(DEFAULT_WEIGHTS.caps.withoutInspection);
+  });
+
+  it("assigns a weight and freshness rule to every claim type", () => {
+    for (const type of CLAIM_TYPES) {
+      expect(DEFAULT_WEIGHTS.typePoints[type], type).toBeGreaterThan(0);
+      expect(DEFAULT_WEIGHTS.freshness[type], type).toBeDefined();
+    }
+  });
+
   it("requires a verifier inspection to exceed the no-inspection cap", () => {
     const result = computeTrust(
       inputs({
@@ -411,6 +436,32 @@ describe("computeTrust: custody and transfer", () => {
       { proofId: oldCondition.id, reason: "PREDATES_CURRENT_CUSTODY" },
     ]);
     expect(result.factors.map((f) => f.proofId)).toContain(receipt.id);
+  });
+
+  it("stops counting presenter identity and ownership claims from before the current custody period", () => {
+    const oldPresenter = proof({
+      type: "IDENTITY_OF_PRESENTER",
+      source: "VERIFIER",
+      issuedAt: daysAgo(30),
+    });
+    const oldOwnership = proof({
+      type: "OWNERSHIP_CLAIM",
+      source: "VERIFIER",
+      issuedAt: daysAgo(30),
+    });
+    const existence = proof({
+      type: "PHYSICAL_EXISTENCE",
+      source: "VERIFIER",
+      issuedAt: daysAgo(30),
+    });
+    const result = computeTrust(
+      inputs({ currentCustodySince: daysAgo(5), proofs: [oldPresenter, oldOwnership, existence] }),
+    );
+    expect(result.excludedProofs).toEqual([
+      { proofId: oldPresenter.id, reason: "PREDATES_CURRENT_CUSTODY" },
+      { proofId: oldOwnership.id, reason: "PREDATES_CURRENT_CUSTODY" },
+    ]);
+    expect(result.factors.map((f) => f.proofId)).toContain(existence.id);
   });
 
   it("ignores proofs issued after the evaluation time", () => {

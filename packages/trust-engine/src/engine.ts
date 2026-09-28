@@ -1,3 +1,4 @@
+import { TRUST_SCORE_DISCLAIMER } from "@worthybound/shared";
 import { canonicalJson, sha256Hex } from "./hash.js";
 import type {
   AppliedCap,
@@ -14,15 +15,18 @@ import type {
 } from "./types.js";
 import { DEFAULT_WEIGHTS } from "./weights.js";
 
-export const ENGINE_VERSION = "1.0.0";
+export const ENGINE_VERSION = "1.1.0";
 
-export const TRUST_SCORE_DISCLAIMER =
-  "The WorthyBound Trust Score measures the strength of the evidence and verification recorded " +
-  "for an asset. It does not guarantee authenticity, ownership, legal title or value.";
+export { TRUST_SCORE_DISCLAIMER };
 
 const INDEPENDENT_SOURCES: ReadonlySet<ProofSource> = new Set(["VERIFIER", "MANUFACTURER"]);
 const INSPECTION_TYPES: ReadonlySet<ProofType> = new Set(["INSPECTION", "AUTHENTICATION"]);
-const CUSTODY_BOUND_TYPES: ReadonlySet<ProofType> = new Set(["POSSESSION", "CONDITION"]);
+const CUSTODY_BOUND_TYPES: ReadonlySet<ProofType> = new Set([
+  "POSSESSION",
+  "CONDITION",
+  "IDENTITY_OF_PRESENTER",
+  "OWNERSHIP_CLAIM",
+]);
 const DAY_MS = 86_400_000;
 
 export class TrustInputError extends Error {

@@ -7,7 +7,7 @@ const NO_DECAY = { halfLifeDays: null, minFactor: 1 } as const;
  * snapshots remain reproducible.
  */
 export const DEFAULT_WEIGHTS: TrustWeights = {
-  version: "weights-2026.1",
+  version: "weights-2026.2",
   typePoints: {
     PHOTO: 2,
     RECEIPT: 8,
@@ -19,6 +19,10 @@ export const DEFAULT_WEIGHTS: TrustWeights = {
     INSPECTION: 20,
     AUTHENTICATION: 25,
     APPRAISAL: 8,
+    PHYSICAL_EXISTENCE: 4,
+    IDENTITY_OF_PRESENTER: 2,
+    DOCUMENTATION: 6,
+    OWNERSHIP_CLAIM: 2,
   },
   sourceMultiplier: {
     OWNER: 1,
@@ -43,6 +47,10 @@ export const DEFAULT_WEIGHTS: TrustWeights = {
     INSPECTION: { halfLifeDays: 730, minFactor: 0.25 },
     AUTHENTICATION: { halfLifeDays: 1825, minFactor: 0.5 },
     APPRAISAL: { halfLifeDays: 365, minFactor: 0.25 },
+    PHYSICAL_EXISTENCE: { halfLifeDays: 365, minFactor: 0.25 },
+    IDENTITY_OF_PRESENTER: { halfLifeDays: 365, minFactor: 0.25 },
+    DOCUMENTATION: NO_DECAY,
+    OWNERSHIP_CLAIM: { halfLifeDays: 365, minFactor: 0.25 },
   },
   repeatDecay: 0.5,
   suspendedSourceMultiplier: 0.5,
