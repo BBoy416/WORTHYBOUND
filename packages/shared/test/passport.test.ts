@@ -172,6 +172,7 @@ describe("toPublicPassport", () => {
         sha256: hash("b"),
         mimeType: "image/jpeg",
         capturedAt: "2026-01-01T12:00:00.000Z",
+        path: "/passport/WB-7F93A281/evidence/ev-photo",
       },
     ]);
   });

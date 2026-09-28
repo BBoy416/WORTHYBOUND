@@ -1,3 +1,4 @@
+import { createStorage, type Storage } from "@worthybound/storage";
 import { z } from "zod";
 
 const configSchema = z.object({
@@ -15,6 +16,15 @@ const configSchema = z.object({
   /** Keys the HMAC of serial numbers used to stop the same item being registered twice. */
   SERIAL_FINGERPRINT_KEY: z.string().min(32, "must be at least 32 characters"),
   SOLANA_CLUSTER: z.literal("devnet", { error: "only devnet is supported" }),
+  /** S3 API endpoint of the evidence storage; omit for AWS S3. */
+  S3_ENDPOINT: z.url({ protocol: /^https?$/ }).optional(),
+  S3_REGION: z.string().min(1).default("us-east-1"),
+  S3_BUCKET_EVIDENCE_PRIVATE: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/, "expected an S3 bucket name")
+    .default("worthybound-evidence-private"),
+  S3_ACCESS_KEY_ID: z.string().min(3, "must be at least 3 characters"),
+  S3_SECRET_ACCESS_KEY: z.string().min(8, "must be at least 8 characters"),
 });
 
 export type Config = z.infer<typeof configSchema> & {
@@ -40,4 +50,14 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   }
   const authUri = `${local ? "http" : "https"}://${config.AUTH_DOMAIN}`;
   return { ...config, authUri, chainId: "solana:devnet", publicWebUrl: authUri };
+}
+
+export function createStorageFromConfig(config: Config): Storage {
+  return createStorage({
+    ...(config.S3_ENDPOINT ? { endpoint: config.S3_ENDPOINT } : {}),
+    region: config.S3_REGION,
+    accessKeyId: config.S3_ACCESS_KEY_ID,
+    secretAccessKey: config.S3_SECRET_ACCESS_KEY,
+    bucket: config.S3_BUCKET_EVIDENCE_PRIVATE,
+  });
 }

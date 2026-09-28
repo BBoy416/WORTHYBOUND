@@ -3,6 +3,7 @@ import { generateKeyPairSync, randomBytes, sign, type KeyObject } from "node:cry
 import { fileURLToPath } from "node:url";
 import { getAddressDecoder } from "@solana/addresses";
 import { createPrismaClient, type PrismaClient } from "@worthybound/database";
+import { createStorage, type Storage } from "@worthybound/storage";
 import type { FastifyInstance } from "fastify";
 import pg from "pg";
 import { buildApp, type BuildAppOptions } from "../src/app.js";
@@ -10,6 +11,27 @@ import type { SignInInput } from "../src/auth/siws.js";
 import { loadConfig, type Config } from "../src/config.js";
 
 export const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+const { S3_ENDPOINT, S3_REGION, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY } = process.env;
+export const TEST_STORAGE_AVAILABLE = Boolean(
+  S3_ENDPOINT && S3_ACCESS_KEY_ID && S3_SECRET_ACCESS_KEY,
+);
+
+if (!TEST_STORAGE_AVAILABLE && process.env.CI) {
+  throw new Error("S3_ENDPOINT, S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY must be set in CI");
+}
+
+/** A throwaway bucket, set up like the real one. Call `deleteBucket()` when done. */
+export async function createTestStorage(): Promise<Storage> {
+  const storage = createStorage({
+    endpoint: S3_ENDPOINT as string,
+    region: S3_REGION ?? "us-east-1",
+    accessKeyId: S3_ACCESS_KEY_ID as string,
+    secretAccessKey: S3_SECRET_ACCESS_KEY as string,
+    bucket: `wb-test-${randomBytes(6).toString("hex")}`,
+  });
+  await storage.setup({ stagingPrefix: "staging/", corsOrigins: ["https://worthybound.test"] });
+  return storage;
+}
 
 if (!TEST_DATABASE_URL && process.env.CI) {
   throw new Error("TEST_DATABASE_URL must be set in CI");
@@ -63,6 +85,8 @@ export const testConfig = (overrides: Record<string, string> = {}): Config =>
     SESSION_SECRET: "test-session-secret-at-least-32-characters",
     SERIAL_FINGERPRINT_KEY: "test-serial-fingerprint-key-at-least-32-chars",
     SOLANA_CLUSTER: "devnet",
+    S3_ACCESS_KEY_ID: "unused",
+    S3_SECRET_ACCESS_KEY: "unused-secret",
     ...overrides,
   });
 
@@ -109,8 +133,17 @@ export function testApp(
       auth: { max: 1000, timeWindowMs: 60_000 },
       register: { max: 1000, timeWindowMs: 60_000 },
       write: { max: 1000, timeWindowMs: 60_000 },
+      upload: { max: 1000, timeWindowMs: 60_000 },
       public: { max: 1000, timeWindowMs: 60_000 },
     },
+    // Tests that do not touch evidence never reach this address.
+    storage: createStorage({
+      endpoint: "http://127.0.0.1:9",
+      region: "us-east-1",
+      accessKeyId: "unused",
+      secretAccessKey: "unused-secret",
+      bucket: "unused",
+    }),
     ...options,
   });
 }

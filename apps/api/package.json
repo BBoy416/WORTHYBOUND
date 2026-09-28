@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "start": "node dist/server.js",
-    "admin:grant": "node dist/cli/admin-grant.js"
+    "admin:grant": "node dist/cli/admin-grant.js",
+    "storage:setup": "node dist/cli/storage-setup.js"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",
@@ -20,9 +21,12 @@
     "@solana/wallet-standard-util": "^1.1.4",
     "@worthybound/database": "workspace:*",
     "@worthybound/shared": "workspace:*",
+    "@worthybound/storage": "workspace:*",
     "@worthybound/validation": "workspace:*",
     "fastify": "^5.12.5",
     "fastify-type-provider-zod": "^7.0.0",
+    "file-type": "22.1.1",
+    "sharp": "^0.35.5",
     "zod": "^4.6.5"
   },
   "devDependencies": {

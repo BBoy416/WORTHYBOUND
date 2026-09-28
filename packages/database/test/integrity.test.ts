@@ -6,6 +6,7 @@ import {
   type AssetCategory,
   DatabaseErrorCode,
   isDatabaseError,
+  type Prisma,
   type TemplateVersionStatus,
   type VerifierStatus,
 } from "../src/index.js";
@@ -963,6 +964,172 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
       await expectDbError(
         db.prisma.idempotencyKey.create({ data: { ...data, key: "bad key!" } }),
         CHECK_VIOLATION,
+      );
+    });
+  });
+
+  // ─── Evidence Vault ─────────────────────────────────────────────────────────
+
+  describe("evidence vault", () => {
+    const evidence = async (fields: Partial<Prisma.EvidenceUncheckedCreateInput> = {}) => {
+      const a = fields.assetId ? null : await asset();
+      return db.prisma.evidence.create({
+        data: {
+          assetId: a?.id as string,
+          uploaderId: a?.ownerId as string,
+          type: "PHOTO",
+          storageKey: `evidence/${randomUUID()}`,
+          sha256: randomHex64(),
+          mimeType: "image/jpeg",
+          sizeBytes: 10,
+          ...fields,
+        },
+      });
+    };
+
+    const upload = async (fields: Partial<Prisma.EvidenceUploadUncheckedCreateInput> = {}) => {
+      const a = await asset();
+      return db.prisma.evidenceUpload.create({
+        data: {
+          assetId: a.id,
+          uploaderId: a.ownerId,
+          type: "PHOTO",
+          mimeType: "image/jpeg",
+          sizeBytes: 10,
+          sha256: randomHex64(),
+          visibility: "PRIVATE",
+          stagingKey: `staging/${randomUUID()}`,
+          expiresAt: new Date(Date.now() + 60_000),
+          ...fields,
+        },
+      });
+    };
+
+    it.each([
+      ["an unsupported file type", { mimeType: "text/html" }],
+      ["an image over 25 MB", { sizeBytes: 25 * 1024 * 1024 + 1 }],
+      ["a video over 500 MB", { mimeType: "video/mp4", sizeBytes: 500 * 1024 * 1024 + 1 }],
+      ["a public photo without a public copy", { visibility: "PUBLIC" as const }],
+      [
+        "a public document",
+        {
+          type: "RECEIPT" as const,
+          visibility: "PUBLIC" as const,
+          publicStorageKey: `public/${randomUUID()}`,
+        },
+      ],
+      [
+        "a public HEIC photo",
+        {
+          mimeType: "image/heic",
+          visibility: "PUBLIC" as const,
+          publicStorageKey: `public/${randomUUID()}`,
+        },
+      ],
+      ["a public copy while private", { publicStorageKey: `public/${randomUUID()}` }],
+      [
+        "a public URL as public copy",
+        { visibility: "PUBLIC" as const, publicStorageKey: "https://cdn.example/a.jpg" },
+      ],
+    ])("rejects %s", async (_name, fields) => {
+      await expectDbError(evidence(fields), CHECK_VIOLATION);
+    });
+
+    it("accepts a 500 MB video and a public photo with its public copy", async () => {
+      await expect(
+        evidence({ type: "VIDEO", mimeType: "video/mp4", sizeBytes: 500 * 1024 * 1024 }),
+      ).resolves.toBeDefined();
+      await expect(
+        evidence({ visibility: "PUBLIC", publicStorageKey: `public/${randomUUID()}` }),
+      ).resolves.toBeDefined();
+    });
+
+    it("stores each file only once per asset", async () => {
+      const first = await evidence();
+      await expect(
+        evidence({ assetId: first.assetId, uploaderId: first.uploaderId, sha256: first.sha256 }),
+      ).rejects.toMatchObject({ code: "P2002" });
+    });
+
+    it.each([
+      ["file hash", { sha256: randomHex64() }],
+      ["storage key", { storageKey: `evidence/${randomUUID()}` }],
+      ["file type", { mimeType: "image/png" }],
+      ["size", { sizeBytes: 11 }],
+      ["evidence type", { type: "RECEIPT" as const }],
+      ["description", { description: "changed" }],
+      ["duplicate flag", { duplicateOfId: null }],
+    ])("never changes the %s", async (_name, change) => {
+      const original = await evidence();
+      const e = await evidence({ duplicateOfId: original.id });
+      await expectDbError(
+        db.prisma.evidence.update({ where: { id: e.id }, data: change }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+    });
+
+    it("lets visibility change, never deletes and makes the review decision final", async () => {
+      const e = await evidence();
+      await db.prisma.evidence.update({
+        where: { id: e.id },
+        data: { visibility: "PUBLIC", publicStorageKey: `public/${randomUUID()}` },
+      });
+      await db.prisma.evidence.update({
+        where: { id: e.id },
+        data: { visibility: "PRIVATE", publicStorageKey: null },
+      });
+      await expectDbError(
+        db.prisma.evidence.delete({ where: { id: e.id } }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      const reviewer = await user();
+      await db.prisma.evidence.update({
+        where: { id: e.id },
+        data: { reviewStatus: "ACCEPTED", reviewedById: reviewer.id, reviewedAt: new Date() },
+      });
+      await expectDbError(
+        db.prisma.evidence.update({ where: { id: e.id }, data: { reviewStatus: "REJECTED" } }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+    });
+
+    it("does not let evidence be marked a duplicate of itself", async () => {
+      const id = randomUUID();
+      await expectDbError(evidence({ id, duplicateOfId: id }), CHECK_VIOLATION);
+    });
+
+    it.each([
+      ["a malformed hash", { sha256: "abc" }],
+      ["a public URL as staging key", { stagingKey: "https://bucket.example/x" }],
+      [
+        "a completed upload without evidence",
+        { status: "COMPLETED" as const, completedAt: new Date() },
+      ],
+      ["a failed upload without a reason", { status: "FAILED" as const, completedAt: new Date() }],
+    ])("rejects an upload with %s", async (_name, fields) => {
+      await expectDbError(upload(fields), CHECK_VIOLATION);
+    });
+
+    it("completes or fails an upload once and never changes the request", async () => {
+      const u = await upload();
+      await expectDbError(
+        db.prisma.evidenceUpload.update({ where: { id: u.id }, data: { sizeBytes: 99 } }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      await db.prisma.evidenceUpload.update({
+        where: { id: u.id },
+        data: { status: "FAILED", failureReason: "hash_mismatch", completedAt: new Date() },
+      });
+      await expectDbError(
+        db.prisma.evidenceUpload.update({
+          where: { id: u.id },
+          data: { status: "PENDING", failureReason: null, completedAt: null },
+        }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      await expectDbError(
+        db.prisma.evidenceUpload.delete({ where: { id: u.id } }),
+        DatabaseErrorCode.IMMUTABLE,
       );
     });
   });

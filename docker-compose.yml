@@ -19,10 +19,10 @@ services:
       timeout: 5s
       retries: 10
 
-  # S3-compatible object storage for evidence files. Upstream MinIO community
-  # distribution ended in 2025; this is the community-maintained fork (see ADR 0001).
+  # S3-compatible object storage for evidence files: Silo, the community-maintained MinIO fork
+  # formerly published as pgsty/minio (see ADR 0001 and ADR 0010).
   object-storage:
-    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    image: pgsty/silo:RELEASE.2026-09-16T00-00-00Z
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
