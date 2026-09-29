@@ -1,6 +1,6 @@
 # ADR 0013: Automated checks and guided capture
 
-- Status: Proposed
+- Status: Proposed (amends ADR 0003)
 - Date: 2026-09-29
 
 ## Context
@@ -59,9 +59,12 @@ supersedes it. This keeps every score reproducible (ADR 0003).
 | Level                                           | Score cap                                 |
 | ----------------------------------------------- | ----------------------------------------- |
 | Self-documented                                 | 35 (45 with KYC, unchanged)               |
-| Passed automated checks (guided capture passed) | 55                                        |
-| Professional inspection                         | above 55 (existing tiers of ADR 0003)     |
+| Passed automated checks (guided capture passed) | 65                                        |
+| Professional inspection                         | above 65 (existing tiers of ADR 0003)     |
 | Two independent professionals                   | above 90 for high-risk categories (as is) |
+
+This amends the ADR 0003 tier "no verifier inspection ≤ 60": without an inspection the cap is 60,
+or 65 once the automated checks have passed. The other tiers are unchanged.
 
 Failed checks deduct: a forged document or reused photo lowers the score and blocks template
 evaluation until a verifier reviews it. An automated check never sets `VERIFIED` and never
