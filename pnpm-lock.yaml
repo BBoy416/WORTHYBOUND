@@ -226,6 +226,9 @@ importers:
       '@worthybound/storage':
         specifier: workspace:*
         version: link:../../packages/storage
+      '@worthybound/trust-engine':
+        specifier: workspace:*
+        version: link:../../packages/trust-engine
       '@worthybound/validation':
         specifier: workspace:*
         version: link:../../packages/validation

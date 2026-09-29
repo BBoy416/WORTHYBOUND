@@ -854,6 +854,235 @@ describe.skipIf(!TEST_DATABASE_URL)("templates with a single administrator", () 
   });
 });
 
+describe.skipIf(!TEST_DATABASE_URL)("trust score and verified status", () => {
+  let db: TestDatabase;
+  let app: FastifyInstance;
+  let clock: Clock;
+  let adminA: Person;
+  let adminB: Person;
+  const f = fixtures(() => ({ app, db, clock }));
+  const { call, expectOk, errorCode } = f;
+  const noEvidence = { ...f.requirements, requiredEvidence: [] };
+
+  beforeAll(async () => {
+    db = await createTestDatabase();
+    clock = testClock();
+    app = await testApp(db.prisma, { now: clock.now });
+    adminA = await f.newAdmin();
+    adminB = await f.newAdmin();
+  });
+
+  afterAll(async () => {
+    await app?.close();
+    await db?.drop();
+  });
+
+  const trust = (owner: Person, wbId: string) =>
+    expectOk(call(owner, "GET", `/assets/${wbId}/trust`));
+  const passport = async (wbId: string) =>
+    (await expectOk(call(null, "GET", `/passport/${wbId}`))).passport;
+  const codes = (items: { code: string }[]) => items.map((i) => i.code);
+
+  /** An asset with a request for a template without required evidence, claimed by a verifier. */
+  const assigned = async () => {
+    const { versionId } = await f.template(adminA, adminB, "LUXURY_WATCH", noEvidence);
+    const owner = await f.person();
+    const wbId = await f.asset(owner);
+    const request = await f.openRequest(owner, wbId, versionId);
+    const v = await f.verifier(adminA);
+    await expectOk(f.claim(v, request.id));
+    return { owner, wbId, versionId, requestId: request.id as string, v };
+  };
+
+  /** Confirms both required claims; the asset becomes VERIFIED. */
+  const verified = async () => {
+    const ctx = await assigned();
+    await expectOk(f.attest(ctx.v, ctx.requestId), 201);
+    await expectOk(
+      f.attest(ctx.v, ctx.requestId, { claimType: "CONDITION", conditionGrade: "VERY_GOOD" }),
+      201,
+    );
+    return ctx;
+  };
+
+  it("scores a published asset without evidence and explains the score to its owner only", async () => {
+    const owner = await f.person();
+    const wbId = await f.asset(owner);
+    const score = await trust(owner, wbId);
+    expect(score).toMatchObject({
+      score: 7,
+      verificationLevel: "UNVERIFIED",
+      capsApplied: [],
+      engineVersion: "1.1.0",
+      weightsVersion: "weights-2026.2",
+      disclaimer: expect.stringContaining("does not guarantee authenticity"),
+    });
+    expect(codes(score.factors)).toEqual(["OWNER_WALLET_VERIFIED", "CUSTODY_CONTINUITY"]);
+    expect(score.inputsHash).toMatch(/^[0-9a-f]{64}$/);
+    expect((await expectOk(call(owner, "GET", `/assets/${wbId}`))).trustScore).toBe(7);
+    expect((await passport(wbId)).trust.score).toBe(7);
+    expect(await errorCode(call(await f.person(), "GET", `/assets/${wbId}/trust`), 404)).toBe(
+      "not_found",
+    );
+    expect((await call(null, "GET", `/assets/${wbId}/trust`)).statusCode).toBe(401);
+  });
+
+  it("has no score before the first snapshot", async () => {
+    const owner = await f.person();
+    const { wbId } = await expectOk(
+      call(owner, "POST", "/assets", { category: "LUXURY_WATCH", brand: "Rolex" }),
+      201,
+    );
+    const res = await call(owner, "GET", `/assets/${wbId}/trust`);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toBeNull();
+  });
+
+  it("becomes VERIFIED by the system once every required claim is confirmed", async () => {
+    const { owner, wbId, requestId, v } = await assigned();
+    await expectOk(f.attest(v, requestId), 201);
+    let asset = await expectOk(call(owner, "GET", `/assets/${wbId}`));
+    expect(asset).toMatchObject({
+      status: "ACTIVE",
+      verificationLevel: "AUTHENTICATED",
+      trustScore: 57,
+    });
+
+    await expectOk(
+      f.attest(v, requestId, { claimType: "CONDITION", conditionGrade: "VERY_GOOD" }),
+      201,
+    );
+    asset = await expectOk(call(owner, "GET", `/assets/${wbId}`));
+    expect(asset).toMatchObject({ status: "VERIFIED", trustScore: 65 });
+    const score = await trust(owner, wbId);
+    expect(codes(score.factors)).toEqual(
+      expect.arrayContaining(["PROOF_AUTHENTICATION", "PROOF_CONDITION"]),
+    );
+    const p = await passport(wbId);
+    expect(p).toMatchObject({
+      status: "VERIFIED",
+      verificationLevel: "AUTHENTICATED",
+      trust: { score: 65 },
+    });
+
+    const { id } = await db.prisma.asset.findUniqueOrThrow({ where: { wbId } });
+    const event = await db.prisma.assetStatusEvent.findFirstOrThrow({
+      where: { assetId: id, toStatus: "VERIFIED" },
+    });
+    expect(event).toMatchObject({
+      fromStatus: "ACTIVE",
+      actorId: null,
+      reason: "template_satisfied",
+    });
+    expect(p.provenance.map((e: { type: string }) => e.type)).toContain("STATUS_CHANGED");
+    const [row] = await db.prisma.$queryRaw<{ broken: number | null }[]>`
+      SELECT wb_verify_provenance_chain(${id}::uuid) AS broken`;
+    expect(row?.broken).toBeNull();
+  });
+
+  it("returns to ACTIVE when a required attestation is revoked", async () => {
+    const { owner, wbId, v } = await verified();
+    const [authentication] = (await passport(wbId)).attestations.filter(
+      (a: { claimType: string }) => a.claimType === "AUTHENTICATION",
+    );
+    await expectOk(
+      call(v, "POST", `/attestations/${authentication.id}/revoke`, { reason: "Recorded in error" }),
+    );
+    expect(await expectOk(call(owner, "GET", `/assets/${wbId}`))).toMatchObject({
+      status: "ACTIVE",
+    });
+    const score = await trust(owner, wbId);
+    expect(codes(score.deductions)).toContain("REVOKED_PROOFS");
+    expect(score.excludedProofs).toContainEqual({
+      proofId: `attestation:${authentication.id}`,
+      reason: "REVOKED",
+    });
+  });
+
+  it("follows the verifier's status: suspension removes VERIFIED, reinstatement restores it", async () => {
+    const { owner, wbId, v } = await verified();
+    await expectOk(
+      call(adminA, "POST", `/review/verifiers/${v.verifierId}/status`, {
+        status: "SUSPENDED",
+        reason: "Under investigation",
+      }),
+    );
+    let asset = await expectOk(call(owner, "GET", `/assets/${wbId}`));
+    expect(asset.status).toBe("ACTIVE");
+    expect(asset.trustScore).toBeLessThan(65);
+    expect(codes((await trust(owner, wbId)).deductions)).toContain("SUSPENDED_SOURCE");
+
+    await expectOk(
+      call(adminA, "POST", `/review/verifiers/${v.verifierId}/status`, { status: "APPROVED" }),
+    );
+    asset = await expectOk(call(owner, "GET", `/assets/${wbId}`));
+    expect(asset).toMatchObject({ status: "VERIFIED", trustScore: 65 });
+  });
+
+  it("adds the owner's verified identity (KYC) to the score", async () => {
+    const owner = await f.person();
+    const wbId = await f.asset(owner);
+    await f.kyc(owner);
+    const score = await trust(owner, wbId);
+    expect(score.score).toBe(15);
+    expect(codes(score.factors)).toContain("OWNER_IDENTITY_VERIFIED");
+  });
+
+  it("caps lost assets and needs new attestations after recovery", async () => {
+    const { owner, wbId, versionId } = await verified();
+    await expectOk(call(owner, "POST", `/assets/${wbId}/status`, { toStatus: "REPORTED_LOST" }));
+    const lost = await trust(owner, wbId);
+    expect(lost.score).toBe(25);
+    expect(lost.capsApplied).toContainEqual({ code: "STATUS_REPORTED_LOST", limit: 25 });
+
+    clock.advance(1000);
+    await expectOk(
+      call(owner, "POST", `/assets/${wbId}/status`, { toStatus: "REVERIFICATION_REQUIRED" }),
+    );
+    expect((await expectOk(call(owner, "GET", `/assets/${wbId}`))).status).toBe(
+      "REVERIFICATION_REQUIRED",
+    );
+
+    clock.advance(1000);
+    const request = await f.openRequest(owner, wbId, versionId);
+    const second = await f.verifier(adminA);
+    await expectOk(f.claim(second, request.id));
+    await expectOk(f.attest(second, request.id), 201);
+    expect((await expectOk(call(owner, "GET", `/assets/${wbId}`))).status).toBe(
+      "REVERIFICATION_REQUIRED",
+    );
+    await expectOk(
+      f.attest(second, request.id, { claimType: "CONDITION", conditionGrade: "GOOD" }),
+      201,
+    );
+    expect((await expectOk(call(owner, "GET", `/assets/${wbId}`))).status).toBe("VERIFIED");
+  });
+
+  it("re-evaluates against a newly published template version", async () => {
+    const { owner, wbId, versionId } = await verified();
+    const { templateId } = await db.prisma.verificationTemplateVersion.findUniqueOrThrow({
+      where: { id: versionId },
+    });
+    const next = await expectOk(
+      call(adminA, "POST", `/admin/templates/${templateId}/versions`, {
+        ...noEvidence,
+        requiredClaims: ["AUTHENTICATION", "CONDITION", "PROVENANCE"],
+      }),
+      201,
+    );
+    await expectOk(
+      call(adminB, "POST", `/admin/template-versions/${next.id}/status`, { status: "PUBLISHED" }),
+    );
+    expect((await expectOk(call(owner, "GET", `/assets/${wbId}`))).status).toBe("ACTIVE");
+
+    const request = await f.openRequest(owner, wbId, next.id);
+    const second = await f.verifier(adminA);
+    await expectOk(f.claim(second, request.id));
+    await expectOk(f.attest(second, request.id, { claimType: "PROVENANCE" }), 201);
+    expect((await expectOk(call(owner, "GET", `/assets/${wbId}`))).status).toBe("VERIFIED");
+  });
+});
+
 describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("verifier evidence", () => {
   let db: TestDatabase;
   let storage: Storage;
@@ -1033,6 +1262,44 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("verifier evidenc
         403,
       ),
     ).toBe("self_review");
+  });
+
+  it("counts the owner's evidence in the Trust Score, but not the verifier's or rejected files", async () => {
+    const { owner, wbId, requestId, v } = await assigned();
+    const factorIds = async () =>
+      (await expectOk(call(owner, "GET", `/assets/${wbId}/trust`))).factors
+        .map((factor: { proofId?: string }) => factor.proofId)
+        .filter(Boolean);
+
+    const ownerUpload = await uploadAs(owner, `/assets/${wbId}/evidence/uploads`, pdf());
+    const ownerEvidence = await expectOk(ownerUpload.complete(), 201);
+    expect(await factorIds()).toEqual([`evidence:${ownerEvidence.id}`]);
+
+    const verifierUpload = await uploadAs(
+      v,
+      `/verifier/requests/${requestId}/evidence/uploads`,
+      pdf(),
+    );
+    await expectOk(verifierUpload.complete(), 201);
+    expect(await factorIds()).toEqual([`evidence:${ownerEvidence.id}`]);
+
+    await expectOk(
+      call(v, "POST", `/verifier/requests/${requestId}/evidence/${ownerEvidence.id}/review`, {
+        status: "REJECTED",
+        reason: "Not this watch",
+      }),
+    );
+    expect(await factorIds()).toEqual([]);
+    const score = await expectOk(call(owner, "GET", `/assets/${wbId}/trust`));
+    expect(score.excludedProofs).toContainEqual({
+      proofId: `evidence:${ownerEvidence.id}`,
+      reason: "REJECTED",
+    });
+    expect(score.deductions).toContainEqual({
+      code: "MISSING_REQUIRED_EVIDENCE",
+      points: 3,
+      count: 1,
+    });
   });
 
   it("links the evidence an attestation relies on, with each file's hash", async () => {
