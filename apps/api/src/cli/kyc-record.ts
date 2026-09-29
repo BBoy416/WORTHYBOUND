@@ -1,6 +1,7 @@
 import { isAddress } from "@solana/addresses";
 import { createPrismaClient, type IdentityStatus } from "@worthybound/database";
 import { writeAudit } from "../audit.js";
+import { recordTrustForAssets } from "../trust/record.js";
 import { releaseVerifierRequests } from "../verification/requests.js";
 import { loadLocalEnv } from "../env.js";
 
@@ -67,6 +68,15 @@ export async function recordKyc(
         await releaseVerifierRequests(tx, verifier.id, "verifier_identity_not_verified", at);
       }
     }
+    const owned = await tx.asset.findMany({
+      where: { ownerId: user.id, NOT: { status: "REVOKED", publishedAt: null } },
+      select: { id: true },
+    });
+    await recordTrustForAssets(
+      tx,
+      owned.map((a) => a.id),
+      at,
+    );
     return { fromStatus: user.identityStatus, status: input.status };
   });
 }

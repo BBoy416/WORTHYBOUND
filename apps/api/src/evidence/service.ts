@@ -19,6 +19,7 @@ import type {
 import { writeAudit } from "../audit.js";
 import type { Actor } from "../assets/service.js";
 import { ApiError, fromDomainError, notFound } from "../errors.js";
+import { recordTrust } from "../trust/record.js";
 import { findAssignedRequest, lockAssignedRequest } from "../verification/requests.js";
 import { inspectFile, publicPhotoCopy } from "./inspect.js";
 
@@ -372,6 +373,7 @@ export function createEvidenceService({ prisma, storage, now, log }: EvidenceSer
           },
           actor.fp,
         );
+        await recordTrust(tx, asset.id, at);
         return { evidence: updated, wbId: asset.wbId };
       });
     },
@@ -570,6 +572,7 @@ export function createEvidenceService({ prisma, storage, now, log }: EvidenceSer
               actor.fp,
             );
           }
+          await recordTrust(tx, asset.id, at);
           return { evidence, wbId: asset.wbId };
         });
         if (!result) {

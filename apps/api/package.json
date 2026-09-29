@@ -23,6 +23,7 @@
     "@worthybound/database": "workspace:*",
     "@worthybound/shared": "workspace:*",
     "@worthybound/storage": "workspace:*",
+    "@worthybound/trust-engine": "workspace:*",
     "@worthybound/validation": "workspace:*",
     "fastify": "^5.12.5",
     "fastify-type-provider-zod": "^7.0.0",

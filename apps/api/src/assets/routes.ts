@@ -14,7 +14,7 @@ import { fingerprint } from "../audit.js";
 import type { AuthContext } from "../auth/guard.js";
 import type { AppContext, RateLimit } from "../context.js";
 import { type Actor, createAssetService } from "./service.js";
-import { ownerAssetSchema, toOwnerAsset } from "./view.js";
+import { ownerAssetSchema, ownerTrustSchema, toOwnerAsset, toOwnerTrust } from "./view.js";
 
 const errorSchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
 const errors = { 401: errorSchema, 404: errorSchema, 409: errorSchema, 422: errorSchema };
@@ -98,6 +98,18 @@ export const assetRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx) =
       schema: { params: assetParamsSchema, response: { 200: ownerAssetSchema, ...errors } },
     },
     async (request) => view(await service.get(request.params.wbId, actor(request))),
+  );
+
+  app.get(
+    "/assets/:wbId/trust",
+    {
+      preHandler: authenticate,
+      schema: {
+        params: assetParamsSchema,
+        response: { 200: ownerTrustSchema.nullable(), ...errors },
+      },
+    },
+    async (request) => toOwnerTrust(await service.trust(request.params.wbId, actor(request))),
   );
 
   app.patch(

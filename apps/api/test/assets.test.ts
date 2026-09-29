@@ -548,7 +548,12 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
         description: "Stainless steel diver's watch",
         status: "ACTIVE",
         verificationLevel: "UNVERIFIED",
-        trust: null,
+        trust: {
+          score: 7,
+          engineVersion: "1.1.0",
+          weightsVersion: "weights-2026.2",
+          disclaimer: expect.stringContaining("does not guarantee authenticity"),
+        },
         custody: { transferCount: 0 },
         attestations: [],
         publicEvidence: [],

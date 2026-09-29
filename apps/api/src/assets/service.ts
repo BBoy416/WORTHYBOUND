@@ -24,6 +24,7 @@ import type {
 } from "@worthybound/validation";
 import { type RequestFingerprint, writeAudit } from "../audit.js";
 import { ApiError, fromDomainError, notFound } from "../errors.js";
+import { recordTrust } from "../trust/record.js";
 import { closeRequestsAsSystem } from "../verification/requests.js";
 import { serialFingerprint } from "./fingerprint.js";
 
@@ -194,6 +195,15 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
         throw notFound("Asset");
       }
       return asset;
+    },
+
+    /** The latest Trust Score snapshot, or null before the first one. */
+    async trust(wbId: string, actor: Actor) {
+      const asset = await this.get(wbId, actor);
+      return prisma.trustScoreSnapshot.findFirst({
+        where: { assetId: asset.id },
+        orderBy: [{ computedAt: "desc" }, { id: "desc" }],
+      });
     },
 
     /** Newest first. `cursor` is the last WB ID of the previous page. */
@@ -423,7 +433,7 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
           throw fromDomainError(error);
         }
         const at = now();
-        const updated = await tx.asset.update({
+        await tx.asset.update({
           where: { id: asset.id },
           data: { status: "ACTIVE", publishedAt: at, updatedAt: at },
         });
@@ -438,7 +448,8 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
           },
           actor.fp,
         );
-        return updated;
+        await recordTrust(tx, asset.id, at);
+        return tx.asset.findUniqueOrThrow({ where: { id: asset.id } });
       });
     },
 
@@ -460,7 +471,7 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
           throw fromDomainError(error);
         }
         const at = now();
-        const updated = await tx.asset.update({
+        await tx.asset.update({
           where: { id: asset.id },
           data: { status: input.toStatus, updatedAt: at },
         });
@@ -485,7 +496,8 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
           },
           actor.fp,
         );
-        return updated;
+        await recordTrust(tx, asset.id, at);
+        return tx.asset.findUniqueOrThrow({ where: { id: asset.id } });
       });
     },
 

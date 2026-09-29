@@ -33,7 +33,7 @@ export async function loadPassportSource(
     await Promise.all([
       prisma.trustScoreSnapshot.findFirst({
         where: { assetId: id },
-        orderBy: { computedAt: "desc" },
+        orderBy: [{ computedAt: "desc" }, { id: "desc" }],
         select: { score: true, computedAt: true, engineVersion: true, weightsVersion: true },
       }),
       prisma.ownership.findFirst({
