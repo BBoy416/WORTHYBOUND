@@ -12,10 +12,10 @@ import {
   fixEncoderSize,
   getBytesDecoder,
   getBytesEncoder,
-  getI64Decoder,
-  getI64Encoder,
   getStructDecoder,
   getStructEncoder,
+  getU64Decoder,
+  getU64Encoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
   SolanaError,
   transformEncoder,
@@ -82,12 +82,12 @@ export type UpdateStatusInstruction<
 export type UpdateStatusInstructionData = {
   discriminator: ReadonlyUint8Array;
   status: AssetStatus;
-  changedAt: bigint;
+  statusSeq: bigint;
 };
 
 export type UpdateStatusInstructionDataArgs = {
   status: AssetStatusArgs;
-  changedAt: number | bigint;
+  statusSeq: number | bigint;
 };
 
 export function getUpdateStatusInstructionDataEncoder(): FixedSizeEncoder<UpdateStatusInstructionDataArgs> {
@@ -95,7 +95,7 @@ export function getUpdateStatusInstructionDataEncoder(): FixedSizeEncoder<Update
     getStructEncoder([
       ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
       ["status", getAssetStatusEncoder()],
-      ["changedAt", getI64Encoder()],
+      ["statusSeq", getU64Encoder()],
     ]),
     (value) => ({ ...value, discriminator: UPDATE_STATUS_DISCRIMINATOR }),
   );
@@ -105,7 +105,7 @@ export function getUpdateStatusInstructionDataDecoder(): FixedSizeDecoder<Update
   return getStructDecoder([
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
     ["status", getAssetStatusDecoder()],
-    ["changedAt", getI64Decoder()],
+    ["statusSeq", getU64Decoder()],
   ]);
 }
 
@@ -128,7 +128,7 @@ export type UpdateStatusAsyncInput<
   config?: TAccountConfig;
   assetRecord: TAccountAssetRecord;
   status: UpdateStatusInstructionDataArgs["status"];
-  changedAt: UpdateStatusInstructionDataArgs["changedAt"];
+  statusSeq: UpdateStatusInstructionDataArgs["statusSeq"];
 };
 
 export async function getUpdateStatusInstructionAsync<
@@ -203,7 +203,7 @@ export type UpdateStatusInput<
   config: TAccountConfig;
   assetRecord: TAccountAssetRecord;
   status: UpdateStatusInstructionDataArgs["status"];
-  changedAt: UpdateStatusInstructionDataArgs["changedAt"];
+  statusSeq: UpdateStatusInstructionDataArgs["statusSeq"];
 };
 
 export function getUpdateStatusInstruction<

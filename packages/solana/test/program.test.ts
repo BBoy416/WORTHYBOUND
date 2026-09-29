@@ -98,7 +98,7 @@ describe.skipIf(!programBuilt)("worthybound program", () => {
         wbId,
         uri: opts.uri ?? URI,
         status: opts.status ?? AssetStatus.Active,
-        statusChangedAt: 1_000n,
+        statusSeq: 1n,
       }),
     ]);
   }
@@ -121,7 +121,7 @@ describe.skipIf(!programBuilt)("worthybound program", () => {
   async function setStatus(
     wbId: string,
     status: AssetStatus,
-    changedAt: bigint,
+    statusSeq: bigint,
     signer = h.oracle,
   ) {
     return send(h.svm, signer, [
@@ -129,7 +129,7 @@ describe.skipIf(!programBuilt)("worthybound program", () => {
         oracle: signer,
         assetRecord: await recordAddress(wbId),
         status,
-        changedAt,
+        statusSeq,
       }),
     ]);
   }
@@ -141,7 +141,7 @@ describe.skipIf(!programBuilt)("worthybound program", () => {
       buyer?: KeyPairSigner;
       oracle?: KeyPairSigner;
       statusAfter?: AssetStatus;
-      changedAt?: bigint;
+      statusSeq?: bigint;
       coreAsset?: Address;
     } = {},
   ) {
@@ -154,7 +154,7 @@ describe.skipIf(!programBuilt)("worthybound program", () => {
         assetRecord: await recordAddress(wbId),
         coreAsset: opts.coreAsset ?? (await coreAddress(wbId)),
         statusAfter: opts.statusAfter ?? AssetStatus.Active,
-        changedAt: opts.changedAt ?? 3_000n,
+        statusSeq: opts.statusSeq ?? 3n,
       }),
     ]);
   }
@@ -208,15 +208,13 @@ describe.skipIf(!programBuilt)("worthybound program", () => {
 
     it("pausing stops registrations, updates and transfers", async () => {
       expect((await register("WB-00000002")).ok).toBe(true);
-      expect((await setStatus("WB-00000002", AssetStatus.TransferPending, 2_000n)).ok).toBe(true);
+      expect((await setStatus("WB-00000002", AssetStatus.TransferPending, 2n)).ok).toBe(true);
       const pause = await send(h.svm, h.admin, [
         await getSetPausedInstructionAsync({ admin: h.admin, paused: true }),
       ]);
       expect(pause.ok).toBe(true);
       expect(anchorError(await register("WB-00000003"))).toBe("Paused");
-      expect(anchorError(await setStatus("WB-00000002", AssetStatus.Active, 2_500n))).toBe(
-        "Paused",
-      );
+      expect(anchorError(await setStatus("WB-00000002", AssetStatus.Active, 3n))).toBe("Paused");
       expect(anchorError(await transfer("WB-00000002"))).toBe("Paused");
       const unpause = await send(h.svm, h.admin, [
         await getSetPausedInstructionAsync({ admin: h.admin, paused: false }),
@@ -238,7 +236,7 @@ describe.skipIf(!programBuilt)("worthybound program", () => {
       expect(data.owner).toBe(h.owner.address);
       expect(data.coreAsset).toBe(await coreAddress("WB-7F93A281"));
       expect(data.status).toBe(AssetStatus.Verified);
-      expect(data.statusChangedAt).toBe(1_000n);
+      expect(data.statusSeq).toBe(1n);
       expect(data.trustScore).toBe(0);
       expect(data.verificationLevel).toBe(VerificationLevel.Unverified);
       expect(data.transferCount).toBe(0);
@@ -370,33 +368,31 @@ describe.skipIf(!programBuilt)("worthybound program", () => {
     });
 
     it("mirrors newer status changes from the oracle", async () => {
-      expect((await setStatus(WB, AssetStatus.ReportedStolen, 2_000n)).ok).toBe(true);
+      expect((await setStatus(WB, AssetStatus.ReportedStolen, 2n)).ok).toBe(true);
       const data = await record(WB);
       expect(data.status).toBe(AssetStatus.ReportedStolen);
-      expect(data.statusChangedAt).toBe(2_000n);
+      expect(data.statusSeq).toBe(2n);
     });
 
     it("is limited to the oracle", async () => {
-      expect(anchorError(await setStatus(WB, AssetStatus.Revoked, 2_000n, h.owner))).toBe(
-        "NotOracle",
-      );
+      expect(anchorError(await setStatus(WB, AssetStatus.Revoked, 2n, h.owner))).toBe("NotOracle");
     });
 
     it("rejects older or repeated updates", async () => {
-      expect((await setStatus(WB, AssetStatus.Verified, 2_000n)).ok).toBe(true);
-      expect(anchorError(await setStatus(WB, AssetStatus.Active, 2_000n))).toBe("StaleUpdate");
-      expect(anchorError(await setStatus(WB, AssetStatus.Active, 1_500n))).toBe("StaleUpdate");
+      expect((await setStatus(WB, AssetStatus.Verified, 2n)).ok).toBe(true);
+      expect(anchorError(await setStatus(WB, AssetStatus.Active, 2n))).toBe("StaleUpdate");
+      expect(anchorError(await setStatus(WB, AssetStatus.Active, 1n))).toBe("StaleUpdate");
       expect((await record(WB)).status).toBe(AssetStatus.Verified);
     });
 
     it("never returns to DRAFT or TOKENIZED", async () => {
-      expect(anchorError(await setStatus(WB, AssetStatus.Draft, 2_000n))).toBe("InvalidStatus");
-      expect(anchorError(await setStatus(WB, AssetStatus.Tokenized, 2_000n))).toBe("InvalidStatus");
+      expect(anchorError(await setStatus(WB, AssetStatus.Draft, 2n))).toBe("InvalidStatus");
+      expect(anchorError(await setStatus(WB, AssetStatus.Tokenized, 2n))).toBe("InvalidStatus");
     });
 
     it("keeps REVOKED final", async () => {
-      expect((await setStatus(WB, AssetStatus.Revoked, 2_000n)).ok).toBe(true);
-      expect(anchorError(await setStatus(WB, AssetStatus.Active, 3_000n))).toBe("AssetRevoked");
+      expect((await setStatus(WB, AssetStatus.Revoked, 2n)).ok).toBe(true);
+      expect(anchorError(await setStatus(WB, AssetStatus.Active, 3n))).toBe("AssetRevoked");
     });
   });
 
@@ -409,7 +405,7 @@ describe.skipIf(!programBuilt)("worthybound program", () => {
 
     async function commit(
       score: number,
-      snapshotAt: bigint,
+      trustSeq: bigint,
       opts: { engine?: string; weights?: string; signer?: KeyPairSigner } = {},
     ) {
       const signer = opts.signer ?? h.oracle;
@@ -422,41 +418,39 @@ describe.skipIf(!programBuilt)("worthybound program", () => {
           engineVersion: opts.engine ?? "1.1.0",
           weightsVersion: opts.weights ?? "weights-2026.2",
           inputsHash: HASH,
-          snapshotAt,
+          trustSeq,
         }),
       ]);
     }
 
     it("records the score, level, versions and inputs hash", async () => {
-      expect((await commit(72, 5_000n)).ok).toBe(true);
+      expect((await commit(72, 5n)).ok).toBe(true);
       const data = await record(WB);
       expect(data.trustScore).toBe(72);
       expect(data.verificationLevel).toBe(VerificationLevel.Inspected);
       expect(data.engineVersion).toBe("1.1.0");
       expect(data.weightsVersion).toBe("weights-2026.2");
       expect(Uint8Array.from(data.inputsHash)).toEqual(HASH);
-      expect(data.trustSnapshotAt).toBe(5_000n);
+      expect(data.trustSeq).toBe(5n);
     });
 
     it("rejects scores above 100", async () => {
-      expect(anchorError(await commit(101, 5_000n))).toBe("InvalidTrustScore");
+      expect(anchorError(await commit(101, 5n))).toBe("InvalidTrustScore");
     });
 
     it("rejects empty or overlong versions", async () => {
-      expect(anchorError(await commit(50, 5_000n, { engine: "" }))).toBe("InvalidVersion");
-      expect(anchorError(await commit(50, 5_000n, { weights: "w".repeat(25) }))).toBe(
-        "InvalidVersion",
-      );
+      expect(anchorError(await commit(50, 5n, { engine: "" }))).toBe("InvalidVersion");
+      expect(anchorError(await commit(50, 5n, { weights: "w".repeat(25) }))).toBe("InvalidVersion");
     });
 
     it("rejects older snapshots", async () => {
-      expect((await commit(60, 5_000n)).ok).toBe(true);
-      expect(anchorError(await commit(40, 4_000n))).toBe("StaleUpdate");
+      expect((await commit(60, 5n)).ok).toBe(true);
+      expect(anchorError(await commit(40, 4n))).toBe("StaleUpdate");
       expect((await record(WB)).trustScore).toBe(60);
     });
 
     it("is limited to the oracle", async () => {
-      expect(anchorError(await commit(60, 5_000n, { signer: h.owner }))).toBe("NotOracle");
+      expect(anchorError(await commit(60, 5n, { signer: h.owner }))).toBe("NotOracle");
     });
   });
 
@@ -468,13 +462,13 @@ describe.skipIf(!programBuilt)("worthybound program", () => {
     });
 
     it("moves the token to the buyer and keeps it frozen", async () => {
-      expect((await setStatus(WB, AssetStatus.TransferPending, 2_000n)).ok).toBe(true);
+      expect((await setStatus(WB, AssetStatus.TransferPending, 2n)).ok).toBe(true);
       const result = await transfer(WB, { statusAfter: AssetStatus.ReverificationRequired });
       expect(result.ok).toBe(true);
       const data = await record(WB);
       expect(data.owner).toBe(h.buyer.address);
       expect(data.status).toBe(AssetStatus.ReverificationRequired);
-      expect(data.statusChangedAt).toBe(3_000n);
+      expect(data.statusSeq).toBe(3n);
       expect(data.transferCount).toBe(1);
       const core = await coreAddress(WB);
       expect(coreAssetOwner(h.svm, core)).toBe(h.buyer.address);
@@ -495,14 +489,14 @@ describe.skipIf(!programBuilt)("worthybound program", () => {
       ["REPORTED_LOST", AssetStatus.ReportedLost],
       ["REVOKED", AssetStatus.Revoked],
     ])("is blocked while %s", async (_name, status) => {
-      expect((await setStatus(WB, status, 2_000n)).ok).toBe(true);
+      expect((await setStatus(WB, status, 2n)).ok).toBe(true);
       expect(anchorError(await transfer(WB))).toBe("NotTransferPending");
       expect(coreAssetOwner(h.svm, await coreAddress(WB))).toBe(h.owner.address);
     });
 
     describe("while pending", () => {
       beforeEach(async () => {
-        expect((await setStatus(WB, AssetStatus.TransferPending, 2_000n)).ok).toBe(true);
+        expect((await setStatus(WB, AssetStatus.TransferPending, 2n)).ok).toBe(true);
       });
 
       it("needs the current owner as seller", async () => {
@@ -525,7 +519,7 @@ describe.skipIf(!programBuilt)("worthybound program", () => {
       });
 
       it("rejects an older timestamp", async () => {
-        expect(anchorError(await transfer(WB, { changedAt: 2_000n }))).toBe("StaleUpdate");
+        expect(anchorError(await transfer(WB, { statusSeq: 2n }))).toBe("StaleUpdate");
       });
 
       it("rejects another asset's Core asset", async () => {

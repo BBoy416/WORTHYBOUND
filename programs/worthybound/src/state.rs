@@ -35,8 +35,9 @@ pub struct AssetRecord {
     pub core_asset: Pubkey,
     pub owner: Pubkey,
     pub status: AssetStatus,
-    /// Backend time (Unix ms) of the status change mirrored last; older updates are rejected.
-    pub status_changed_at: i64,
+    /// Number of backend status events mirrored so far; lower or equal numbers are rejected, so
+    /// retried or reordered updates cannot roll the status back.
+    pub status_seq: u64,
     pub trust_score: u8,
     pub verification_level: VerificationLevel,
     #[max_len(MAX_ENGINE_VERSION_LEN)]
@@ -45,8 +46,8 @@ pub struct AssetRecord {
     pub weights_version: String,
     /// SHA-256 of the Trust Score inputs, as stored in the backend snapshot.
     pub inputs_hash: [u8; 32],
-    /// Backend time (Unix ms) of the Trust Score snapshot committed last; 0 before the first.
-    pub trust_snapshot_at: i64,
+    /// Number of backend Trust Score snapshots when the committed one was taken; 0 before the first.
+    pub trust_seq: u64,
     pub registered_at: i64,
     pub transfer_count: u32,
     pub bump: u8,

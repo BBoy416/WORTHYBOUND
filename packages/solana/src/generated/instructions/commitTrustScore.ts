@@ -14,12 +14,12 @@ import {
   fixEncoderSize,
   getBytesDecoder,
   getBytesEncoder,
-  getI64Decoder,
-  getI64Encoder,
   getStructDecoder,
   getStructEncoder,
   getU32Decoder,
   getU32Encoder,
+  getU64Decoder,
+  getU64Encoder,
   getU8Decoder,
   getU8Encoder,
   getUtf8Decoder,
@@ -94,7 +94,7 @@ export type CommitTrustScoreInstructionData = {
   engineVersion: string;
   weightsVersion: string;
   inputsHash: ReadonlyUint8Array;
-  snapshotAt: bigint;
+  trustSeq: bigint;
 };
 
 export type CommitTrustScoreInstructionDataArgs = {
@@ -103,7 +103,7 @@ export type CommitTrustScoreInstructionDataArgs = {
   engineVersion: string;
   weightsVersion: string;
   inputsHash: ReadonlyUint8Array;
-  snapshotAt: number | bigint;
+  trustSeq: number | bigint;
 };
 
 export function getCommitTrustScoreInstructionDataEncoder(): Encoder<CommitTrustScoreInstructionDataArgs> {
@@ -115,7 +115,7 @@ export function getCommitTrustScoreInstructionDataEncoder(): Encoder<CommitTrust
       ["engineVersion", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
       ["weightsVersion", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
       ["inputsHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["snapshotAt", getI64Encoder()],
+      ["trustSeq", getU64Encoder()],
     ]),
     (value) => ({ ...value, discriminator: COMMIT_TRUST_SCORE_DISCRIMINATOR }),
   );
@@ -129,7 +129,7 @@ export function getCommitTrustScoreInstructionDataDecoder(): Decoder<CommitTrust
     ["engineVersion", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
     ["weightsVersion", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
     ["inputsHash", fixDecoderSize(getBytesDecoder(), 32)],
-    ["snapshotAt", getI64Decoder()],
+    ["trustSeq", getU64Decoder()],
   ]);
 }
 
@@ -156,7 +156,7 @@ export type CommitTrustScoreAsyncInput<
   engineVersion: CommitTrustScoreInstructionDataArgs["engineVersion"];
   weightsVersion: CommitTrustScoreInstructionDataArgs["weightsVersion"];
   inputsHash: CommitTrustScoreInstructionDataArgs["inputsHash"];
-  snapshotAt: CommitTrustScoreInstructionDataArgs["snapshotAt"];
+  trustSeq: CommitTrustScoreInstructionDataArgs["trustSeq"];
 };
 
 export async function getCommitTrustScoreInstructionAsync<
@@ -237,7 +237,7 @@ export type CommitTrustScoreInput<
   engineVersion: CommitTrustScoreInstructionDataArgs["engineVersion"];
   weightsVersion: CommitTrustScoreInstructionDataArgs["weightsVersion"];
   inputsHash: CommitTrustScoreInstructionDataArgs["inputsHash"];
-  snapshotAt: CommitTrustScoreInstructionDataArgs["snapshotAt"];
+  trustSeq: CommitTrustScoreInstructionDataArgs["trustSeq"];
 };
 
 export function getCommitTrustScoreInstruction<

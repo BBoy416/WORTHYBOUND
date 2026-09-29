@@ -17,12 +17,12 @@ import {
   getConstantEncoder,
   getHiddenPrefixDecoder,
   getHiddenPrefixEncoder,
-  getI64Decoder,
-  getI64Encoder,
   getStructDecoder,
   getStructEncoder,
   getU32Decoder,
   getU32Encoder,
+  getU64Decoder,
+  getU64Encoder,
   getUtf8Decoder,
   getUtf8Encoder,
   type Codec,
@@ -49,14 +49,14 @@ export type StatusUpdatedEvent = {
   wbId: string;
   previous: AssetStatus;
   status: AssetStatus;
-  changedAt: bigint;
+  statusSeq: bigint;
 };
 
 export type StatusUpdatedEventArgs = {
   wbId: string;
   previous: AssetStatusArgs;
   status: AssetStatusArgs;
-  changedAt: number | bigint;
+  statusSeq: number | bigint;
 };
 
 /** Gets the encoder for {@link StatusUpdatedEventArgs} event data. */
@@ -66,7 +66,7 @@ export function getStatusUpdatedEventEncoder(): Encoder<StatusUpdatedEventArgs> 
       ["wbId", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
       ["previous", getAssetStatusEncoder()],
       ["status", getAssetStatusEncoder()],
-      ["changedAt", getI64Encoder()],
+      ["statusSeq", getU64Encoder()],
     ]),
     [getConstantEncoder(STATUS_UPDATED_EVENT_DISCRIMINATOR)],
   );
@@ -79,7 +79,7 @@ export function getStatusUpdatedEventDecoder(): Decoder<StatusUpdatedEvent> {
       ["wbId", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
       ["previous", getAssetStatusDecoder()],
       ["status", getAssetStatusDecoder()],
-      ["changedAt", getI64Decoder()],
+      ["statusSeq", getU64Decoder()],
     ]),
     [getConstantDecoder(STATUS_UPDATED_EVENT_DISCRIMINATOR)],
   );

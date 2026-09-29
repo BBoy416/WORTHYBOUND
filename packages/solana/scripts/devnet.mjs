@@ -69,7 +69,6 @@ async function smoke(oraclePath) {
   const wbId = generateWbId();
   const [assetRecord] = await findAssetRecordPda({ wbId });
   const [coreAsset] = await findCoreAssetPda({ wbId });
-  const now = BigInt(Date.now());
   const step = async (name, instruction, extra = {}) => {
     const signature = await sendInstructions(connection, oracle, [instruction], extra);
     console.log(`${name}: ${explorerUrl("tx", signature)}`);
@@ -83,7 +82,7 @@ async function smoke(oraclePath) {
       wbId,
       uri: `https://worthybound.example/metadata/${wbId}.json`,
       status: AssetStatus.Active,
-      statusChangedAt: now,
+      statusSeq: 1n,
     }),
   );
   await step(
@@ -96,7 +95,7 @@ async function smoke(oraclePath) {
       engineVersion: "1.1.0",
       weightsVersion: "weights-2026.2",
       inputsHash: new Uint8Array(32),
-      snapshotAt: now + 1n,
+      trustSeq: 1n,
     }),
   );
   await step(
@@ -105,7 +104,7 @@ async function smoke(oraclePath) {
       oracle,
       assetRecord,
       status: AssetStatus.TransferPending,
-      changedAt: now + 2n,
+      statusSeq: 2n,
     }),
   );
   await step(
@@ -117,7 +116,7 @@ async function smoke(oraclePath) {
       assetRecord,
       coreAsset,
       statusAfter: AssetStatus.Active,
-      changedAt: now + 3n,
+      statusSeq: 3n,
     }),
   );
 

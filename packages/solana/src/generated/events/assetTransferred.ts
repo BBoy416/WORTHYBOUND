@@ -19,12 +19,12 @@ import {
   getConstantEncoder,
   getHiddenPrefixDecoder,
   getHiddenPrefixEncoder,
-  getI64Decoder,
-  getI64Encoder,
   getStructDecoder,
   getStructEncoder,
   getU32Decoder,
   getU32Encoder,
+  getU64Decoder,
+  getU64Encoder,
   getUtf8Decoder,
   getUtf8Encoder,
   type Address,
@@ -53,7 +53,7 @@ export type AssetTransferredEvent = {
   seller: Address;
   buyer: Address;
   status: AssetStatus;
-  changedAt: bigint;
+  statusSeq: bigint;
 };
 
 export type AssetTransferredEventArgs = {
@@ -61,7 +61,7 @@ export type AssetTransferredEventArgs = {
   seller: Address;
   buyer: Address;
   status: AssetStatusArgs;
-  changedAt: number | bigint;
+  statusSeq: number | bigint;
 };
 
 /** Gets the encoder for {@link AssetTransferredEventArgs} event data. */
@@ -72,7 +72,7 @@ export function getAssetTransferredEventEncoder(): Encoder<AssetTransferredEvent
       ["seller", getAddressEncoder()],
       ["buyer", getAddressEncoder()],
       ["status", getAssetStatusEncoder()],
-      ["changedAt", getI64Encoder()],
+      ["statusSeq", getU64Encoder()],
     ]),
     [getConstantEncoder(ASSET_TRANSFERRED_EVENT_DISCRIMINATOR)],
   );
@@ -86,7 +86,7 @@ export function getAssetTransferredEventDecoder(): Decoder<AssetTransferredEvent
       ["seller", getAddressDecoder()],
       ["buyer", getAddressDecoder()],
       ["status", getAssetStatusDecoder()],
-      ["changedAt", getI64Decoder()],
+      ["statusSeq", getU64Decoder()],
     ]),
     [getConstantDecoder(ASSET_TRANSFERRED_EVENT_DISCRIMINATOR)],
   );

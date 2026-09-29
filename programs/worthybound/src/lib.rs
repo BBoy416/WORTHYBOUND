@@ -58,7 +58,7 @@ pub mod worthybound {
         wb_id: String,
         uri: String,
         status: AssetStatus,
-        status_changed_at: i64,
+        status_seq: u64,
     ) -> Result<()> {
         require!(is_wb_id(&wb_id), WbError::InvalidWbId);
         require!(!uri.is_empty() && uri.len() <= MAX_URI_LEN, WbError::InvalidUri);
@@ -98,13 +98,13 @@ pub mod worthybound {
         record.core_asset = ctx.accounts.core_asset.key();
         record.owner = ctx.accounts.owner.key();
         record.status = status;
-        record.status_changed_at = status_changed_at;
+        record.status_seq = status_seq;
         record.trust_score = 0;
         record.verification_level = VerificationLevel::Unverified;
         record.engine_version = String::new();
         record.weights_version = String::new();
         record.inputs_hash = [0; 32];
-        record.trust_snapshot_at = 0;
+        record.trust_seq = 0;
         record.registered_at = now;
         record.transfer_count = 0;
         record.bump = ctx.bumps.asset_record;
@@ -127,7 +127,7 @@ pub mod worthybound {
     pub fn update_status(
         ctx: Context<OracleUpdate>,
         status: AssetStatus,
-        changed_at: i64,
+        status_seq: u64,
     ) -> Result<()> {
         let record = &mut ctx.accounts.asset_record;
         require!(record.status != AssetStatus::Revoked, WbError::AssetRevoked);
@@ -135,11 +135,11 @@ pub mod worthybound {
             !matches!(status, AssetStatus::Draft | AssetStatus::Tokenized),
             WbError::InvalidStatus
         );
-        require!(changed_at > record.status_changed_at, WbError::StaleUpdate);
+        require!(status_seq > record.status_seq, WbError::StaleUpdate);
         let previous = record.status;
         record.status = status;
-        record.status_changed_at = changed_at;
-        emit!(StatusUpdated { wb_id: record.wb_id.clone(), previous, status, changed_at });
+        record.status_seq = status_seq;
+        emit!(StatusUpdated { wb_id: record.wb_id.clone(), previous, status, status_seq });
         Ok(())
     }
 
@@ -151,7 +151,7 @@ pub mod worthybound {
         engine_version: String,
         weights_version: String,
         inputs_hash: [u8; 32],
-        snapshot_at: i64,
+        trust_seq: u64,
     ) -> Result<()> {
         require!(score <= MAX_TRUST_SCORE, WbError::InvalidTrustScore);
         require!(
@@ -164,13 +164,13 @@ pub mod worthybound {
         );
         let record = &mut ctx.accounts.asset_record;
         require!(record.status != AssetStatus::Revoked, WbError::AssetRevoked);
-        require!(snapshot_at > record.trust_snapshot_at, WbError::StaleUpdate);
+        require!(trust_seq > record.trust_seq, WbError::StaleUpdate);
         record.trust_score = score;
         record.verification_level = level;
         record.engine_version = engine_version.clone();
         record.weights_version = weights_version.clone();
         record.inputs_hash = inputs_hash;
-        record.trust_snapshot_at = snapshot_at;
+        record.trust_seq = trust_seq;
         emit!(TrustScoreCommitted {
             wb_id: record.wb_id.clone(),
             score,
@@ -178,7 +178,7 @@ pub mod worthybound {
             engine_version,
             weights_version,
             inputs_hash,
-            snapshot_at,
+            trust_seq,
         });
         Ok(())
     }
@@ -189,12 +189,12 @@ pub mod worthybound {
     pub fn transfer_asset(
         ctx: Context<TransferAsset>,
         status_after: AssetStatus,
-        changed_at: i64,
+        status_seq: u64,
     ) -> Result<()> {
         let record = &ctx.accounts.asset_record;
         require!(record.status == AssetStatus::TransferPending, WbError::NotTransferPending);
         require!(status_after.is_after_transfer(), WbError::InvalidStatusAfterTransfer);
-        require!(changed_at > record.status_changed_at, WbError::StaleUpdate);
+        require!(status_seq > record.status_seq, WbError::StaleUpdate);
         require_keys_eq!(record.owner, ctx.accounts.seller.key(), WbError::NotOwner);
         require_keys_neq!(ctx.accounts.seller.key(), ctx.accounts.buyer.key(), WbError::SameOwner);
         {
@@ -225,14 +225,14 @@ pub mod worthybound {
         let seller = record.owner;
         record.owner = ctx.accounts.buyer.key();
         record.status = status_after;
-        record.status_changed_at = changed_at;
+        record.status_seq = status_seq;
         record.transfer_count = record.transfer_count.checked_add(1).unwrap();
         emit!(AssetTransferred {
             wb_id: record.wb_id.clone(),
             seller,
             buyer: record.owner,
             status: status_after,
-            changed_at,
+            status_seq,
         });
         Ok(())
     }
@@ -374,7 +374,7 @@ pub struct StatusUpdated {
     pub wb_id: String,
     pub previous: AssetStatus,
     pub status: AssetStatus,
-    pub changed_at: i64,
+    pub status_seq: u64,
 }
 
 #[event]
@@ -385,7 +385,7 @@ pub struct TrustScoreCommitted {
     pub engine_version: String,
     pub weights_version: String,
     pub inputs_hash: [u8; 32],
-    pub snapshot_at: i64,
+    pub trust_seq: u64,
 }
 
 #[event]
@@ -394,5 +394,5 @@ pub struct AssetTransferred {
     pub seller: Pubkey,
     pub buyer: Pubkey,
     pub status: AssetStatus,
-    pub changed_at: i64,
+    pub status_seq: u64,
 }

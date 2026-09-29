@@ -12,10 +12,10 @@ import {
   fixEncoderSize,
   getBytesDecoder,
   getBytesEncoder,
-  getI64Decoder,
-  getI64Encoder,
   getStructDecoder,
   getStructEncoder,
+  getU64Decoder,
+  getU64Encoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
   SolanaError,
   transformEncoder,
@@ -102,12 +102,12 @@ export type TransferAssetInstruction<
 export type TransferAssetInstructionData = {
   discriminator: ReadonlyUint8Array;
   statusAfter: AssetStatus;
-  changedAt: bigint;
+  statusSeq: bigint;
 };
 
 export type TransferAssetInstructionDataArgs = {
   statusAfter: AssetStatusArgs;
-  changedAt: number | bigint;
+  statusSeq: number | bigint;
 };
 
 export function getTransferAssetInstructionDataEncoder(): FixedSizeEncoder<TransferAssetInstructionDataArgs> {
@@ -115,7 +115,7 @@ export function getTransferAssetInstructionDataEncoder(): FixedSizeEncoder<Trans
     getStructEncoder([
       ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
       ["statusAfter", getAssetStatusEncoder()],
-      ["changedAt", getI64Encoder()],
+      ["statusSeq", getU64Encoder()],
     ]),
     (value) => ({ ...value, discriminator: TRANSFER_ASSET_DISCRIMINATOR }),
   );
@@ -125,7 +125,7 @@ export function getTransferAssetInstructionDataDecoder(): FixedSizeDecoder<Trans
   return getStructDecoder([
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
     ["statusAfter", getAssetStatusDecoder()],
-    ["changedAt", getI64Decoder()],
+    ["statusSeq", getU64Decoder()],
   ]);
 }
 
@@ -159,7 +159,7 @@ export type TransferAssetAsyncInput<
   mplCoreProgram?: TAccountMplCoreProgram;
   systemProgram?: TAccountSystemProgram;
   statusAfter: TransferAssetInstructionDataArgs["statusAfter"];
-  changedAt: TransferAssetInstructionDataArgs["changedAt"];
+  statusSeq: TransferAssetInstructionDataArgs["statusSeq"];
 };
 
 export async function getTransferAssetInstructionAsync<
@@ -305,7 +305,7 @@ export type TransferAssetInput<
   mplCoreProgram?: TAccountMplCoreProgram;
   systemProgram?: TAccountSystemProgram;
   statusAfter: TransferAssetInstructionDataArgs["statusAfter"];
-  changedAt: TransferAssetInstructionDataArgs["changedAt"];
+  statusSeq: TransferAssetInstructionDataArgs["statusSeq"];
 };
 
 export function getTransferAssetInstruction<

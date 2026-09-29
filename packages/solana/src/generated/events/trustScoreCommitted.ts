@@ -19,12 +19,12 @@ import {
   getConstantEncoder,
   getHiddenPrefixDecoder,
   getHiddenPrefixEncoder,
-  getI64Decoder,
-  getI64Encoder,
   getStructDecoder,
   getStructEncoder,
   getU32Decoder,
   getU32Encoder,
+  getU64Decoder,
+  getU64Encoder,
   getU8Decoder,
   getU8Encoder,
   getUtf8Decoder,
@@ -56,7 +56,7 @@ export type TrustScoreCommittedEvent = {
   engineVersion: string;
   weightsVersion: string;
   inputsHash: ReadonlyUint8Array;
-  snapshotAt: bigint;
+  trustSeq: bigint;
 };
 
 export type TrustScoreCommittedEventArgs = {
@@ -66,7 +66,7 @@ export type TrustScoreCommittedEventArgs = {
   engineVersion: string;
   weightsVersion: string;
   inputsHash: ReadonlyUint8Array;
-  snapshotAt: number | bigint;
+  trustSeq: number | bigint;
 };
 
 /** Gets the encoder for {@link TrustScoreCommittedEventArgs} event data. */
@@ -79,7 +79,7 @@ export function getTrustScoreCommittedEventEncoder(): Encoder<TrustScoreCommitte
       ["engineVersion", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
       ["weightsVersion", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
       ["inputsHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["snapshotAt", getI64Encoder()],
+      ["trustSeq", getU64Encoder()],
     ]),
     [getConstantEncoder(TRUST_SCORE_COMMITTED_EVENT_DISCRIMINATOR)],
   );
@@ -95,7 +95,7 @@ export function getTrustScoreCommittedEventDecoder(): Decoder<TrustScoreCommitte
       ["engineVersion", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
       ["weightsVersion", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
       ["inputsHash", fixDecoderSize(getBytesDecoder(), 32)],
-      ["snapshotAt", getI64Decoder()],
+      ["trustSeq", getU64Decoder()],
     ]),
     [getConstantDecoder(TRUST_SCORE_COMMITTED_EVENT_DISCRIMINATOR)],
   );

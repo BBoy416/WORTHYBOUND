@@ -14,12 +14,12 @@ import {
   fixEncoderSize,
   getBytesDecoder,
   getBytesEncoder,
-  getI64Decoder,
-  getI64Encoder,
   getStructDecoder,
   getStructEncoder,
   getU32Decoder,
   getU32Encoder,
+  getU64Decoder,
+  getU64Encoder,
   getUtf8Decoder,
   getUtf8Encoder,
   SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
@@ -104,14 +104,14 @@ export type RegisterAssetInstructionData = {
   wbId: string;
   uri: string;
   status: AssetStatus;
-  statusChangedAt: bigint;
+  statusSeq: bigint;
 };
 
 export type RegisterAssetInstructionDataArgs = {
   wbId: string;
   uri: string;
   status: AssetStatusArgs;
-  statusChangedAt: number | bigint;
+  statusSeq: number | bigint;
 };
 
 export function getRegisterAssetInstructionDataEncoder(): Encoder<RegisterAssetInstructionDataArgs> {
@@ -121,7 +121,7 @@ export function getRegisterAssetInstructionDataEncoder(): Encoder<RegisterAssetI
       ["wbId", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
       ["uri", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
       ["status", getAssetStatusEncoder()],
-      ["statusChangedAt", getI64Encoder()],
+      ["statusSeq", getU64Encoder()],
     ]),
     (value) => ({ ...value, discriminator: REGISTER_ASSET_DISCRIMINATOR }),
   );
@@ -133,7 +133,7 @@ export function getRegisterAssetInstructionDataDecoder(): Decoder<RegisterAssetI
     ["wbId", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
     ["uri", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
     ["status", getAssetStatusDecoder()],
-    ["statusChangedAt", getI64Decoder()],
+    ["statusSeq", getU64Decoder()],
   ]);
 }
 
@@ -167,7 +167,7 @@ export type RegisterAssetAsyncInput<
   wbId: RegisterAssetInstructionDataArgs["wbId"];
   uri: RegisterAssetInstructionDataArgs["uri"];
   status: RegisterAssetInstructionDataArgs["status"];
-  statusChangedAt: RegisterAssetInstructionDataArgs["statusChangedAt"];
+  statusSeq: RegisterAssetInstructionDataArgs["statusSeq"];
 };
 
 export async function getRegisterAssetInstructionAsync<
@@ -319,7 +319,7 @@ export type RegisterAssetInput<
   wbId: RegisterAssetInstructionDataArgs["wbId"];
   uri: RegisterAssetInstructionDataArgs["uri"];
   status: RegisterAssetInstructionDataArgs["status"];
-  statusChangedAt: RegisterAssetInstructionDataArgs["statusChangedAt"];
+  statusSeq: RegisterAssetInstructionDataArgs["statusSeq"];
 };
 
 export function getRegisterAssetInstruction<

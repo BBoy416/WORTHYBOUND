@@ -74,8 +74,8 @@
           }
         },
         {
-          "name": "snapshot_at",
-          "type": "i64"
+          "name": "trust_seq",
+          "type": "u64"
         }
       ]
     },
@@ -206,8 +206,8 @@
           }
         },
         {
-          "name": "status_changed_at",
-          "type": "i64"
+          "name": "status_seq",
+          "type": "u64"
         }
       ]
     },
@@ -346,8 +346,8 @@
           }
         },
         {
-          "name": "changed_at",
-          "type": "i64"
+          "name": "status_seq",
+          "type": "u64"
         }
       ]
     },
@@ -403,8 +403,8 @@
           }
         },
         {
-          "name": "changed_at",
-          "type": "i64"
+          "name": "status_seq",
+          "type": "u64"
         }
       ]
     }
@@ -560,11 +560,12 @@
             }
           },
           {
-            "name": "status_changed_at",
+            "name": "status_seq",
             "docs": [
-              "Backend time (Unix ms) of the status change mirrored last; older updates are rejected."
+              "Number of backend status events mirrored so far; lower or equal numbers are rejected, so",
+              "retried or reordered updates cannot roll the status back."
             ],
-            "type": "i64"
+            "type": "u64"
           },
           {
             "name": "trust_score",
@@ -594,11 +595,11 @@
             }
           },
           {
-            "name": "trust_snapshot_at",
+            "name": "trust_seq",
             "docs": [
-              "Backend time (Unix ms) of the Trust Score snapshot committed last; 0 before the first."
+              "Number of backend Trust Score snapshots when the committed one was taken; 0 before the first."
             ],
-            "type": "i64"
+            "type": "u64"
           },
           {
             "name": "registered_at",
@@ -712,8 +713,8 @@
             }
           },
           {
-            "name": "changed_at",
-            "type": "i64"
+            "name": "status_seq",
+            "type": "u64"
           }
         ]
       }
@@ -802,8 +803,8 @@
             }
           },
           {
-            "name": "changed_at",
-            "type": "i64"
+            "name": "status_seq",
+            "type": "u64"
           }
         ]
       }
@@ -844,8 +845,8 @@
             }
           },
           {
-            "name": "snapshot_at",
-            "type": "i64"
+            "name": "trust_seq",
+            "type": "u64"
           }
         ]
       }

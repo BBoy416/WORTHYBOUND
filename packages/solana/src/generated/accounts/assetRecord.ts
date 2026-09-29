@@ -27,6 +27,8 @@ import {
   getStructEncoder,
   getU32Decoder,
   getU32Encoder,
+  getU64Decoder,
+  getU64Encoder,
   getU8Decoder,
   getU8Encoder,
   getUtf8Decoder,
@@ -70,16 +72,19 @@ export type AssetRecord = {
   coreAsset: Address;
   owner: Address;
   status: AssetStatus;
-  /** Backend time (Unix ms) of the status change mirrored last; older updates are rejected. */
-  statusChangedAt: bigint;
+  /**
+   * Number of backend status events mirrored so far; lower or equal numbers are rejected, so
+   * retried or reordered updates cannot roll the status back.
+   */
+  statusSeq: bigint;
   trustScore: number;
   verificationLevel: VerificationLevel;
   engineVersion: string;
   weightsVersion: string;
   /** SHA-256 of the Trust Score inputs, as stored in the backend snapshot. */
   inputsHash: ReadonlyUint8Array;
-  /** Backend time (Unix ms) of the Trust Score snapshot committed last; 0 before the first. */
-  trustSnapshotAt: bigint;
+  /** Number of backend Trust Score snapshots when the committed one was taken; 0 before the first. */
+  trustSeq: bigint;
   registeredAt: bigint;
   transferCount: number;
   bump: number;
@@ -92,16 +97,19 @@ export type AssetRecordArgs = {
   coreAsset: Address;
   owner: Address;
   status: AssetStatusArgs;
-  /** Backend time (Unix ms) of the status change mirrored last; older updates are rejected. */
-  statusChangedAt: number | bigint;
+  /**
+   * Number of backend status events mirrored so far; lower or equal numbers are rejected, so
+   * retried or reordered updates cannot roll the status back.
+   */
+  statusSeq: number | bigint;
   trustScore: number;
   verificationLevel: VerificationLevelArgs;
   engineVersion: string;
   weightsVersion: string;
   /** SHA-256 of the Trust Score inputs, as stored in the backend snapshot. */
   inputsHash: ReadonlyUint8Array;
-  /** Backend time (Unix ms) of the Trust Score snapshot committed last; 0 before the first. */
-  trustSnapshotAt: number | bigint;
+  /** Number of backend Trust Score snapshots when the committed one was taken; 0 before the first. */
+  trustSeq: number | bigint;
   registeredAt: number | bigint;
   transferCount: number;
   bump: number;
@@ -117,13 +125,13 @@ export function getAssetRecordEncoder(): Encoder<AssetRecordArgs> {
       ["coreAsset", getAddressEncoder()],
       ["owner", getAddressEncoder()],
       ["status", getAssetStatusEncoder()],
-      ["statusChangedAt", getI64Encoder()],
+      ["statusSeq", getU64Encoder()],
       ["trustScore", getU8Encoder()],
       ["verificationLevel", getVerificationLevelEncoder()],
       ["engineVersion", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
       ["weightsVersion", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
       ["inputsHash", fixEncoderSize(getBytesEncoder(), 32)],
-      ["trustSnapshotAt", getI64Encoder()],
+      ["trustSeq", getU64Encoder()],
       ["registeredAt", getI64Encoder()],
       ["transferCount", getU32Encoder()],
       ["bump", getU8Encoder()],
@@ -141,13 +149,13 @@ export function getAssetRecordDecoder(): Decoder<AssetRecord> {
     ["coreAsset", getAddressDecoder()],
     ["owner", getAddressDecoder()],
     ["status", getAssetStatusDecoder()],
-    ["statusChangedAt", getI64Decoder()],
+    ["statusSeq", getU64Decoder()],
     ["trustScore", getU8Decoder()],
     ["verificationLevel", getVerificationLevelDecoder()],
     ["engineVersion", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
     ["weightsVersion", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
     ["inputsHash", fixDecoderSize(getBytesDecoder(), 32)],
-    ["trustSnapshotAt", getI64Decoder()],
+    ["trustSeq", getU64Decoder()],
     ["registeredAt", getI64Decoder()],
     ["transferCount", getU32Decoder()],
     ["bump", getU8Decoder()],
