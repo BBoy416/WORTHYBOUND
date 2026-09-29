@@ -25,6 +25,7 @@ import { passportRoutes } from "./passport/routes.js";
 import { templateRoutes } from "./templates/routes.js";
 import { verificationRoutes } from "./verification/routes.js";
 import { verifierRoutes } from "./verifiers/routes.js";
+import { registerWebApp } from "./web.js";
 
 export interface BuildAppOptions {
   config: Config;
@@ -45,6 +46,13 @@ declare module "fastify" {
     /** Chain job worker; `server.ts` starts it. Null without an oracle. */
     chainSync: ChainSync | null;
   }
+}
+
+/** Origin that presigned upload URLs point to (path-style with an endpoint, as in storage). */
+export function storageOrigin(config: Config): string {
+  return config.S3_ENDPOINT
+    ? new URL(config.S3_ENDPOINT).origin
+    : `https://${config.S3_BUCKET_EVIDENCE_PRIVATE}.s3.${config.S3_REGION}.amazonaws.com`;
 }
 
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
@@ -98,7 +106,16 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       .send({ error: { code: code ?? "bad_request", message: message ?? "Bad request" } });
   });
 
-  await app.register(helmet);
+  await app.register(helmet, {
+    contentSecurityPolicy: {
+      directives: {
+        // The web app uploads evidence straight to storage with presigned URLs.
+        "connect-src": ["'self'", storageOrigin(config)],
+        "img-src": ["'self'", "data:", "blob:"],
+        "upgrade-insecure-requests": config.NODE_ENV === "production" ? [] : null,
+      },
+    },
+  });
   await app.register(cookie);
   await app.register(rateLimit, { global: false });
 
@@ -146,6 +163,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await app.register(adminRoutes, ctx);
   await app.register(templateRoutes, ctx);
   await app.register(verificationRoutes, ctx);
+  if (config.WEB_DIST_DIR) await registerWebApp(app, config.WEB_DIST_DIR);
   if (options.register) await options.register(app, ctx);
   return app;
 }

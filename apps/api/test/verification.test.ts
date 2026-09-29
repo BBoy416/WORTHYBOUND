@@ -1115,16 +1115,20 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("verifier evidenc
     sha256: sha256(body),
   });
 
-  const sendFile = async (form: { url: string; fields: Record<string, string> }, body: Buffer) => {
-    const data = new FormData();
-    for (const [k, v] of Object.entries(form.fields)) data.append(k, v);
-    data.append("file", new Blob([new Uint8Array(body)], { type: "application/pdf" }));
-    const res = await fetch(form.url, { method: "POST", body: data });
+  const sendFile = async (
+    upload: { url: string; method: string; headers: Record<string, string> },
+    body: Buffer,
+  ) => {
+    const res = await fetch(upload.url, {
+      method: upload.method,
+      headers: upload.headers,
+      body: new Uint8Array(body),
+    });
     expect(res.status, await res.text()).toBeLessThan(300);
   };
 
   const uploadAs = async (who: Person, url: string, body: Buffer) => {
-    const { uploadId, form } = await expectOk(call(who, "POST", url, meta(body)), 201);
+    const { uploadId, upload: form } = await expectOk(call(who, "POST", url, meta(body)), 201);
     await sendFile(form, body);
     return {
       uploadId: uploadId as string,

@@ -12,16 +12,13 @@ async function readAll(storage: Storage, key: string): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-/** Uploads like a browser would: a multipart form with the signed fields, then the file. */
-async function postForm(
-  upload: { url: string; fields: Record<string, string> },
-  body: Buffer,
-  contentType: string,
-) {
-  const form = new FormData();
-  for (const [k, v] of Object.entries(upload.fields)) form.append(k, v);
-  form.append("file", new Blob([new Uint8Array(body)], { type: contentType }));
-  return fetch(upload.url, { method: "POST", body: form });
+/** Uploads like a browser would: a PUT with the signed content type; fetch sets the length. */
+async function putFile(upload: { url: string }, body: Buffer, contentType: string) {
+  return fetch(upload.url, {
+    method: "PUT",
+    headers: { "Content-Type": contentType },
+    body: new Uint8Array(body),
+  });
 }
 
 describe.skipIf(!S3_ENDPOINT)("storage", () => {
@@ -59,8 +56,11 @@ describe.skipIf(!S3_ENDPOINT)("storage", () => {
       sizeBytes: body.length,
       expiresInSeconds: 60,
     });
-    expect(upload.url).not.toContain("staging/ok");
-    const res = await postForm(upload, body, "image/jpeg");
+    expect(upload).toMatchObject({ method: "PUT", headers: { "Content-Type": "image/jpeg" } });
+    expect(new URL(upload.url).searchParams.get("X-Amz-SignedHeaders")).toBe(
+      "content-length;content-type;host",
+    );
+    const res = await putFile(upload, body, "image/jpeg");
     expect(res.status).toBeLessThan(300);
     expect(await storage.head("staging/ok")).toMatchObject({ sizeBytes: 1000 });
     expect(await readAll(storage, "staging/ok")).toEqual(body);
@@ -77,24 +77,21 @@ describe.skipIf(!S3_ENDPOINT)("storage", () => {
       sizeBytes: 1000,
       expiresInSeconds: 60,
     });
-    const fields = { ...upload.fields, "Content-Type": contentType };
-    const res = await postForm({ ...upload, fields }, randomBytes(size), contentType);
+    const res = await putFile(upload, randomBytes(size), contentType);
     expect(res.status).toBeGreaterThanOrEqual(400);
     expect(await storage.head(key)).toBeNull();
   });
 
-  it("does not let the form choose another key", async () => {
+  it("does not let the URL choose another key", async () => {
     const upload = await storage.presignUpload({
       key: "staging/mine",
       contentType: "image/jpeg",
       sizeBytes: 10,
       expiresInSeconds: 60,
     });
-    const res = await postForm(
-      { ...upload, fields: { ...upload.fields, key: "evidence/elsewhere" } },
-      randomBytes(10),
-      "image/jpeg",
-    );
+    const url = new URL(upload.url);
+    url.pathname = url.pathname.replace("staging/mine", "evidence/elsewhere");
+    const res = await putFile({ url: url.toString() }, randomBytes(10), "image/jpeg");
     expect(res.status).toBeGreaterThanOrEqual(400);
     expect(await storage.head("evidence/elsewhere")).toBeNull();
   });

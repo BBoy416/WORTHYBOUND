@@ -11,7 +11,8 @@ verification by approved professionals raises its Trust Score.
 ## Status
 
 Phase 10: Solana program on devnet: frozen Metaplex Core tokens, on-chain status and Trust Score,
-tokenization and chain sync (ADR 0016), on top of the Trust Score and verified status (Phase 9).
+tokenization and chain sync (ADR 0016), on top of the Trust Score and verified status (Phase 9),
+and the web app for owners, verifiers and public passports.
 Solana work targets **Devnet only**.
 
 ## Repository layout
@@ -20,7 +21,9 @@ Solana work targets **Devnet only**.
 apps/
   api/                REST API (Fastify): wallet sign-in, assets, evidence, verifiers, templates,
                       verification requests, attestations, passports, tokenization, token
-                      metadata and the chain sync worker
+                      metadata and the chain sync worker; serves the web app in production
+  web/                web app (Vite + React): wallet sign-in, assets, evidence, tokenization,
+                      verification requests, verifier attestations and public passports
 packages/
   database/           Prisma schema, migrations and client (PostgreSQL)
   shared/             domain enums, asset IDs, lifecycle rules, public passport and verifier
@@ -34,7 +37,8 @@ programs/worthybound/ Anchor program (Rust)
 docs/adr/             architecture decision records
 tests/                integration and end-to-end tests (later phases)
 docker-compose.yml    local PostgreSQL and S3-compatible storage
-render.yaml           Render Blueprint for the demo deployment (API, PostgreSQL; evidence in R2)
+render.yaml           Render Blueprint for the demo deployment (API and web app, PostgreSQL;
+                      evidence in R2)
 ```
 
 ## Requirements
@@ -72,6 +76,18 @@ Run the API (needs `SESSION_SECRET` and `SERIAL_FINGERPRINT_KEY` in `.env`, each
 ```sh
 pnpm api:start        # http://127.0.0.1:4000/health
 ```
+
+Run the web app in development (with the API running; it proxies API calls to port 4000). Set
+`AUTH_DOMAIN=localhost:5173` so sign-in messages and storage CORS match the app's address, and
+run `pnpm storage:setup` again after changing it:
+
+```sh
+pnpm web:dev          # http://localhost:5173
+```
+
+In production the API serves the built app itself (`WEB_DIST_DIR`), so the app, sign-in and
+passport links (`/passport/:wbId`) share one domain. Page loads get the app; API calls with
+`Accept: application/json` reach the API. Sign-in needs a Solana wallet extension such as Phantom.
 
 To tokenize assets, set `SOLANA_TRUST_ORACLE_KEYPAIR_PATH` to the oracle keypair (outside the
 repository). Without it the API starts, but `POST /assets/:wbId/tokenize` answers 503.
@@ -131,6 +147,7 @@ pnpm kyc:record <wallet address> <provider> <reference> [VERIFIED|REJECTED|EXPIR
 | `pnpm db:migrate:deploy` | Apply pending migrations                       |
 | `pnpm db:migrate:status` | Show migration status                          |
 | `pnpm api:start`         | Build and start the API                        |
+| `pnpm web:dev`           | Start the web app (development server)         |
 | `pnpm admin:grant`       | Grant ADMIN to a wallet (operators only)       |
 | `pnpm kyc:record`        | Record a KYC result (operators only)           |
 | `pnpm storage:setup`     | Create and configure the evidence bucket       |

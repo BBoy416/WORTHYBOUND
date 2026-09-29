@@ -32,8 +32,12 @@ const errors = {
 
 const uploadFormSchema = z.object({
   uploadId: z.uuid(),
-  /** Send the file as a multipart form POST: these fields first, then `file`. */
-  form: z.object({ url: z.string(), fields: z.record(z.string(), z.string()) }),
+  /** Send the file as the body of a PUT to `url` with these headers. */
+  upload: z.object({
+    url: z.string(),
+    method: z.literal("PUT"),
+    headers: z.record(z.string(), z.string()),
+  }),
   expiresAt: z.iso.datetime(),
 });
 
@@ -74,7 +78,7 @@ export const evidenceRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx
       );
       return reply.code(201).send({
         uploadId: upload.id,
-        form: { url: form.url, fields: form.fields },
+        upload: { url: form.url, method: form.method, headers: form.headers },
         expiresAt: upload.expiresAt.toISOString(),
       });
     },
@@ -178,7 +182,7 @@ export const evidenceRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx
       );
       return reply.code(201).send({
         uploadId: upload.id,
-        form: { url: form.url, fields: form.fields },
+        upload: { url: form.url, method: form.method, headers: form.headers },
         expiresAt: upload.expiresAt.toISOString(),
       });
     },

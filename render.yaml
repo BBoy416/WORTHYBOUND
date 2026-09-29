@@ -1,4 +1,5 @@
-# Render Blueprint for the WorthyBound API on Solana devnet (ADR 0016).
+# Render Blueprint for WorthyBound on Solana devnet (ADR 0016): the API also serves the web app
+# (apps/web), so sign-in, the app and passport links share one domain.
 # Evidence is stored in Cloudflare R2 through its S3 API. Secret values are entered in the Render
 # Dashboard (`sync: false`) and never committed. The oracle keypair is a Render secret file named
 # `wb-oracle.json` (Dashboard > Environment > Secret Files), mounted at /etc/secrets/.
@@ -16,7 +17,8 @@ services:
     autoDeployTrigger: checksPass
     buildCommand: >-
       corepack enable && pnpm install --frozen-lockfile &&
-      pnpm turbo run build --filter=@worthybound/api... --output-logs=errors-only
+      pnpm turbo run build --filter=@worthybound/api... --filter=@worthybound/web...
+      --output-logs=errors-only
     preDeployCommand: pnpm db:migrate:deploy
     startCommand: pnpm --filter @worthybound/api start
     healthCheckPath: /health
@@ -36,12 +38,16 @@ services:
         fromDatabase:
           name: worthybound-db
           property: connectionString
-      # Website domain that users sign in to, e.g. app.example.com.
+      # This service's domain, e.g. worthybound-api.onrender.com: users sign in here and
+      # passport links point here.
       - key: AUTH_DOMAIN
         sync: false
       # This service's public URL, e.g. https://worthybound-api.onrender.com.
       - key: API_PUBLIC_URL
         sync: false
+      # Relative to apps/api, where the start command runs.
+      - key: WEB_DIST_DIR
+        value: ../web/dist
       - key: SESSION_SECRET
         generateValue: true
       # Must never change once assets are registered (ADR 0009).

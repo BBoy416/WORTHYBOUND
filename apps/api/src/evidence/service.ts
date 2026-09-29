@@ -378,7 +378,7 @@ export function createEvidenceService({ prisma, storage, now, log }: EvidenceSer
       });
     },
 
-    /** Records the request and returns a one-time upload form for the holding area. */
+    /** Records the request and returns a one-time upload URL for the holding area. */
     requestUpload(wbId: string, input: EvidenceUploadInput, actor: Actor) {
       return startUpload({ wbId, requestId: null }, input, actor);
     },
