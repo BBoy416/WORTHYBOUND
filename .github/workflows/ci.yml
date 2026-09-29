@@ -42,6 +42,10 @@ jobs:
       - run: pnpm format:check
       - run: pnpm lint
       - run: pnpm typecheck
+      - name: Generated Solana client matches the IDL
+        run: |
+          pnpm --filter @worthybound/solana generate:client
+          git diff --exit-code packages/solana/src/generated
       # Service containers cannot pass a command, so the storage server is started here.
       - name: Start object storage
         run: |
@@ -55,6 +59,36 @@ jobs:
           docker logs object-storage
           exit 1
       - run: pnpm test
+
+  program:
+    name: Solana program build and tests
+    runs-on: ubuntu-latest
+    env:
+      AGAVE_VERSION: v4.3.0
+      WB_REQUIRE_PROGRAM: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install Rust (rust-toolchain.toml) and Agave
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          sh -c "$(curl -sSfL https://release.anza.xyz/${AGAVE_VERSION}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: program-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+      - run: cargo-build-sbf --manifest-path programs/worthybound/Cargo.toml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @worthybound/solana... build
+      - run: pnpm --filter @worthybound/solana test
 
   secret-scan:
     name: Secret scan (gitleaks)
