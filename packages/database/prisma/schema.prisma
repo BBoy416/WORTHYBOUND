@@ -272,6 +272,8 @@ enum ChainTransactionStatus {
   CONFIRMED
   FINALIZED
   FAILED
+  /// Not sent: the chain already held this update or a newer one.
+  SUPERSEDED
 }
 
 // ─── Identity and access ──────────────────────────────────────────────────────

@@ -2,6 +2,7 @@ import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import type { PrismaClient } from "@worthybound/database";
+import type { WorthyBoundOracle } from "@worthybound/solana";
 import type { Storage } from "@worthybound/storage";
 import Fastify, { type FastifyInstance } from "fastify";
 import {
@@ -14,9 +15,12 @@ import { adminRoutes } from "./admin/routes.js";
 import { assetRoutes } from "./assets/routes.js";
 import { createAuthenticate, createRequireRole } from "./auth/guard.js";
 import { authRoutes } from "./auth/routes.js";
+import { type ChainSync, createChainSync } from "./chain/sync.js";
 import type { Config } from "./config.js";
 import { type AppContext, DEFAULT_RATE_LIMITS, type RateLimits } from "./context.js";
+import { ApiError } from "./errors.js";
 import { evidenceRoutes } from "./evidence/routes.js";
+import { metadataRoutes } from "./passport/metadata.js";
 import { passportRoutes } from "./passport/routes.js";
 import { templateRoutes } from "./templates/routes.js";
 import { verificationRoutes } from "./verification/routes.js";
@@ -32,6 +36,15 @@ export interface BuildAppOptions {
   rateLimits?: Partial<RateLimits>;
   /** Registers extra routes with the same context (used by tests). */
   register?: (app: FastifyInstance, ctx: AppContext) => Promise<void> | void;
+  /** Signs chain transactions; without it, tokenization is unavailable. */
+  oracle?: WorthyBoundOracle;
+}
+
+declare module "fastify" {
+  interface FastifyInstance {
+    /** Chain job worker; `server.ts` starts it. Null without an oracle. */
+    chainSync: ChainSync | null;
+  }
 }
 
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
@@ -71,7 +84,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         .code(429)
         .send({ error: { code: "rate_limited", message: "Too many requests, try again later" } });
     }
-    if (status >= 500) {
+    if (status >= 500 && !(error instanceof ApiError)) {
       request.log.error({ err: error }, "request failed");
       return reply
         .code(500)
@@ -88,6 +101,19 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await app.register(rateLimit, { global: false });
 
   const authenticate = createAuthenticate(prisma, now);
+  const chainSync = options.oracle
+    ? createChainSync({
+        prisma,
+        oracle: options.oracle,
+        now,
+        log: app.log,
+        metadataUrl: (wbId) => `${config.apiPublicUrl}/metadata/${wbId}`,
+      })
+    : null;
+  app.decorate("chainSync", chainSync);
+  app.addHook("onClose", async () => {
+    await chainSync?.stop();
+  });
   const ctx: AppContext = {
     config,
     prisma,
@@ -96,6 +122,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     authenticate,
     requireRole: createRequireRole(authenticate),
     rateLimits: { ...DEFAULT_RATE_LIMITS, ...options.rateLimits },
+    chainSync,
   };
 
   app.get("/health", async (_request, reply) => {
@@ -112,6 +139,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await app.register(assetRoutes, ctx);
   await app.register(evidenceRoutes, ctx);
   await app.register(passportRoutes, ctx);
+  await app.register(metadataRoutes, ctx);
   await app.register(verifierRoutes, ctx);
   await app.register(adminRoutes, ctx);
   await app.register(templateRoutes, ctx);

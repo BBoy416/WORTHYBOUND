@@ -21,6 +21,7 @@ export async function loadPassportSource(
       status: true,
       tokenizationStatus: true,
       chainAssetAddress: true,
+      chainRecordAddress: true,
       verificationLevel: true,
       condition: true,
       publishedAt: true,

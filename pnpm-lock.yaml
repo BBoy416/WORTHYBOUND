@@ -223,6 +223,9 @@ importers:
       '@worthybound/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@worthybound/solana':
+        specifier: workspace:*
+        version: link:../../packages/solana
       '@worthybound/storage':
         specifier: workspace:*
         version: link:../../packages/storage

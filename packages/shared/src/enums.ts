@@ -258,6 +258,7 @@ export const CHAIN_TRANSACTION_STATUSES = [
   "CONFIRMED",
   "FINALIZED",
   "FAILED",
+  "SUPERSEDED",
 ] as const;
 export type ChainTransactionStatus = (typeof CHAIN_TRANSACTION_STATUSES)[number];
 

@@ -1,5 +1,10 @@
+import { WORTHYBOUND_PROGRAM_ADDRESS } from "@worthybound/solana";
 import { createStorage, type Storage } from "@worthybound/storage";
 import { z } from "zod";
+
+/** Empty values in .env files count as unset. */
+const optional = <T extends z.ZodType>(schema: T) =>
+  z.preprocess((value) => (value === "" ? undefined : value), schema.optional());
 
 const configSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -16,6 +21,19 @@ const configSchema = z.object({
   /** Keys the HMAC of serial numbers used to stop the same item being registered twice. */
   SERIAL_FINGERPRINT_KEY: z.string().min(32, "must be at least 32 characters"),
   SOLANA_CLUSTER: z.literal("devnet", { error: "only devnet is supported" }),
+  SOLANA_RPC_URL: z.url({ protocol: /^https?$/ }).default("https://api.devnet.solana.com"),
+  /** WebSocket endpoint for confirmations; defaults to SOLANA_RPC_URL with ws(s). */
+  SOLANA_WS_URL: optional(z.url({ protocol: /^wss?$/ })),
+  /** If set, must be the program the client was generated for (a guard against mixing up builds). */
+  WORTHYBOUND_PROGRAM_ID: optional(
+    z.literal(WORTHYBOUND_PROGRAM_ADDRESS, {
+      error: `must be ${WORTHYBOUND_PROGRAM_ADDRESS}, the program this build uses`,
+    }),
+  ),
+  /** Oracle keypair file, outside the repository. Tokenization is unavailable without it. */
+  SOLANA_TRUST_ORACLE_KEYPAIR_PATH: optional(z.string()),
+  /** Public address of this API; token metadata links point here. */
+  API_PUBLIC_URL: optional(z.url({ protocol: /^https?$/ })),
   /** S3 API endpoint of the evidence storage; omit for AWS S3. */
   S3_ENDPOINT: z.url({ protocol: /^https?$/ }).optional(),
   S3_REGION: z.string().min(1).default("us-east-1"),
@@ -34,6 +52,8 @@ export type Config = z.infer<typeof configSchema> & {
   chainId: "solana:devnet";
   /** Website that serves public passports (QR codes link here); same origin as sign-in. */
   publicWebUrl: string;
+  /** API_PUBLIC_URL, or this API's local address in development. */
+  apiPublicUrl: string;
 };
 
 /** Validates the environment. Throws one error listing every invalid setting, never their values. */
@@ -48,8 +68,16 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   if (config.NODE_ENV === "production" && local) {
     throw new Error("Invalid configuration:\n  AUTH_DOMAIN: must be a public domain in production");
   }
+  if (config.NODE_ENV === "production" && !config.API_PUBLIC_URL) {
+    throw new Error("Invalid configuration:\n  API_PUBLIC_URL: required in production");
+  }
   const authUri = `${local ? "http" : "https"}://${config.AUTH_DOMAIN}`;
-  return { ...config, authUri, chainId: "solana:devnet", publicWebUrl: authUri };
+  const localHost = config.API_HOST === "0.0.0.0" ? "127.0.0.1" : config.API_HOST;
+  const apiPublicUrl = (config.API_PUBLIC_URL ?? `http://${localHost}:${config.API_PORT}`).replace(
+    /\/$/,
+    "",
+  );
+  return { ...config, authUri, chainId: "solana:devnet", publicWebUrl: authUri, apiPublicUrl };
 }
 
 export function createStorageFromConfig(config: Config): Storage {

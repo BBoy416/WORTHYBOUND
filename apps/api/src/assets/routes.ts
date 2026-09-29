@@ -13,11 +13,18 @@ import { z } from "zod";
 import { fingerprint } from "../audit.js";
 import type { AuthContext } from "../auth/guard.js";
 import type { AppContext, RateLimit } from "../context.js";
+import { ApiError } from "../errors.js";
 import { type Actor, createAssetService } from "./service.js";
 import { ownerAssetSchema, ownerTrustSchema, toOwnerAsset, toOwnerTrust } from "./view.js";
 
 const errorSchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
-const errors = { 401: errorSchema, 404: errorSchema, 409: errorSchema, 422: errorSchema };
+const errors = {
+  401: errorSchema,
+  403: errorSchema,
+  404: errorSchema,
+  409: errorSchema,
+  422: errorSchema,
+};
 
 /** Per signed-in user; runs after authentication so the user is known. */
 const perUser = (limit: RateLimit) => ({
@@ -30,7 +37,7 @@ const perUser = (limit: RateLimit) => ({
 });
 
 export const assetRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx) => {
-  const { config, prisma, now, authenticate, rateLimits } = ctx;
+  const { config, prisma, now, authenticate, rateLimits, chainSync } = ctx;
   const service = createAssetService({
     prisma,
     now,
@@ -147,6 +154,26 @@ export const assetRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx) =
     },
     async (request) =>
       view(await service.changeStatus(request.params.wbId, request.body, actor(request))),
+  );
+
+  /** Accepted: registration runs in the background; poll the asset's `tokenizationStatus`. */
+  app.post(
+    "/assets/:wbId/tokenize",
+    {
+      ...write,
+      schema: {
+        params: assetParamsSchema,
+        response: { 202: ownerAssetSchema, 503: errorSchema, ...errors },
+      },
+    },
+    async (request, reply) => {
+      if (!chainSync) {
+        throw new ApiError(503, "tokenization_unavailable", "Tokenization is not available");
+      }
+      const asset = await service.tokenize(request.params.wbId, actor(request));
+      chainSync.kick();
+      return reply.code(202).send(view(asset));
+    },
   );
 
   app.post(

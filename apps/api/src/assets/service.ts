@@ -16,6 +16,7 @@ import {
   missingPublishFields,
   REQUEST_CANCELLING_ASSET_STATUSES,
 } from "@worthybound/shared";
+import { chainAddresses } from "@worthybound/solana";
 import type {
   AssetConditionRequest,
   AssetStatusRequest,
@@ -23,6 +24,7 @@ import type {
   UpdateDraftAssetInput,
 } from "@worthybound/validation";
 import { type RequestFingerprint, writeAudit } from "../audit.js";
+import { registerJobKey, TOKENIZABLE_STATUSES } from "../chain/sync.js";
 import { ApiError, fromDomainError, notFound } from "../errors.js";
 import { recordTrust } from "../trust/record.js";
 import { closeRequestsAsSystem } from "../verification/requests.js";
@@ -497,6 +499,73 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
           actor.fp,
         );
         await recordTrust(tx, asset.id, at);
+        return tx.asset.findUniqueOrThrow({ where: { id: asset.id } });
+      });
+    },
+
+    /**
+     * Queues registration on-chain: a frozen token minted to the owner's wallet (ADR 0002,
+     * ADR 0016). Needs a published asset and a verified identity (ADR 0004). Repeating the
+     * request while pending changes nothing; after a failure it retries.
+     */
+    async tokenize(wbId: string, actor: Actor): Promise<Asset> {
+      return prisma.$transaction(async (tx) => {
+        const asset = await lockOwned(tx, wbId, actor);
+        if (asset.tokenizationStatus === "TOKENIZED") {
+          throw new ApiError(409, "already_tokenized", "This asset is already tokenized");
+        }
+        if (asset.tokenizationStatus === "PENDING") return asset;
+        if (asset.publishedAt === null || !TOKENIZABLE_STATUSES.includes(asset.status)) {
+          throw new ApiError(
+            409,
+            "not_tokenizable",
+            "Only published assets that are active, verified or awaiting reverification can be tokenized",
+          );
+        }
+        const owner = await tx.user.findUniqueOrThrow({
+          where: { id: actor.userId },
+          select: { identityStatus: true },
+        });
+        if (owner.identityStatus !== "VERIFIED") {
+          throw new ApiError(
+            403,
+            "identity_verification_required",
+            "Verify your identity before tokenizing an asset",
+          );
+        }
+        const { record, coreAsset } = await chainAddresses(asset.wbId);
+        const at = now();
+        await tx.asset.update({
+          where: { id: asset.id },
+          data: {
+            tokenizationStatus: "PENDING",
+            chainRecordAddress: record,
+            chainAssetAddress: coreAsset,
+            updatedAt: at,
+          },
+        });
+        await tx.chainTransaction.upsert({
+          where: { idempotencyKey: registerJobKey(asset.id) },
+          create: {
+            idempotencyKey: registerJobKey(asset.id),
+            kind: "REGISTER_ASSET",
+            cluster: "DEVNET",
+            entityType: "ASSET",
+            entityId: asset.id,
+          },
+          update: { status: "PENDING", attempts: 0, lastError: null },
+        });
+        await writeAudit(
+          tx,
+          {
+            actorId: actor.userId,
+            action: "asset.tokenization_requested",
+            targetType: "asset",
+            targetId: asset.wbId,
+            metadata: { retry: asset.tokenizationStatus === "FAILED" },
+          },
+          actor.fp,
+        );
         return tx.asset.findUniqueOrThrow({ where: { id: asset.id } });
       });
     },

@@ -25,7 +25,10 @@ export const ownerAssetSchema = z.object({
   condition: z.enum(ITEM_CONDITIONS).nullable(),
   status: z.enum(ASSET_STATUSES),
   tokenizationStatus: z.enum(TOKENIZATION_STATUSES),
+  /** Metaplex Core token, once tokenization has been requested. */
   chainAssetAddress: z.string().nullable(),
+  /** On-chain WorthyBound record with status and Trust Score. */
+  chainRecordAddress: z.string().nullable(),
   verificationLevel: z.enum(VERIFICATION_LEVELS),
   /** From the latest Trust Score snapshot; 0 until the first one. */
   trustScore: z.int(),
@@ -54,6 +57,7 @@ export function toOwnerAsset(asset: Asset, publicWebUrl: string): OwnerAsset {
     status: asset.status,
     tokenizationStatus: asset.tokenizationStatus,
     chainAssetAddress: asset.chainAssetAddress,
+    chainRecordAddress: asset.chainRecordAddress,
     verificationLevel: asset.verificationLevel,
     trustScore: asset.currentTrustScore,
     publishedAt: asset.publishedAt?.toISOString() ?? null,

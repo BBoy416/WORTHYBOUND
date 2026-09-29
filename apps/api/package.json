@@ -22,6 +22,7 @@
     "@solana/wallet-standard-util": "^1.1.4",
     "@worthybound/database": "workspace:*",
     "@worthybound/shared": "workspace:*",
+    "@worthybound/solana": "workspace:*",
     "@worthybound/storage": "workspace:*",
     "@worthybound/trust-engine": "workspace:*",
     "@worthybound/validation": "workspace:*",
