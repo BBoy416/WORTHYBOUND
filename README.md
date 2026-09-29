@@ -129,4 +129,7 @@ pnpm kyc:record <wallet address> <provider> <reference> [VERIFIED|REJECTED|EXPIR
 - [0010 Evidence Vault](docs/adr/0010-evidence-vault.md)
 - [0011 Verifier system](docs/adr/0011-verifier-system.md)
 - [0012 Verification requests and signed attestations](docs/adr/0012-verification.md)
+- [0013 Automated checks and guided capture](docs/adr/0013-automated-checks.md) (proposed)
+- [0014 Checks before buying, and escrowed transfers](docs/adr/0014-transfer-checks-and-escrow.md)
+  (proposed)
 - [0015 Trust Score and verified status](docs/adr/0015-trust-score-and-verified-status.md)

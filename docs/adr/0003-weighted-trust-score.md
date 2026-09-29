@@ -1,6 +1,6 @@
 # ADR 0003: Weighted Trust Score
 
-- Status: Accepted
+- Status: Accepted; amendment proposed in ADR 0013
 - Date: 2026-09-28
 
 ## Context

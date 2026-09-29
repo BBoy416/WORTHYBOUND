@@ -1,6 +1,7 @@
 # ADR 0002: Controlled transfer of asset tokens
 
-- Status: Accepted (mechanism to be confirmed by the Phase 10 spike)
+- Status: Accepted (mechanism to be confirmed by the Phase 10 spike); amendment proposed in
+  ADR 0014
 - Date: 2026-09-28
 
 ## Context
