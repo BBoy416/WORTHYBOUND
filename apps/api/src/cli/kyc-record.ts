@@ -1,6 +1,7 @@
 import { isAddress } from "@solana/addresses";
 import { createPrismaClient, type IdentityStatus } from "@worthybound/database";
 import { writeAudit } from "../audit.js";
+import { releaseVerifierRequests } from "../verification/requests.js";
 import { loadLocalEnv } from "../env.js";
 
 export const KYC_RECORD_STATUSES = ["VERIFIED", "REJECTED", "EXPIRED"] as const;
@@ -59,6 +60,13 @@ export async function recordKyc(
       },
       null,
     );
+    if (input.status !== "VERIFIED") {
+      await tx.$queryRaw`SELECT 1 FROM "verifiers" WHERE "userId" = ${user.id}::uuid FOR UPDATE`;
+      const verifier = await tx.verifier.findUnique({ where: { userId: user.id } });
+      if (verifier) {
+        await releaseVerifierRequests(tx, verifier.id, "verifier_identity_not_verified", at);
+      }
+    }
     return { fromStatus: user.identityStatus, status: input.status };
   });
 }

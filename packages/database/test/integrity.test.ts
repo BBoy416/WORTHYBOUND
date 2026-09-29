@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -54,6 +54,26 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
       data: { wbId: wbId(), category, ownerId: ownerId ?? (await user()).id },
     });
 
+  /** A published asset, which accepts attestations. */
+  const activeAsset = async (category: AssetCategory = "LUXURY_WATCH", ownerId?: string) =>
+    db.prisma.asset.create({
+      data: {
+        wbId: wbId(),
+        category,
+        ownerId: ownerId ?? (await user()).id,
+        status: "ACTIVE",
+        publishedAt: new Date(),
+      },
+    });
+
+  const admin = async () => {
+    const [account, granter] = [await user(), await user()];
+    await db.prisma.roleAssignment.create({
+      data: { userId: account.id, role: "ADMIN", grantedById: granter.id },
+    });
+    return account;
+  };
+
   const verifier = async (
     options: { status?: VerifierStatus; categories?: AssetCategory[] } = {},
   ) => {
@@ -87,6 +107,13 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
     return { ...record, admin };
   };
 
+  const requirements = {
+    requiredClaims: ["AUTHENTICATION", "CONDITION"],
+    requiredEvidence: [{ type: "PHOTO", minCount: 1 }],
+    allowedMethods: ["IN_PERSON"],
+  };
+
+  /** Published versions are created by one admin and published by another. */
   const templateVersion = async (
     category: AssetCategory = "LUXURY_WATCH",
     status: TemplateVersionStatus = "PUBLISHED",
@@ -94,38 +121,80 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
     const template = await db.prisma.verificationTemplate.create({
       data: { code: `tpl-${randomUUID()}`, category, name: "Test template" },
     });
+    const [creator, publisher] = [await user(), await user()];
     return db.prisma.verificationTemplateVersion.create({
       data: {
         templateId: template.id,
         version: 1,
         status,
-        requiredClaims: ["AUTHENTICATION"],
-        requiredEvidence: ["PHOTO"],
-        allowedMethods: ["IN_PERSON"],
-        ...(status === "DRAFT" ? {} : { publishedAt: new Date() }),
+        ...requirements,
+        createdById: creator.id,
+        ...(status === "DRAFT" ? {} : { publishedAt: new Date(), publishedById: publisher.id }),
       },
     });
   };
 
-  const attestationData = (assetId: string, verifierId: string, templateVersionId: string) => ({
-    assetId,
-    verifierId,
-    templateVersionId,
+  /** A verification request for the asset, assigned to the verifier. */
+  const assign = async (
+    a: { id: string; ownerId: string },
+    verifierId: string,
+    templateVersionId: string,
+  ) =>
+    db.prisma.verificationRequest.create({
+      data: {
+        assetId: a.id,
+        requesterId: a.ownerId,
+        templateVersionId,
+        status: "ASSIGNED",
+        assignedVerifierId: verifierId,
+        assignedAt: new Date(),
+        expiresAt: new Date(Date.now() + 86_400_000),
+      },
+    });
+
+  const signed = () => {
+    const signedMessage = `WorthyBound attestation (wb-attestation-v1)\nNonce: ${randomUUID()}`;
+    return {
+      signedMessage,
+      signedPayloadHash: createHash("sha256").update(signedMessage, "utf8").digest("hex"),
+    };
+  };
+
+  const attestationData = (request: {
+    id: string;
+    assetId: string;
+    assignedVerifierId: string | null;
+    templateVersionId: string;
+  }) => ({
+    assetId: request.assetId,
+    verifierId: request.assignedVerifierId as string,
+    verificationRequestId: request.id,
+    templateVersionId: request.templateVersionId,
     claimType: "AUTHENTICATION" as const,
     result: "CONFIRMED" as const,
     method: "IN_PERSON" as const,
     assuranceLevel: "HIGH" as const,
     nonce: randomUUID(),
-    signedPayloadHash: randomHex64(),
+    ...signed(),
     signature: randomBytes(64).toString("base64url"),
     issuedAt: new Date(),
   });
 
+  /** An asset, an approved verifier, a published template and a request assigned to the verifier. */
+  const assigned = async (
+    options: { category?: AssetCategory; verifierCategories?: AssetCategory[] } = {},
+  ) => {
+    const category = options.category ?? "LUXURY_WATCH";
+    const a = await activeAsset(category);
+    const v = await verifier({ categories: options.verifierCategories ?? [category] });
+    const tv = await templateVersion(category);
+    const request = await assign(a, v.id, tv.id);
+    return { a, v, tv, request };
+  };
+
   const attestation = async () => {
-    const a = await asset();
-    const v = await verifier();
-    const tv = await templateVersion();
-    return db.prisma.attestation.create({ data: attestationData(a.id, v.id, tv.id) });
+    const { request } = await assigned();
+    return db.prisma.attestation.create({ data: attestationData(request) });
   };
 
   const expectDbError = async (promise: Promise<unknown>, code: string) => {
@@ -171,6 +240,7 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
       "asset_status_events",
       "verifier_status_events",
       "verifier_category_permission_events",
+      "verification_request_status_events",
       "attestation_status_events",
       "attestation_evidence",
       "evidence_commitments",
@@ -223,6 +293,9 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
       });
       await db.prisma.attestationStatusEvent.create({
         data: { attestationId: att.id, toStatus: "ACTIVE" },
+      });
+      await db.prisma.verificationRequestStatusEvent.create({
+        data: { requestId: att.verificationRequestId, toStatus: "ASSIGNED", verifierId: v.id },
       });
       await db.prisma.trustScoreSnapshot.create({
         data: {
@@ -501,13 +574,10 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
 
     it("rejects a reused attestation nonce for the same verifier", async () => {
       const att = await attestation();
-      const a = await asset();
+      const request = await assign(await activeAsset(), att.verifierId, att.templateVersionId);
       await expect(
         db.prisma.attestation.create({
-          data: {
-            ...attestationData(a.id, att.verifierId, att.templateVersionId),
-            nonce: att.nonce,
-          },
+          data: { ...attestationData(request), nonce: att.nonce },
         }),
       ).rejects.toMatchObject({ code: "P2002" });
     });
@@ -566,64 +636,172 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
     it.each(["APPLIED", "UNDER_REVIEW", "SUSPENDED", "REVOKED"] as const)(
       "rejects attestations from a %s verifier",
       async (status) => {
-        const [a, v, tv] = [await asset(), await verifier({ status }), await templateVersion()];
+        const { v, request } = await assigned();
+        await db.prisma.verifier.update({ where: { id: v.id }, data: { status } });
         await expectDbError(
-          db.prisma.attestation.create({ data: attestationData(a.id, v.id, tv.id) }),
+          db.prisma.attestation.create({ data: attestationData(request) }),
           DatabaseErrorCode.AUTHORITY,
         );
       },
     );
 
     it("rejects attestations from a verifier whose identity is no longer verified", async () => {
-      const [a, v, tv] = [await asset(), await verifier(), await templateVersion()];
+      const { v, request } = await assigned();
       await db.prisma.user.update({
         where: { id: v.userId },
         data: { identityStatus: "EXPIRED" },
       });
       await expectDbError(
-        db.prisma.attestation.create({ data: attestationData(a.id, v.id, tv.id) }),
+        db.prisma.attestation.create({ data: attestationData(request) }),
         DatabaseErrorCode.AUTHORITY,
       );
     });
 
-    it("rejects attestations outside the verifier's permitted categories", async () => {
-      const a = await asset("FINE_ART");
-      const v = await verifier({ categories: ["LUXURY_WATCH"] });
-      const tv = await templateVersion("FINE_ART");
+    it("rejects attestations once the verifier's permission for the category is revoked", async () => {
+      const { v, request } = await assigned({ category: "FINE_ART" });
+      await db.prisma.verifierCategoryPermission.updateMany({
+        where: { verifierId: v.id, category: "FINE_ART" },
+        data: { status: "REVOKED", revokedAt: new Date() },
+      });
       await expectDbError(
-        db.prisma.attestation.create({ data: attestationData(a.id, v.id, tv.id) }),
+        db.prisma.attestation.create({ data: attestationData(request) }),
         DatabaseErrorCode.AUTHORITY,
       );
     });
 
-    it("rejects attestations on the verifier's own asset", async () => {
-      const v = await verifier();
-      const a = await asset("LUXURY_WATCH", v.userId);
-      const tv = await templateVersion();
+    it.each(["REPORTED_STOLEN", "REPORTED_LOST", "DISPUTED", "REVOKED"] as const)(
+      "rejects attestations on a %s asset",
+      async (status) => {
+        const { a, request } = await assigned();
+        await db.prisma.asset.update({ where: { id: a.id }, data: { status } });
+        await expectDbError(
+          db.prisma.attestation.create({ data: attestationData(request) }),
+          DatabaseErrorCode.AUTHORITY,
+        );
+      },
+    );
+
+    it("rejects attestations against a template version retired after assignment", async () => {
+      const { tv, request } = await assigned();
+      await db.prisma.verificationTemplateVersion.update({
+        where: { id: tv.id },
+        data: { status: "RETIRED" },
+      });
       await expectDbError(
-        db.prisma.attestation.create({ data: attestationData(a.id, v.id, tv.id) }),
+        db.prisma.attestation.create({ data: attestationData(request) }),
         DatabaseErrorCode.AUTHORITY,
       );
     });
 
-    it("rejects attestations against an unpublished template version", async () => {
-      const [a, v, tv] = [
-        await asset(),
-        await verifier(),
-        await templateVersion("LUXURY_WATCH", "DRAFT"),
-      ];
+    it.each([
+      ["a claim the template does not require", { claimType: "APPRAISAL" as const }],
+      ["a method the template does not allow", { method: "REMOTE" as const }],
+    ])("rejects attestations with %s", async (_label, change) => {
+      const { request } = await assigned();
       await expectDbError(
-        db.prisma.attestation.create({ data: attestationData(a.id, v.id, tv.id) }),
+        db.prisma.attestation.create({ data: { ...attestationData(request), ...change } }),
         DatabaseErrorCode.AUTHORITY,
       );
     });
 
-    it("rejects attestations whose template category differs from the asset", async () => {
-      const a = await asset("LUXURY_WATCH");
-      const v = await verifier({ categories: ["LUXURY_WATCH", "JEWELRY"] });
-      const tv = await templateVersion("JEWELRY");
+    it("requires a request assigned to the attesting verifier", async () => {
+      const { request, tv } = await assigned();
+      const other = await verifier();
       await expectDbError(
-        db.prisma.attestation.create({ data: attestationData(a.id, v.id, tv.id) }),
+        db.prisma.attestation.create({
+          data: { ...attestationData(request), verifierId: other.id },
+        }),
+        DatabaseErrorCode.AUTHORITY,
+      );
+      const otherAsset = await activeAsset();
+      await expectDbError(
+        db.prisma.attestation.create({
+          data: { ...attestationData(request), assetId: otherAsset.id },
+        }),
+        DatabaseErrorCode.AUTHORITY,
+      );
+      const open = await db.prisma.verificationRequest.create({
+        data: {
+          assetId: otherAsset.id,
+          requesterId: otherAsset.ownerId,
+          templateVersionId: tv.id,
+          expiresAt: new Date(Date.now() + 86_400_000),
+        },
+      });
+      await expectDbError(
+        db.prisma.attestation.create({
+          data: {
+            ...attestationData({ ...open, assignedVerifierId: request.assignedVerifierId }),
+          },
+        }),
+        DatabaseErrorCode.AUTHORITY,
+      );
+    });
+
+    it("requires the attestation to name its request", async () => {
+      const { request } = await assigned();
+      const data: Partial<Prisma.AttestationUncheckedCreateInput> = attestationData(request);
+      delete data.verificationRequestId;
+      await expect(
+        db.prisma.attestation.create({ data: data as Prisma.AttestationUncheckedCreateInput }),
+      ).rejects.toBeDefined();
+    });
+
+    it("stores the SHA-256 of the exact signed message", async () => {
+      const { request } = await assigned();
+      await expectDbError(
+        db.prisma.attestation.create({
+          data: { ...attestationData(request), signedPayloadHash: randomHex64() },
+        }),
+        CHECK_VIOLATION,
+      );
+    });
+
+    it("keeps one current attestation per verifier, asset and claim", async () => {
+      const { request } = await assigned();
+      const first = await db.prisma.attestation.create({ data: attestationData(request) });
+      await expect(
+        db.prisma.attestation.create({ data: attestationData(request) }),
+      ).rejects.toBeDefined();
+      await db.prisma.attestation.update({
+        where: { id: first.id },
+        data: { status: "SUPERSEDED" },
+      });
+      await expect(
+        db.prisma.attestation.create({
+          data: { ...attestationData(request), supersedesId: first.id },
+        }),
+      ).resolves.toMatchObject({ status: "ACTIVE", supersedesId: first.id });
+    });
+
+    it("only supersedes the same verifier's superseded attestation of the same claim", async () => {
+      const { request } = await assigned();
+      const active = await db.prisma.attestation.create({ data: attestationData(request) });
+      await expectDbError(
+        db.prisma.attestation.create({
+          data: {
+            ...attestationData(request),
+            claimType: "CONDITION",
+            conditionGrade: "GOOD",
+            supersedesId: active.id,
+          },
+        }),
+        DatabaseErrorCode.AUTHORITY,
+      );
+      const other = await attestation();
+      await db.prisma.attestation.update({
+        where: { id: other.id },
+        data: { status: "SUPERSEDED" },
+      });
+      await expectDbError(
+        db.prisma.attestation.create({
+          data: {
+            ...attestationData(request),
+            claimType: "CONDITION",
+            conditionGrade: "GOOD",
+            supersedesId: other.id,
+          },
+        }),
         DatabaseErrorCode.AUTHORITY,
       );
     });
@@ -665,13 +843,19 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
       );
     });
 
+    it("rejects changes to the signed message", async () => {
+      const att = await attestation();
+      await expectDbError(
+        db.prisma.attestation.update({ where: { id: att.id }, data: signed() }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+    });
+
     it("rejects changes to the assessed condition grade", async () => {
-      const a = await asset();
-      const v = await verifier();
-      const tv = await templateVersion();
+      const { request } = await assigned();
       const att = await db.prisma.attestation.create({
         data: {
-          ...attestationData(a.id, v.id, tv.id),
+          ...attestationData(request),
           claimType: "CONDITION",
           conditionGrade: "VERY_GOOD",
         },
@@ -734,14 +918,296 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
     });
   });
 
+  describe("verification templates", () => {
+    const draft = async (
+      overrides: Partial<Prisma.VerificationTemplateVersionUncheckedCreateInput> = {},
+    ) => {
+      const template = await db.prisma.verificationTemplate.create({
+        data: { code: `tpl-${randomUUID()}`, category: "LUXURY_WATCH", name: "Draft" },
+      });
+      return db.prisma.verificationTemplateVersion.create({
+        data: {
+          templateId: template.id,
+          version: 1,
+          ...requirements,
+          createdById: (await user()).id,
+          ...overrides,
+        },
+      });
+    };
+
+    const publish = async (id: string, publishedById: string) =>
+      db.prisma.verificationTemplateVersion.update({
+        where: { id },
+        data: { status: "PUBLISHED", publishedAt: new Date(), publishedById },
+      });
+
+    it("is published by an admin other than its creator", async () => {
+      const tv = await draft();
+      await expectDbError(publish(tv.id, tv.createdById as string), CHECK_VIOLATION);
+      await expectDbError(
+        db.prisma.verificationTemplateVersion.update({
+          where: { id: tv.id },
+          data: { status: "PUBLISHED", publishedAt: new Date() },
+        }),
+        CHECK_VIOLATION,
+      );
+      await expect(publish(tv.id, (await user()).id)).resolves.toMatchObject({
+        status: "PUBLISHED",
+      });
+    });
+
+    it("never changes the publisher of a published version", async () => {
+      const tv = await templateVersion();
+      await expectDbError(
+        db.prisma.verificationTemplateVersion.update({
+          where: { id: tv.id },
+          data: { publishedById: (await user()).id },
+        }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+    });
+
+    it("allows one published version per template", async () => {
+      const tv = await templateVersion();
+      const next = await db.prisma.verificationTemplateVersion.create({
+        data: {
+          templateId: tv.templateId,
+          version: 2,
+          ...requirements,
+          createdById: (await user()).id,
+        },
+      });
+      await expect(publish(next.id, (await user()).id)).rejects.toBeDefined();
+      await db.prisma.verificationTemplateVersion.update({
+        where: { id: tv.id },
+        data: { status: "RETIRED" },
+      });
+      await expect(publish(next.id, (await user()).id)).resolves.toMatchObject({ version: 2 });
+    });
+
+    it.each([
+      ["no claims", { requiredClaims: [] }],
+      ["an unknown claim", { requiredClaims: ["VERIFIED"] }],
+      ["duplicate claims", { requiredClaims: ["CONDITION", "CONDITION"] }],
+      ["no methods", { allowedMethods: [] }],
+      ["an unknown method", { allowedMethods: ["TELEPATHY"] }],
+      ["evidence as plain types", { requiredEvidence: ["PHOTO"] }],
+      ["an unknown evidence type", { requiredEvidence: [{ type: "SELFIE", minCount: 1 }] }],
+      ["a zero evidence count", { requiredEvidence: [{ type: "PHOTO", minCount: 0 }] }],
+      ["a fractional evidence count", { requiredEvidence: [{ type: "PHOTO", minCount: 1.5 }] }],
+      [
+        "an extra evidence field",
+        { requiredEvidence: [{ type: "PHOTO", minCount: 1, optional: true }] },
+      ],
+      [
+        "duplicate evidence types",
+        {
+          requiredEvidence: [
+            { type: "PHOTO", minCount: 1 },
+            { type: "PHOTO", minCount: 2 },
+          ],
+        },
+      ],
+    ])("publishes no version with %s", async (_label, change) => {
+      const tv = await draft(change);
+      await expectDbError(publish(tv.id, (await user()).id), DatabaseErrorCode.AUTHORITY);
+    });
+
+    it("requires 1-5 verifiers per claim", async () => {
+      await expectDbError(draft({ minVerifiers: 6 }), CHECK_VIOLATION);
+    });
+
+    it("never changes a template's code or category", async () => {
+      const tv = await templateVersion();
+      await expectDbError(
+        db.prisma.verificationTemplate.update({
+          where: { id: tv.templateId },
+          data: { category: "FINE_ART" },
+        }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      await expectDbError(
+        db.prisma.verificationTemplate.update({
+          where: { id: tv.templateId },
+          data: { code: "renamed" },
+        }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      await expect(
+        db.prisma.verificationTemplate.update({
+          where: { id: tv.templateId },
+          data: { name: "Renamed" },
+        }),
+      ).resolves.toMatchObject({ name: "Renamed" });
+    });
+  });
+
+  describe("verification requests", () => {
+    const open = async (a: { id: string; ownerId: string }, templateVersionId: string) =>
+      db.prisma.verificationRequest.create({
+        data: {
+          assetId: a.id,
+          requesterId: a.ownerId,
+          templateVersionId,
+          expiresAt: new Date(Date.now() + 86_400_000),
+        },
+      });
+
+    it("is opened only by the asset owner", async () => {
+      const [a, tv] = [await activeAsset(), await templateVersion()];
+      await expectDbError(
+        db.prisma.verificationRequest.create({
+          data: {
+            assetId: a.id,
+            requesterId: (await user()).id,
+            templateVersionId: tv.id,
+            expiresAt: new Date(Date.now() + 86_400_000),
+          },
+        }),
+        DatabaseErrorCode.AUTHORITY,
+      );
+    });
+
+    it("requires a published template version for the asset's category", async () => {
+      const a = await activeAsset();
+      await expectDbError(
+        open(a, (await templateVersion("LUXURY_WATCH", "DRAFT")).id),
+        DatabaseErrorCode.AUTHORITY,
+      );
+      await expectDbError(
+        open(a, (await templateVersion("JEWELRY")).id),
+        DatabaseErrorCode.AUTHORITY,
+      );
+    });
+
+    it("allows one open request per asset and template version", async () => {
+      const [a, tv] = [await activeAsset(), await templateVersion()];
+      const first = await open(a, tv.id);
+      await expect(open(a, tv.id)).rejects.toBeDefined();
+      await db.prisma.verificationRequest.update({
+        where: { id: first.id },
+        data: { status: "CANCELLED", closedReason: "owner" },
+      });
+      await expect(open(a, tv.id)).resolves.toMatchObject({ status: "OPEN" });
+    });
+
+    it.each([
+      ["an open request with a verifier", { assignedAt: new Date() }],
+      ["an assigned request without a verifier", { status: "ASSIGNED" as const }],
+      ["a completed request without a completion date", { status: "COMPLETED" as const }],
+      ["a closing reason on an open request", { closedReason: "x" }],
+    ])("rejects %s", async (_label, change) => {
+      const [a, tv] = [await activeAsset(), await templateVersion()];
+      await expectDbError(
+        db.prisma.verificationRequest.create({
+          data: {
+            assetId: a.id,
+            requesterId: a.ownerId,
+            templateVersionId: tv.id,
+            expiresAt: new Date(Date.now() + 86_400_000),
+            ...change,
+          },
+        }),
+        CHECK_VIOLATION,
+      );
+    });
+
+    it.each(["SUSPENDED", "REVOKED"] as const)(
+      "is not assigned to a %s verifier",
+      async (status) => {
+        const [a, tv] = [await activeAsset(), await templateVersion()];
+        const v = await verifier({ status });
+        await expectDbError(assign(a, v.id, tv.id), DatabaseErrorCode.AUTHORITY);
+      },
+    );
+
+    it("is not assigned to a verifier without a verified identity or category permission", async () => {
+      const [a, tv] = [await activeAsset(), await templateVersion()];
+      const expired = await verifier();
+      await db.prisma.user.update({
+        where: { id: expired.userId },
+        data: { identityStatus: "EXPIRED" },
+      });
+      await expectDbError(assign(a, expired.id, tv.id), DatabaseErrorCode.AUTHORITY);
+      const jeweller = await verifier({ categories: ["JEWELRY"] });
+      await expectDbError(assign(a, jeweller.id, tv.id), DatabaseErrorCode.AUTHORITY);
+    });
+
+    it("is not assigned to a verifier who owns the asset", async () => {
+      const v = await verifier();
+      const a = await activeAsset("LUXURY_WATCH", v.userId);
+      await expectDbError(
+        assign(a, v.id, (await templateVersion()).id),
+        DatabaseErrorCode.AUTHORITY,
+      );
+    });
+
+    it("checks the verifier when a request is taken, not afterwards", async () => {
+      const [a, tv] = [await activeAsset(), await templateVersion()];
+      const request = await open(a, tv.id);
+      const v = await verifier();
+      await db.prisma.verificationRequest.update({
+        where: { id: request.id },
+        data: { status: "ASSIGNED", assignedVerifierId: v.id, assignedAt: new Date() },
+      });
+      await db.prisma.verifier.update({ where: { id: v.id }, data: { status: "SUSPENDED" } });
+      await expect(
+        db.prisma.verificationRequest.update({
+          where: { id: request.id },
+          data: { status: "OPEN", assignedVerifierId: null, assignedAt: null },
+        }),
+      ).resolves.toMatchObject({ status: "OPEN" });
+      await expectDbError(
+        db.prisma.verificationRequest.update({
+          where: { id: request.id },
+          data: { status: "ASSIGNED", assignedVerifierId: v.id, assignedAt: new Date() },
+        }),
+        DatabaseErrorCode.AUTHORITY,
+      );
+    });
+
+    it("never deletes a request, never moves it and keeps finished requests final", async () => {
+      const { request } = await assigned();
+      await expectDbError(
+        db.prisma.verificationRequest.delete({ where: { id: request.id } }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      await expectDbError(
+        db.prisma.verificationRequest.update({
+          where: { id: request.id },
+          data: { assetId: (await activeAsset()).id },
+        }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      await expectDbError(
+        db.prisma.verificationRequest.update({
+          where: { id: request.id },
+          data: { expiresAt: new Date(Date.now() + 10 * 86_400_000) },
+        }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      await db.prisma.verificationRequest.update({
+        where: { id: request.id },
+        data: { status: "COMPLETED", completedAt: new Date() },
+      });
+      await expectDbError(
+        db.prisma.verificationRequest.update({
+          where: { id: request.id },
+          data: { status: "CANCELLED", completedAt: null },
+        }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+    });
+  });
+
   // ─── Check constraints ──────────────────────────────────────────────────────
 
   describe("check constraints", () => {
     it("requires a condition grade on confirmed CONDITION claims only", async () => {
-      const a = await asset();
-      const v = await verifier();
-      const tv = await templateVersion();
-      const data = () => attestationData(a.id, v.id, tv.id);
+      const { request } = await assigned();
+      const { request: second } = await assigned();
+      const data = () => attestationData(request);
       await expectDbError(
         db.prisma.attestation.create({ data: { ...data(), claimType: "CONDITION" } }),
         CHECK_VIOLATION,
@@ -757,7 +1223,7 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
       ).resolves.toMatchObject({ conditionGrade: "FAIR" });
       await expect(
         db.prisma.attestation.create({
-          data: { ...data(), claimType: "CONDITION", result: "INCONCLUSIVE" },
+          data: { ...attestationData(second), claimType: "CONDITION", result: "INCONCLUSIVE" },
         }),
       ).resolves.toMatchObject({ conditionGrade: null });
     });
@@ -1117,13 +1583,17 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
         db.prisma.evidence.delete({ where: { id: e.id } }),
         DatabaseErrorCode.IMMUTABLE,
       );
-      const reviewer = await user();
+      const reviewer = await admin();
       await db.prisma.evidence.update({
         where: { id: e.id },
         data: { reviewStatus: "ACCEPTED", reviewedById: reviewer.id, reviewedAt: new Date() },
       });
       await expectDbError(
         db.prisma.evidence.update({ where: { id: e.id }, data: { reviewStatus: "REJECTED" } }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      await expectDbError(
+        db.prisma.evidence.update({ where: { id: e.id }, data: { reviewReason: "changed" } }),
         DatabaseErrorCode.IMMUTABLE,
       );
     });
@@ -1342,6 +1812,134 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
         }),
         DatabaseErrorCode.IMMUTABLE,
       );
+    });
+  });
+
+  // ─── Verifier evidence ──────────────────────────────────────────────────────
+
+  describe("verifier evidence", () => {
+    const evidenceData = (assetId: string, uploaderId: string) => ({
+      assetId,
+      uploaderId,
+      type: "INSPECTION_REPORT" as const,
+      storageKey: `evidence/${randomUUID()}`,
+      sha256: randomHex64(),
+      mimeType: "application/pdf",
+      sizeBytes: 10,
+    });
+
+    it("comes from the verifier assigned to the request, for the request's asset", async () => {
+      const { a, v, request } = await assigned();
+      const verifierData = {
+        source: "VERIFIER" as const,
+        verificationRequestId: request.id,
+      };
+      await expect(
+        db.prisma.evidence.create({ data: { ...evidenceData(a.id, v.userId), ...verifierData } }),
+      ).resolves.toMatchObject({ source: "VERIFIER" });
+      await expectDbError(
+        db.prisma.evidence.create({
+          data: { ...evidenceData(a.id, (await user()).id), ...verifierData },
+        }),
+        DatabaseErrorCode.AUTHORITY,
+      );
+      await expectDbError(
+        db.prisma.evidence.create({
+          data: { ...evidenceData((await activeAsset()).id, v.userId), ...verifierData },
+        }),
+        DatabaseErrorCode.AUTHORITY,
+      );
+    });
+
+    it("marks evidence from a request as verifier evidence, and only that", async () => {
+      const { a, v, request } = await assigned();
+      await expectDbError(
+        db.prisma.evidence.create({
+          data: { ...evidenceData(a.id, v.userId), verificationRequestId: request.id },
+        }),
+        CHECK_VIOLATION,
+      );
+      await expectDbError(
+        db.prisma.evidence.create({
+          data: { ...evidenceData(a.id, v.userId), source: "VERIFIER" },
+        }),
+        CHECK_VIOLATION,
+      );
+    });
+
+    it("accepts uploads for a request only from its assigned verifier", async () => {
+      const { a, v, request } = await assigned();
+      const data = (uploaderId: string) => ({
+        assetId: a.id,
+        uploaderId,
+        type: "PHOTO" as const,
+        mimeType: "image/jpeg",
+        sizeBytes: 10,
+        sha256: randomHex64(),
+        visibility: "PRIVATE" as const,
+        stagingKey: `staging/${randomUUID()}`,
+        expiresAt: new Date(Date.now() + 60_000),
+        verificationRequestId: request.id,
+      });
+      await expect(
+        db.prisma.evidenceUpload.create({ data: data(v.userId) }),
+      ).resolves.toBeDefined();
+      await expectDbError(
+        db.prisma.evidenceUpload.create({ data: data(a.ownerId) }),
+        DatabaseErrorCode.AUTHORITY,
+      );
+    });
+
+    it("is reviewed by the assigned verifier or an admin, never the owner or anyone else", async () => {
+      const { a, v } = await assigned();
+      const review = async (reviewedById: string) => {
+        const e = await db.prisma.evidence.create({ data: evidenceData(a.id, a.ownerId) });
+        return db.prisma.evidence.update({
+          where: { id: e.id },
+          data: { reviewStatus: "ACCEPTED", reviewedById, reviewedAt: new Date() },
+        });
+      };
+      await expect(review(v.userId)).resolves.toMatchObject({ reviewStatus: "ACCEPTED" });
+      await expect(review((await admin()).id)).resolves.toMatchObject({ reviewStatus: "ACCEPTED" });
+      await expectDbError(review((await user()).id), DatabaseErrorCode.AUTHORITY);
+      await expectDbError(review((await verifier()).userId), DatabaseErrorCode.AUTHORITY);
+      await db.prisma.roleAssignment.create({
+        data: { userId: a.ownerId, role: "ADMIN", grantedById: (await user()).id },
+      });
+      await expectDbError(review(a.ownerId), DatabaseErrorCode.AUTHORITY);
+    });
+
+    it("stops the verifier reviewing once suspended", async () => {
+      const { a, v } = await assigned();
+      await db.prisma.verifier.update({ where: { id: v.id }, data: { status: "SUSPENDED" } });
+      const e = await db.prisma.evidence.create({ data: evidenceData(a.id, a.ownerId) });
+      await expectDbError(
+        db.prisma.evidence.update({
+          where: { id: e.id },
+          data: { reviewStatus: "ACCEPTED", reviewedById: v.userId, reviewedAt: new Date() },
+        }),
+        DatabaseErrorCode.AUTHORITY,
+      );
+    });
+
+    it("requires a reason to reject evidence", async () => {
+      const { a, v } = await assigned();
+      const e = await db.prisma.evidence.create({ data: evidenceData(a.id, a.ownerId) });
+      const rejected = {
+        reviewStatus: "REJECTED" as const,
+        reviewedById: v.userId,
+        reviewedAt: new Date(),
+      };
+      await expectDbError(
+        db.prisma.evidence.update({ where: { id: e.id }, data: rejected }),
+        CHECK_VIOLATION,
+      );
+      await expect(
+        db.prisma.evidence.update({
+          where: { id: e.id },
+          data: { ...rejected, reviewReason: "Serial not legible" },
+        }),
+      ).resolves.toMatchObject({ reviewStatus: "REJECTED" });
     });
   });
 });

@@ -14,6 +14,7 @@ import {
   canPublish,
   generateWbId,
   missingPublishFields,
+  REQUEST_CANCELLING_ASSET_STATUSES,
 } from "@worthybound/shared";
 import type {
   AssetConditionRequest,
@@ -23,6 +24,7 @@ import type {
 } from "@worthybound/validation";
 import { type RequestFingerprint, writeAudit } from "../audit.js";
 import { ApiError, fromDomainError, notFound } from "../errors.js";
+import { closeRequestsAsSystem } from "../verification/requests.js";
 import { serialFingerprint } from "./fingerprint.js";
 
 type Tx = Prisma.TransactionClient;
@@ -463,6 +465,15 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
           data: { status: input.toStatus, updatedAt: at },
         });
         await recordStatusChange(tx, asset, input.toStatus, actor, at, input.reason);
+        if (REQUEST_CANCELLING_ASSET_STATUSES.includes(input.toStatus)) {
+          await closeRequestsAsSystem(
+            tx,
+            { assetId: asset.id },
+            "CANCELLED",
+            "asset_unavailable",
+            at,
+          );
+        }
         await writeAudit(
           tx,
           {

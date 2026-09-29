@@ -11,6 +11,7 @@ import type {
   EvidenceType,
   EvidenceVisibility,
   ItemCondition,
+  ProofSource,
   ProvenanceEventType,
   ReviewStatus,
   SolanaCluster,
@@ -46,6 +47,7 @@ export interface PassportSource {
   evidence: readonly {
     id: string;
     type: EvidenceType;
+    source: ProofSource;
     visibility: EvidenceVisibility;
     reviewStatus: ReviewStatus;
     sha256: string;
@@ -125,6 +127,8 @@ export interface PublicPassport {
   publicEvidence: {
     evidenceId: string;
     type: EvidenceType;
+    /** Who added it: the owner, or the verifier assigned to a verification request. */
+    source: ProofSource;
     /** Hash of the original file, as sealed. The public copy has its metadata removed. */
     sha256: string;
     mimeType: string;
@@ -262,6 +266,7 @@ export function toPublicPassport(source: PassportSource): PublicPassport | null 
       .map((e) => ({
         evidenceId: e.id,
         type: e.type,
+        source: e.source,
         sha256: e.sha256,
         mimeType: e.mimeType,
         capturedAt: isoOrNull(e.capturedAt),

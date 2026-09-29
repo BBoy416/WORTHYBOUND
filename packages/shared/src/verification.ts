@@ -1,14 +1,17 @@
 import type {
   AssetCategory,
   AssetStatus,
+  AssuranceLevel,
   AttestationMethod,
   AttestationResult,
   AttestationStatus,
   ClaimType,
   EvidenceType,
   IdentityStatus,
+  ItemCondition,
   ReviewStatus,
   TemplateVersionStatus,
+  VerificationRequestStatus,
   VerifierStatus,
 } from "./enums.js";
 
@@ -88,6 +91,151 @@ export function attestationAuthorityViolations(
   }
   return violations;
 }
+
+// ─── Verification requests ────────────────────────────────────────────────────
+
+/** A request that is not taken up or completed within this time expires. */
+export const VERIFICATION_REQUEST_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+
+/** Requests that are still in progress; at most one per asset and template version. */
+export const OPEN_REQUEST_STATUSES: readonly VerificationRequestStatus[] = ["OPEN", "ASSIGNED"];
+
+/** Asset statuses in which open requests are cancelled: the asset cannot be verified any more. */
+export const REQUEST_CANCELLING_ASSET_STATUSES: readonly AssetStatus[] = [
+  "REPORTED_LOST",
+  "REPORTED_STOLEN",
+  "REVOKED",
+];
+
+export type RequestAssignmentViolation = Extract<
+  AttestationAuthorityViolation,
+  | "VERIFIER_NOT_APPROVED"
+  | "VERIFIER_IDENTITY_NOT_VERIFIED"
+  | "NO_CATEGORY_PERMISSION"
+  | "OWN_ASSET"
+  | "ASSET_NOT_ATTESTABLE"
+>;
+
+/**
+ * Every reason the verifier may not take this request; empty if allowed. The database enforces
+ * the same rules when a request is assigned.
+ */
+export function requestAssignmentViolations(
+  ctx: Pick<AttestationAuthorityContext, "verifier" | "asset">,
+): RequestAssignmentViolation[] {
+  const violations: RequestAssignmentViolation[] = [];
+  if (ctx.verifier.status !== "APPROVED") violations.push("VERIFIER_NOT_APPROVED");
+  if (ctx.verifier.identityStatus !== "VERIFIED") violations.push("VERIFIER_IDENTITY_NOT_VERIFIED");
+  if (!ctx.verifier.approvedCategories.includes(ctx.asset.category)) {
+    violations.push("NO_CATEGORY_PERMISSION");
+  }
+  if (ctx.verifier.userId === ctx.asset.ownerId) violations.push("OWN_ASSET");
+  if (!ATTESTABLE_ASSET_STATUSES.includes(ctx.asset.status))
+    violations.push("ASSET_NOT_ATTESTABLE");
+  return violations;
+}
+
+/**
+ * Evidence the assigned verifier may add. Receipts, ownership and manufacturer documents describe
+ * the owner's history and come from the owner; the verifier reviews them instead.
+ */
+export const VERIFIER_EVIDENCE_TYPES = [
+  "PHOTO",
+  "VIDEO",
+  "INSPECTION_REPORT",
+  "CONDITION_REPORT",
+  "APPRAISAL_DOCUMENT",
+  "CERTIFICATE",
+  "SERIAL_NUMBER",
+  "OTHER",
+] as const satisfies readonly EvidenceType[];
+export type VerifierEvidenceType = (typeof VERIFIER_EVIDENCE_TYPES)[number];
+
+// ─── Signed attestations ──────────────────────────────────────────────────────
+
+export const ATTESTATION_MESSAGE_VERSION = "wb-attestation-v1";
+
+export const ATTESTATION_STATEMENT =
+  "I attest to the claim below. Signing does not trigger a blockchain transaction or cost any fees.";
+
+/** How far `issuedAt` may be from the server's clock when the attestation is submitted. */
+export const ATTESTATION_CLOCK_TOLERANCE_MS = 10 * 60 * 1000;
+
+/** Everything a verifier's signature covers. */
+export interface AttestationMessageFields {
+  /** WorthyBound domain (`AUTH_DOMAIN`), so a signature cannot be replayed on another site. */
+  domain: string;
+  /** e.g. `solana:devnet`. */
+  chainId: string;
+  /** The verifier's wallet address, which signs the message. */
+  verifierAddress: string;
+  wbId: string;
+  category: AssetCategory;
+  templateVersionId: string;
+  verificationRequestId: string;
+  claimType: ClaimType;
+  result: AttestationResult;
+  conditionGrade: ItemCondition | null;
+  method: AttestationMethod;
+  assuranceLevel: AssuranceLevel;
+  issuedAt: Date;
+  expiresAt: Date | null;
+  supersedesId: string | null;
+  /** SHA-256 (hex) of the notes, which stay private; null without notes. */
+  notesSha256: string | null;
+  /** Evidence the attestation relies on, with each file's hash at signing time. */
+  evidence: readonly { evidenceId: string; sha256: string }[];
+  /** 16-32 random bytes as hex, single-use per verifier. */
+  nonce: string;
+}
+
+/**
+ * The exact text the verifier's wallet signs (`wb-attestation-v1`), one field per line so wallets
+ * show it readably. Evidence is sorted by ID, so the same attestation always gives the same text.
+ * Every value is an enum, ID, timestamp or hash; a line break in any value is refused.
+ */
+export function attestationMessage(fields: AttestationMessageFields): string {
+  const none = (value: string | null) => value ?? "none";
+  const evidence = [...fields.evidence].sort((a, b) =>
+    a.evidenceId < b.evidenceId ? -1 : a.evidenceId > b.evidenceId ? 1 : 0,
+  );
+  const lines = [
+    `WorthyBound attestation (${ATTESTATION_MESSAGE_VERSION})`,
+    ATTESTATION_STATEMENT,
+    "",
+    `Domain: ${fields.domain}`,
+    `Chain ID: ${fields.chainId}`,
+    `Verifier: ${fields.verifierAddress}`,
+    `Asset: ${fields.wbId}`,
+    `Category: ${fields.category}`,
+    `Template version: ${fields.templateVersionId}`,
+    `Verification request: ${fields.verificationRequestId}`,
+    `Claim: ${fields.claimType}`,
+    `Result: ${fields.result}`,
+    `Condition grade: ${none(fields.conditionGrade)}`,
+    `Method: ${fields.method}`,
+    `Assurance: ${fields.assuranceLevel}`,
+    `Issued at: ${fields.issuedAt.toISOString()}`,
+    `Expires at: ${none(fields.expiresAt?.toISOString() ?? null)}`,
+    `Supersedes: ${none(fields.supersedesId)}`,
+    `Notes SHA-256: ${none(fields.notesSha256)}`,
+    `Evidence count: ${evidence.length}`,
+    ...evidence.map((e) => `Evidence: ${e.evidenceId} ${e.sha256}`),
+    `Nonce: ${fields.nonce}`,
+  ];
+  if (lines.some((line) => /[\r\n]/.test(line))) {
+    throw new Error("attestation message fields must not contain line breaks");
+  }
+  return lines.join("\n");
+}
+
+/** SHA-256 (hex) of UTF-8 text, e.g. attestation notes. */
+export async function sha256Text(text: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// ─── Template evaluation ──────────────────────────────────────────────────────
 
 export interface AttestationFact {
   claimType: ClaimType;

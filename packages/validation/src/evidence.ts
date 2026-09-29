@@ -4,6 +4,7 @@ import {
   EVIDENCE_MIME_TYPES,
   EVIDENCE_TYPES,
   EVIDENCE_VISIBILITIES,
+  VERIFIER_EVIDENCE_TYPES,
 } from "@worthybound/shared";
 import { z } from "zod";
 import { dateTimeSchema, sha256Schema, text, uuidSchema, wbIdSchema } from "./common.js";
@@ -41,6 +42,26 @@ export const evidenceUploadSchema = z
     path: ["visibility"],
   });
 export type EvidenceUploadInput = z.infer<typeof evidenceUploadSchema>;
+
+/**
+ * Metadata sent by the verifier assigned to a verification request. Verifier evidence is always
+ * private; the owner decides whether a photo is published.
+ */
+export const verifierEvidenceUploadSchema = z
+  .strictObject({
+    type: z.enum(VERIFIER_EVIDENCE_TYPES),
+    sha256: sha256Schema,
+    mimeType: z.enum(EVIDENCE_MIME_TYPES),
+    sizeBytes: z.int().positive(),
+    originalFilename: fileNameSchema.optional(),
+    description: text(1000).optional(),
+    capturedAt: dateTimeSchema.optional(),
+  })
+  .refine((input) => input.sizeBytes <= EVIDENCE_MAX_BYTES[input.mimeType], {
+    message: "file is too large for its type",
+    path: ["sizeBytes"],
+  });
+export type VerifierEvidenceUploadInput = z.infer<typeof verifierEvidenceUploadSchema>;
 
 export const evidenceVisibilitySchema = z.strictObject({
   visibility: z.enum(EVIDENCE_VISIBILITIES),

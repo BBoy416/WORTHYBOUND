@@ -84,6 +84,8 @@ minute and public profiles to 120 per IP per minute.
   before Phase 8.
 - Verifiers adding and reviewing evidence needs a verifier assigned to the asset, so it comes with
   verification requests in Phase 8. The verifier counters and on-chain verifier registration
-  (`chainVerifierAddress`) are not used yet.
+  (`chainVerifierAddress`) are not used yet. Phase 8 adds requests, evidence review and signed
+  attestations; suspension or an expired identity releases the verifier's assigned requests
+  (ADR 0012).
 - An approved verifier cannot change their entity type, and a revoked verifier cannot apply again;
   correcting either needs admin tooling (later phase).

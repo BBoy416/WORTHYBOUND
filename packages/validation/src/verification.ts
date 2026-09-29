@@ -9,6 +9,8 @@ import {
   EVIDENCE_TYPES,
   ITEM_CONDITIONS,
   PERMISSION_STATUSES_REQUIRING_REASON,
+  REVIEW_STATUSES,
+  TEMPLATE_VERSION_STATUSES,
   VERIFIER_ENTITY_TYPES,
   VERIFIER_STATUSES,
   VERIFIER_STATUSES_REQUIRING_REASON,
@@ -23,7 +25,6 @@ import {
   text,
   uniqueArray,
   uuidSchema,
-  wbIdSchema,
 } from "./common.js";
 
 export const verifierApplicationSchema = z
@@ -107,55 +108,134 @@ export const templateRequirementsSchema = z.strictObject({
 });
 export type TemplateRequirementsInput = z.infer<typeof templateRequirementsSchema>;
 
+/** Body of `POST /admin/templates`. The code is a stable, readable identifier. */
+export const templateCreateSchema = z.strictObject({
+  code: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9-]{2,63}$/, "expected 3-64 lower-case letters, digits or '-'"),
+  category: z.enum(ASSET_CATEGORIES),
+  name: text(200),
+  description: text(2000).optional(),
+});
+export type TemplateCreateInput = z.infer<typeof templateCreateSchema>;
+
+/** Body of `POST /admin/template-versions/:versionId/status`. Drafts are created, not set. */
+export const templateVersionStatusSchema = z.strictObject({
+  status: z.enum(TEMPLATE_VERSION_STATUSES).exclude(["DRAFT"]),
+});
+export type TemplateVersionStatusInput = z.infer<typeof templateVersionStatusSchema>;
+
+export const templateParamsSchema = z.strictObject({ templateId: uuidSchema });
+
+export const templateVersionParamsSchema = z.strictObject({ versionId: uuidSchema });
+
+export const templateListQuerySchema = z.strictObject({
+  category: z.enum(ASSET_CATEGORIES).optional(),
+});
+
+/** Body of `POST /assets/:wbId/verification-requests`; the asset comes from the path. */
 export const verificationRequestSchema = z.strictObject({
-  assetId: wbIdSchema,
   templateVersionId: uuidSchema,
 });
 export type VerificationRequestInput = z.infer<typeof verificationRequestSchema>;
 
+export const verificationRequestParamsSchema = z.strictObject({ requestId: uuidSchema });
+
+export const requestEvidenceParamsSchema = z.strictObject({
+  requestId: uuidSchema,
+  evidenceId: uuidSchema,
+});
+
 /**
- * A signed claim submitted by a verifier. The verifier is taken from the session; status,
- * chain address and Trust Score effects are set by the backend. Signature verification happens
- * in the service (Phase 8); this only checks the format.
+ * `GET /verifier/requests`: `open` is the queue of requests the verifier may take, `mine` the
+ * requests assigned to them. `cursor` is the last request ID of the previous page.
  */
-export const attestationSubmissionSchema = z
+export const verifierRequestListQuerySchema = z.strictObject({
+  scope: z.enum(["open", "mine"]).default("open"),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  cursor: uuidSchema.optional(),
+});
+export type VerifierRequestListQuery = z.infer<typeof verifierRequestListQuerySchema>;
+
+/** Body of `POST /verifier/requests/:requestId/evidence/:evidenceId/review`. */
+export const evidenceReviewSchema = z
   .strictObject({
-    assetId: wbIdSchema,
-    verificationRequestId: uuidSchema.optional(),
-    templateVersionId: uuidSchema,
-    claimType: z.enum(CLAIM_TYPES),
-    result: z.enum(ATTESTATION_RESULTS),
-    method: z.enum(ATTESTATION_METHODS),
-    assuranceLevel: z.enum(ASSURANCE_LEVELS),
-    /** Only for CONDITION claims; required when the claim is CONFIRMED. */
-    conditionGrade: z.enum(ITEM_CONDITIONS).optional(),
-    notes: text(2000).optional(),
-    issuedAt: dateTimeSchema,
-    expiresAt: dateTimeSchema.optional(),
-    evidence: z
-      .array(z.strictObject({ evidenceId: uuidSchema, sha256: sha256Schema }))
-      .max(50)
-      .refine(
-        (items) => new Set(items.map((i) => i.evidenceId)).size === items.length,
-        "duplicate evidence",
-      ),
-    nonce: z.string().regex(/^[0-9a-f]{32,64}$/, "expected 16-32 random bytes as hex"),
-    signature: solanaSignatureSchema,
-    supersedesId: uuidSchema.optional(),
+    status: z.enum(REVIEW_STATUSES).exclude(["PENDING"]),
+    reason: text(500).optional(),
   })
-  .refine((input) => !input.expiresAt || input.expiresAt > input.issuedAt, {
-    message: "expiresAt must be after issuedAt",
-    path: ["expiresAt"],
-  })
-  .refine((input) => input.conditionGrade === undefined || input.claimType === "CONDITION", {
-    message: "conditionGrade is only allowed on CONDITION claims",
-    path: ["conditionGrade"],
-  })
-  .refine(
-    (input) =>
-      input.claimType !== "CONDITION" ||
-      input.result !== "CONFIRMED" ||
-      input.conditionGrade !== undefined,
-    { message: "a confirmed CONDITION claim requires conditionGrade", path: ["conditionGrade"] },
-  );
+  .refine((input) => input.status !== "REJECTED" || !!input.reason, {
+    message: "a reason is required to reject evidence",
+    path: ["reason"],
+  });
+export type EvidenceReviewInput = z.infer<typeof evidenceReviewSchema>;
+
+const attestationClaimFields = {
+  claimType: z.enum(CLAIM_TYPES),
+  result: z.enum(ATTESTATION_RESULTS),
+  method: z.enum(ATTESTATION_METHODS),
+  assuranceLevel: z.enum(ASSURANCE_LEVELS),
+  /** Only for CONDITION claims; required when the claim is CONFIRMED. */
+  conditionGrade: z.enum(ITEM_CONDITIONS).optional(),
+  notes: text(2000).optional(),
+  issuedAt: dateTimeSchema,
+  expiresAt: dateTimeSchema.optional(),
+  evidence: z
+    .array(z.strictObject({ evidenceId: uuidSchema, sha256: sha256Schema }))
+    .max(50)
+    .refine(
+      (items) => new Set(items.map((i) => i.evidenceId)).size === items.length,
+      "duplicate evidence",
+    ),
+  nonce: z.string().regex(/^[0-9a-f]{32,64}$/, "expected 16-32 random bytes as hex"),
+  supersedesId: uuidSchema.optional(),
+};
+
+type AttestationClaim = {
+  claimType: string;
+  result: string;
+  conditionGrade?: string | undefined;
+  issuedAt: Date;
+  expiresAt?: Date | undefined;
+};
+
+const withClaimRules = <T extends z.ZodType<AttestationClaim>>(schema: T) =>
+  schema
+    .refine((input) => !input.expiresAt || input.expiresAt > input.issuedAt, {
+      message: "expiresAt must be after issuedAt",
+      path: ["expiresAt"],
+    })
+    .refine((input) => input.conditionGrade === undefined || input.claimType === "CONDITION", {
+      message: "conditionGrade is only allowed on CONDITION claims",
+      path: ["conditionGrade"],
+    })
+    .refine(
+      (input) =>
+        input.claimType !== "CONDITION" ||
+        input.result !== "CONFIRMED" ||
+        input.conditionGrade !== undefined,
+      { message: "a confirmed CONDITION claim requires conditionGrade", path: ["conditionGrade"] },
+    );
+
+/**
+ * Body of `POST /verifier/requests/:requestId/attestations/message`: the claim to be signed.
+ * The asset, template version and request come from the request in the path; the verifier from
+ * the session.
+ */
+export const attestationDraftSchema = withClaimRules(z.strictObject(attestationClaimFields));
+export type AttestationDraftInput = z.infer<typeof attestationDraftSchema>;
+
+/**
+ * Body of `POST /verifier/requests/:requestId/attestations`: the claim and the verifier's wallet
+ * signature over its message (`attestationMessage`). Status, chain address and Trust Score
+ * effects are set by the backend.
+ */
+export const attestationSubmissionSchema = withClaimRules(
+  z.strictObject({ ...attestationClaimFields, signature: solanaSignatureSchema }),
+);
 export type AttestationSubmissionInput = z.infer<typeof attestationSubmissionSchema>;
+
+export const attestationParamsSchema = z.strictObject({ attestationId: uuidSchema });
+
+/** Body of `POST /attestations/:attestationId/revoke`. */
+export const attestationRevokeSchema = z.strictObject({ reason: text(500) });
+export type AttestationRevokeInput = z.infer<typeof attestationRevokeSchema>;

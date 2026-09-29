@@ -1,17 +1,25 @@
 import { randomUUID } from "node:crypto";
 import type { Asset, Evidence, EvidenceUpload, Prisma, PrismaClient } from "@worthybound/database";
 import {
+  assertTransition,
   canBePublic,
+  EVIDENCE_REVIEW_LIFECYCLE,
   MAX_EVIDENCE_PER_ASSET,
   MERKLE_ALGORITHM,
   merkleRoot,
   type PublicPhotoMimeType,
 } from "@worthybound/shared";
 import type { Storage } from "@worthybound/storage";
-import type { EvidenceUploadInput, EvidenceVisibilityRequest } from "@worthybound/validation";
+import type {
+  EvidenceReviewInput,
+  EvidenceUploadInput,
+  EvidenceVisibilityRequest,
+  VerifierEvidenceUploadInput,
+} from "@worthybound/validation";
 import { writeAudit } from "../audit.js";
 import type { Actor } from "../assets/service.js";
-import { ApiError, notFound } from "../errors.js";
+import { ApiError, fromDomainError, notFound } from "../errors.js";
+import { findAssignedRequest, lockAssignedRequest } from "../verification/requests.js";
 import { inspectFile, publicPhotoCopy } from "./inspect.js";
 
 type Tx = Prisma.TransactionClient;
@@ -46,6 +54,7 @@ const REJECTIONS = {
   duplicate_evidence: "This file is already attached to this asset",
   evidence_limit_reached: `An asset can have at most ${MAX_EVIDENCE_PER_ASSET} evidence files`,
   asset_unavailable: "Evidence can no longer be added to this asset",
+  request_unavailable: "The verification request is no longer assigned to you",
 } as const;
 type Rejection = keyof typeof REJECTIONS;
 
@@ -75,6 +84,19 @@ export function createEvidenceService({ prisma, storage, now, log }: EvidenceSer
   async function lockOwned(tx: Tx, wbId: string, actor: Actor): Promise<Asset> {
     await tx.$queryRaw`SELECT 1 FROM "assets" WHERE "wbId" = ${wbId} FOR UPDATE`;
     return ownedAsset(tx, wbId, actor);
+  }
+
+  /**
+   * Locks the asset an upload adds to: the owner's asset, or for verifier uploads the asset of a
+   * verification request that is still assigned to the uploader.
+   */
+  async function lockUploadTarget(
+    tx: Tx,
+    target: { wbId: string; requestId: string | null },
+    actor: Actor,
+  ): Promise<Asset> {
+    if (!target.requestId) return lockOwned(tx, target.wbId, actor);
+    return (await lockAssignedRequest(tx, target.requestId, actor.userId)).asset;
   }
 
   async function ownedEvidence(asset: Asset, evidenceId: string): Promise<Evidence> {
@@ -159,90 +181,209 @@ export function createEvidenceService({ prisma, storage, now, log }: EvidenceSer
     return { evidence: done.evidence as Evidence, wbId: done.asset.wbId, replayed: true };
   }
 
+  /** Evidence of the asset in the order the files were added, as in the latest seal. */
+  async function inSealOrder(assetId: string): Promise<Evidence[]> {
+    const [items, latest] = await Promise.all([
+      prisma.evidence.findMany({ where: { assetId } }),
+      prisma.evidenceCommitment.findFirst({
+        where: { assetId },
+        orderBy: [{ evidenceCount: "desc" }, { createdAt: "desc" }],
+        include: { items: { select: { evidenceId: true, leafIndex: true } } },
+      }),
+    ]);
+    const position = new Map(latest?.items.map((i) => [i.evidenceId, i.leafIndex]));
+    const at = (e: Evidence) => position.get(e.id) ?? Number.MAX_SAFE_INTEGER;
+    return items.sort((a, b) => at(a) - at(b));
+  }
+
+  async function downloadLink(
+    evidence: Evidence,
+    wbId: string,
+    actor: Actor,
+    verificationRequestId: string | null,
+  ) {
+    const link = await storage.presignDownload({
+      key: evidence.storageKey,
+      filename: evidence.originalFilename ?? `${evidence.id}.${EXTENSIONS[evidence.mimeType]}`,
+      contentType: evidence.mimeType,
+      expiresInSeconds: DOWNLOAD_EXPIRY_SECONDS,
+    });
+    await writeAudit(
+      prisma,
+      {
+        actorId: actor.userId,
+        action: "evidence.downloaded",
+        targetType: "asset",
+        targetId: wbId,
+        metadata: {
+          evidenceId: evidence.id,
+          ...(verificationRequestId ? { verificationRequestId } : {}),
+        },
+      },
+      actor.fp,
+    );
+    return link;
+  }
+
+  async function startUpload(
+    target: { wbId: string; requestId: string | null },
+    input: EvidenceUploadInput,
+    actor: Actor,
+  ) {
+    const at = now();
+    const upload = await prisma.$transaction(async (tx) => {
+      const asset = await lockUploadTarget(tx, target, actor);
+      if (asset.status === "REVOKED") {
+        throw new ApiError(409, "asset_revoked", "Evidence cannot be added to a revoked asset");
+      }
+      const [stored, pending] = await Promise.all([
+        tx.evidence.count({ where: { assetId: asset.id } }),
+        tx.evidenceUpload.count({
+          where: { assetId: asset.id, status: "PENDING", expiresAt: { gt: at } },
+        }),
+      ]);
+      if (stored + pending >= MAX_EVIDENCE_PER_ASSET) {
+        throw rejectionError("evidence_limit_reached");
+      }
+      const existing = await tx.evidence.findUnique({
+        where: { assetId_sha256: { assetId: asset.id, sha256: input.sha256 } },
+        select: { id: true },
+      });
+      if (existing) throw rejectionError("duplicate_evidence");
+
+      const id = randomUUID();
+      const created = await tx.evidenceUpload.create({
+        data: {
+          id,
+          assetId: asset.id,
+          uploaderId: actor.userId,
+          type: input.type,
+          mimeType: input.mimeType,
+          sizeBytes: input.sizeBytes,
+          sha256: input.sha256,
+          visibility: input.visibility,
+          originalFilename: input.originalFilename ?? null,
+          description: input.description ?? null,
+          capturedAt: input.capturedAt ?? null,
+          verificationRequestId: target.requestId,
+          stagingKey: `${STAGING_PREFIX}${id}`,
+          expiresAt: new Date(at.getTime() + UPLOAD_EXPIRY_SECONDS * 1000),
+          createdAt: at,
+        },
+      });
+      await writeAudit(
+        tx,
+        {
+          actorId: actor.userId,
+          action: "evidence.upload_requested",
+          targetType: "asset",
+          targetId: asset.wbId,
+          metadata: {
+            uploadId: id,
+            ...(target.requestId ? { verificationRequestId: target.requestId } : {}),
+            type: input.type,
+            mimeType: input.mimeType,
+            sizeBytes: input.sizeBytes,
+          },
+        },
+        actor.fp,
+      );
+      return created;
+    });
+    const form = await storage.presignUpload({
+      key: upload.stagingKey,
+      contentType: upload.mimeType,
+      sizeBytes: upload.sizeBytes,
+      expiresInSeconds: UPLOAD_EXPIRY_SECONDS,
+    });
+    return { upload, form };
+  }
+
   return {
     /** In the order the files were added, as in the latest seal. */
     async list(wbId: string, actor: Actor) {
       const asset = await ownedAsset(prisma, wbId, actor);
-      const [items, latest] = await Promise.all([
-        prisma.evidence.findMany({ where: { assetId: asset.id } }),
-        prisma.evidenceCommitment.findFirst({
-          where: { assetId: asset.id },
-          orderBy: [{ evidenceCount: "desc" }, { createdAt: "desc" }],
-          include: { items: { select: { evidenceId: true, leafIndex: true } } },
-        }),
-      ]);
-      const position = new Map(latest?.items.map((i) => [i.evidenceId, i.leafIndex]));
-      const at = (e: Evidence) => position.get(e.id) ?? Number.MAX_SAFE_INTEGER;
-      return { asset, items: items.sort((a, b) => at(a) - at(b)) };
+      return { asset, items: await inSealOrder(asset.id) };
     },
 
-    /** Records the request and returns a one-time upload form for the holding area. */
-    async requestUpload(wbId: string, input: EvidenceUploadInput, actor: Actor) {
-      const at = now();
-      const upload = await prisma.$transaction(async (tx) => {
-        const asset = await lockOwned(tx, wbId, actor);
-        if (asset.status === "REVOKED") {
-          throw new ApiError(409, "asset_revoked", "Evidence cannot be added to a revoked asset");
-        }
-        const [stored, pending] = await Promise.all([
-          tx.evidence.count({ where: { assetId: asset.id } }),
-          tx.evidenceUpload.count({
-            where: { assetId: asset.id, status: "PENDING", expiresAt: { gt: at } },
-          }),
-        ]);
-        if (stored + pending >= MAX_EVIDENCE_PER_ASSET) {
-          throw rejectionError("evidence_limit_reached");
-        }
-        const existing = await tx.evidence.findUnique({
-          where: { assetId_sha256: { assetId: asset.id, sha256: input.sha256 } },
-          select: { id: true },
-        });
-        if (existing) throw rejectionError("duplicate_evidence");
+    /** The asset's evidence, for the verifier assigned to a request. */
+    async listForRequest(requestId: string, actor: Actor) {
+      const request = await findAssignedRequest(prisma, requestId, actor.userId);
+      return { asset: request.asset, items: await inSealOrder(request.assetId) };
+    },
 
-        const id = randomUUID();
-        const created = await tx.evidenceUpload.create({
+    async downloadForRequest(requestId: string, evidenceId: string, actor: Actor) {
+      const request = await findAssignedRequest(prisma, requestId, actor.userId);
+      const evidence = await ownedEvidence(request.asset, evidenceId);
+      return downloadLink(evidence, request.asset.wbId, actor, requestId);
+    },
+
+    /**
+     * The assigned verifier accepts or rejects an evidence item of the asset, once. Verifiers do
+     * not review their own uploads.
+     */
+    async review(requestId: string, evidenceId: string, input: EvidenceReviewInput, actor: Actor) {
+      return prisma.$transaction(async (tx) => {
+        const { asset } = await lockAssignedRequest(tx, requestId, actor.userId);
+        await tx.$queryRaw`SELECT 1 FROM "evidence" WHERE "id" = ${evidenceId}::uuid FOR UPDATE`;
+        const evidence = await tx.evidence.findUnique({ where: { id: evidenceId } });
+        if (!evidence || evidence.assetId !== asset.id) throw notFound("Evidence");
+        if (evidence.uploaderId === actor.userId) {
+          throw new ApiError(403, "self_review", "You cannot review evidence you uploaded");
+        }
+        try {
+          assertTransition(
+            EVIDENCE_REVIEW_LIFECYCLE,
+            evidence.reviewStatus,
+            input.status,
+            "VERIFIER",
+          );
+        } catch (error) {
+          throw fromDomainError(error);
+        }
+        const at = now();
+        const updated = await tx.evidence.update({
+          where: { id: evidenceId },
           data: {
-            id,
+            reviewStatus: input.status,
+            reviewedById: actor.userId,
+            reviewedAt: at,
+            reviewReason: input.reason ?? null,
+            updatedAt: at,
+          },
+        });
+        await tx.provenanceEvent.create({
+          data: {
             assetId: asset.id,
-            uploaderId: actor.userId,
-            type: input.type,
-            mimeType: input.mimeType,
-            sizeBytes: input.sizeBytes,
-            sha256: input.sha256,
-            visibility: input.visibility,
-            originalFilename: input.originalFilename ?? null,
-            description: input.description ?? null,
-            capturedAt: input.capturedAt ?? null,
-            stagingKey: `${STAGING_PREFIX}${id}`,
-            expiresAt: new Date(at.getTime() + UPLOAD_EXPIRY_SECONDS * 1000),
-            createdAt: at,
+            type: "EVIDENCE_REVIEWED",
+            actorId: actor.userId,
+            occurredAt: at,
+            payload: { evidenceId, reviewStatus: input.status },
           },
         });
         await writeAudit(
           tx,
           {
             actorId: actor.userId,
-            action: "evidence.upload_requested",
+            action: "evidence.reviewed",
             targetType: "asset",
             targetId: asset.wbId,
-            metadata: {
-              uploadId: id,
-              type: input.type,
-              mimeType: input.mimeType,
-              sizeBytes: input.sizeBytes,
-            },
+            metadata: { evidenceId, reviewStatus: input.status, verificationRequestId: requestId },
           },
           actor.fp,
         );
-        return created;
+        return { evidence: updated, wbId: asset.wbId };
       });
-      const form = await storage.presignUpload({
-        key: upload.stagingKey,
-        contentType: upload.mimeType,
-        sizeBytes: upload.sizeBytes,
-        expiresInSeconds: UPLOAD_EXPIRY_SECONDS,
-      });
-      return { upload, form };
+    },
+
+    /** Records the request and returns a one-time upload form for the holding area. */
+    requestUpload(wbId: string, input: EvidenceUploadInput, actor: Actor) {
+      return startUpload({ wbId, requestId: null }, input, actor);
+    },
+
+    /** An upload by the verifier assigned to a request; verifier evidence starts private. */
+    requestVerifierUpload(requestId: string, input: VerifierEvidenceUploadInput, actor: Actor) {
+      return startUpload({ wbId: "", requestId }, { ...input, visibility: "PRIVATE" }, actor);
     },
 
     /**
@@ -326,9 +467,15 @@ export function createEvidenceService({ prisma, storage, now, log }: EvidenceSer
 
           let asset: Asset;
           try {
-            asset = await lockOwned(tx, upload.asset.wbId, actor);
+            asset = await lockUploadTarget(
+              tx,
+              { wbId: upload.asset.wbId, requestId: upload.verificationRequestId },
+              actor,
+            );
           } catch {
-            throw new UploadRejected("asset_unavailable");
+            throw new UploadRejected(
+              upload.verificationRequestId ? "request_unavailable" : "asset_unavailable",
+            );
           }
           if (asset.status === "REVOKED") throw new UploadRejected("asset_unavailable");
           if (
@@ -353,7 +500,8 @@ export function createEvidenceService({ prisma, storage, now, log }: EvidenceSer
               assetId: asset.id,
               uploaderId: actor.userId,
               type: upload.type,
-              source: "OWNER",
+              source: upload.verificationRequestId ? "VERIFIER" : "OWNER",
+              verificationRequestId: upload.verificationRequestId,
               storageKey,
               publicStorageKey: publicKey,
               sha256: file.sha256,
@@ -377,7 +525,12 @@ export function createEvidenceService({ prisma, storage, now, log }: EvidenceSer
               type: "EVIDENCE_ADDED",
               actorId: actor.userId,
               occurredAt: at,
-              payload: { evidenceId, type: upload.type, sha256: file.sha256 },
+              payload: {
+                evidenceId,
+                type: upload.type,
+                sha256: file.sha256,
+                source: upload.verificationRequestId ? "VERIFIER" : "OWNER",
+              },
             },
           });
           const commitment = await seal(tx, asset.id, evidence, at);
@@ -393,6 +546,9 @@ export function createEvidenceService({ prisma, storage, now, log }: EvidenceSer
                 type: upload.type,
                 visibility: upload.visibility,
                 merkleRoot: commitment.merkleRoot,
+                ...(upload.verificationRequestId
+                  ? { verificationRequestId: upload.verificationRequestId }
+                  : {}),
               },
             },
             actor.fp,
@@ -431,24 +587,7 @@ export function createEvidenceService({ prisma, storage, now, log }: EvidenceSer
     async download(wbId: string, evidenceId: string, actor: Actor) {
       const asset = await ownedAsset(prisma, wbId, actor);
       const evidence = await ownedEvidence(asset, evidenceId);
-      const link = await storage.presignDownload({
-        key: evidence.storageKey,
-        filename: evidence.originalFilename ?? `${evidence.id}.${EXTENSIONS[evidence.mimeType]}`,
-        contentType: evidence.mimeType,
-        expiresInSeconds: DOWNLOAD_EXPIRY_SECONDS,
-      });
-      await writeAudit(
-        prisma,
-        {
-          actorId: actor.userId,
-          action: "evidence.downloaded",
-          targetType: "asset",
-          targetId: asset.wbId,
-          metadata: { evidenceId },
-        },
-        actor.fp,
-      );
-      return link;
+      return downloadLink(evidence, asset.wbId, actor, null);
     },
 
     /** Public photos get a metadata-free copy; making a photo private again removes it. */

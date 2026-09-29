@@ -18,6 +18,8 @@ import type { Config } from "./config.js";
 import { type AppContext, DEFAULT_RATE_LIMITS, type RateLimits } from "./context.js";
 import { evidenceRoutes } from "./evidence/routes.js";
 import { passportRoutes } from "./passport/routes.js";
+import { templateRoutes } from "./templates/routes.js";
+import { verificationRoutes } from "./verification/routes.js";
 import { verifierRoutes } from "./verifiers/routes.js";
 
 export interface BuildAppOptions {
@@ -112,6 +114,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await app.register(passportRoutes, ctx);
   await app.register(verifierRoutes, ctx);
   await app.register(adminRoutes, ctx);
+  await app.register(templateRoutes, ctx);
+  await app.register(verificationRoutes, ctx);
   if (options.register) await options.register(app, ctx);
   return app;
 }
