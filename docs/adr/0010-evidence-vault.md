@@ -13,18 +13,19 @@ reveal where the owner lives.
 
 **Endpoints** (signed in, owner only unless noted):
 
-| Endpoint                                             | Does                                                |
-| ---------------------------------------------------- | --------------------------------------------------- |
-| `POST /assets/:wbId/evidence/uploads`                | Records the request; returns a one-time upload form |
-| `POST /evidence/uploads/:uploadId/complete`          | Checks the uploaded file and stores it as evidence  |
-| `GET /assets/:wbId/evidence`                         | The asset's evidence                                |
-| `POST /assets/:wbId/evidence/:evidenceId/download`   | 5-minute download link                              |
-| `POST /assets/:wbId/evidence/:evidenceId/visibility` | Makes a photo public or private again               |
-| `GET /passport/:wbId/evidence/:evidenceId`           | Public photo of a published passport; no sign-in    |
+| Endpoint                                             | Does                                               |
+| ---------------------------------------------------- | -------------------------------------------------- |
+| `POST /assets/:wbId/evidence/uploads`                | Records the request; returns a one-time upload URL |
+| `POST /evidence/uploads/:uploadId/complete`          | Checks the uploaded file and stores it as evidence |
+| `GET /assets/:wbId/evidence`                         | The asset's evidence                               |
+| `POST /assets/:wbId/evidence/:evidenceId/download`   | 5-minute download link                             |
+| `POST /assets/:wbId/evidence/:evidenceId/visibility` | Makes a photo public or private again              |
+| `GET /passport/:wbId/evidence/:evidenceId`           | Public photo of a published passport; no sign-in   |
 
 **Upload.** The client declares type, file type, size and SHA-256, then sends the file straight to
-storage with a presigned form valid for 15 minutes. The storage server itself rejects any other
-size or content type and any other key. Files land in a holding area (`staging/`) that the bucket
+storage with a presigned PUT valid for 15 minutes. Content type and length are part of the
+signature, so the storage server itself rejects any other size or content type and any other key.
+(A presigned form POST was used until Phase 10; Cloudflare R2 does not support it.) Files land in a holding area (`staging/`) that the bucket
 empties after one day. Videos of up to 500 MB never pass through the API.
 
 **Checks on completion.** The file is first copied (only if unchanged since it was inspected) to a

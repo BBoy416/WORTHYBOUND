@@ -15,7 +15,6 @@ import {
   S3Client,
   S3ServiceException,
 } from "@aws-sdk/client-s3";
-import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 export interface StorageOptions {
@@ -29,10 +28,11 @@ export interface StorageOptions {
 }
 
 export interface PresignedUpload {
-  /** Form POST target. */
+  /** Send the file as the body of a PUT to this URL. */
   url: string;
-  /** Form fields to send before the file. */
-  fields: Record<string, string>;
+  method: "PUT";
+  /** Headers to send with the PUT. The browser sets Content-Length itself from the body. */
+  headers: Record<string, string>;
   expiresAt: Date;
 }
 
@@ -103,8 +103,9 @@ export function createStorage(options: StorageOptions) {
     bucket,
 
     /**
-     * A one-time browser upload to `key`. The storage server itself rejects any other size or
-     * content type, and the form cannot choose a different key.
+     * A one-time browser upload to `key`. Content type and length are signed, so the storage
+     * server itself rejects any other size or type, and the URL cannot choose a different key.
+     * A PUT rather than a form POST, which Cloudflare R2 does not support.
      */
     async presignUpload(input: {
       key: string;
@@ -112,17 +113,25 @@ export function createStorage(options: StorageOptions) {
       sizeBytes: number;
       expiresInSeconds: number;
     }): Promise<PresignedUpload> {
-      const { url, fields } = await createPresignedPost(client, {
-        Bucket: bucket,
-        Key: input.key,
-        Conditions: [
-          ["content-length-range", input.sizeBytes, input.sizeBytes],
-          ["eq", "$Content-Type", input.contentType],
-        ],
-        Fields: { "Content-Type": input.contentType },
-        Expires: input.expiresInSeconds,
-      });
-      return { url, fields, expiresAt: expiry(input.expiresInSeconds) };
+      const url = await getSignedUrl(
+        client,
+        new PutObjectCommand({
+          Bucket: bucket,
+          Key: input.key,
+          ContentType: input.contentType,
+          ContentLength: input.sizeBytes,
+        }),
+        {
+          expiresIn: input.expiresInSeconds,
+          signableHeaders: new Set(["content-type", "content-length"]),
+        },
+      );
+      return {
+        url,
+        method: "PUT",
+        headers: { "Content-Type": input.contentType },
+        expiresAt: expiry(input.expiresInSeconds),
+      };
     },
 
     /** A short-lived link that always downloads the file instead of opening it. */
@@ -235,7 +244,7 @@ export function createStorage(options: StorageOptions) {
             CORSConfiguration: {
               CORSRules: [
                 {
-                  AllowedMethods: ["POST"],
+                  AllowedMethods: ["PUT"],
                   AllowedOrigins: setup.corsOrigins,
                   AllowedHeaders: ["*"],
                   MaxAgeSeconds: 3600,

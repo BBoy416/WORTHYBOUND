@@ -111,16 +111,18 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
   const requestUpload = (who: Owner, wbId: string, file: FileSpec) =>
     call(who, "POST", `/assets/${wbId}/evidence/uploads`, meta(file));
 
-  /** Sends the file the way a browser does, using the returned form. */
+  /** Sends the file the way a browser does, using the returned upload. */
   const sendFile = async (
-    form: { url: string; fields: Record<string, string> },
+    upload: { url: string; method: string; headers: Record<string, string> },
     body: Buffer,
     contentType: string,
   ) => {
-    const data = new FormData();
-    for (const [k, v] of Object.entries(form.fields)) data.append(k, v);
-    data.append("file", new Blob([new Uint8Array(body)], { type: contentType }));
-    const res = await fetch(form.url, { method: "POST", body: data });
+    expect(upload.headers["Content-Type"]).toBe(contentType);
+    const res = await fetch(upload.url, {
+      method: upload.method,
+      headers: upload.headers,
+      body: new Uint8Array(body),
+    });
     expect(res.status, await res.text()).toBeLessThan(300);
   };
 
@@ -131,7 +133,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
   const upload = async (who: Owner, wbId: string, file: FileSpec) => {
     const req = await requestUpload(who, wbId, file);
     expect(req.statusCode, req.body).toBe(201);
-    const { uploadId, form } = req.json();
+    const { uploadId, upload: form } = req.json();
     await sendFile(form, file.body, file.mimeType ?? "image/jpeg");
     return { uploadId, res: await complete(who, uploadId) };
   };
@@ -157,7 +159,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         originalFilename: "receipt.pdf",
       });
       expect(req.statusCode).toBe(201);
-      const { uploadId, form, expiresAt } = req.json();
+      const { uploadId, upload: form, expiresAt } = req.json();
       expect(new Date(expiresAt).getTime() - clock.now().getTime()).toBeLessThanOrEqual(900_000);
       await sendFile(form, body, "application/pdf");
 
@@ -226,7 +228,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         type: "RECEIPT",
         mimeType: "application/pdf",
       });
-      const { uploadId, form } = req.json();
+      const { uploadId, upload: form } = req.json();
       await sendFile(form, body, "application/pdf");
       const results = await Promise.all(Array.from({ length: 4 }, () => complete(alice, uploadId)));
       const ok = results.filter((r) => r.statusCode === 200 || r.statusCode === 201);
@@ -309,7 +311,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         type: "RECEIPT",
         mimeType: "application/pdf",
       });
-      const { uploadId, form } = req.json();
+      const { uploadId, upload: form } = req.json();
       const early = await complete(alice, uploadId);
       expect(early.statusCode).toBe(409);
       expect(early.json().error.code).toBe("upload_missing");
@@ -326,7 +328,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         type: "RECEIPT",
         mimeType: "application/pdf",
       });
-      const { uploadId, form } = req.json();
+      const { uploadId, upload: form } = req.json();
       await sendFile(form, body, "application/pdf");
       clock.advance(16 * 60_000);
       const res = await complete(alice, uploadId);
@@ -342,8 +344,8 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       const file = { body, type: "RECEIPT", mimeType: "application/pdf" };
       const first = await requestUpload(alice, wbId, file);
       const second = await requestUpload(alice, wbId, file);
-      await sendFile(first.json().form, body, "application/pdf");
-      await sendFile(second.json().form, body, "application/pdf");
+      await sendFile(first.json().upload, body, "application/pdf");
+      await sendFile(second.json().upload, body, "application/pdf");
       expect((await complete(alice, first.json().uploadId)).statusCode).toBe(201);
       const dup = await complete(alice, second.json().uploadId);
       expect(dup.statusCode).toBe(409);
@@ -439,7 +441,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         type: "RECEIPT",
         mimeType: "application/pdf",
       });
-      const { uploadId, form } = req.json();
+      const { uploadId, upload: form } = req.json();
       await sendFile(form, body, "application/pdf");
 
       const theirs = await complete(mallory, uploadId);
