@@ -20,7 +20,8 @@ ADD COLUMN     "closedReason" TEXT,
 ADD COLUMN     "expiresAt" TIMESTAMPTZ(3) NOT NULL;
 
 -- AlterTable
-ALTER TABLE "verification_template_versions" ADD COLUMN     "publishedById" UUID;
+ALTER TABLE "verification_template_versions" ADD COLUMN     "publishedById" UUID,
+ADD COLUMN     "validityMonths" INTEGER NOT NULL DEFAULT 60;
 
 -- CreateTable
 CREATE TABLE "verification_request_status_events" (
@@ -81,15 +82,16 @@ CREATE TRIGGER "verification_templates_lock"
   BEFORE UPDATE ON "verification_templates"
   FOR EACH ROW EXECUTE FUNCTION wb_template_lock();
 
--- Published versions name their creator and a different publisher (four-eyes rule).
+-- Published versions name their creator and publisher (four-eyes rule, checked on publication
+-- below). Attestations are valid for at most `validityMonths` (1-120).
 ALTER TABLE "verification_template_versions"
   DROP CONSTRAINT "verification_template_versions_published_ck",
   ADD CONSTRAINT "verification_template_versions_published_ck" CHECK (
     "status" = 'DRAFT'
     OR ("publishedAt" IS NOT NULL AND "createdById" IS NOT NULL AND "publishedById" IS NOT NULL)),
-  ADD CONSTRAINT "verification_template_versions_four_eyes_ck"
-    CHECK ("publishedById" IS NULL OR "publishedById" IS DISTINCT FROM "createdById"),
-  ADD CONSTRAINT "verification_template_versions_max_verifiers_ck" CHECK ("minVerifiers" <= 5);
+  ADD CONSTRAINT "verification_template_versions_max_verifiers_ck" CHECK ("minVerifiers" <= 5),
+  ADD CONSTRAINT "verification_template_versions_validity_ck"
+    CHECK ("validityMonths" BETWEEN 1 AND 120);
 
 CREATE UNIQUE INDEX "verification_template_versions_published_key"
   ON "verification_template_versions" ("templateId") WHERE "status" = 'PUBLISHED';
@@ -125,6 +127,8 @@ LANGUAGE sql STABLE AS $$
     AND (SELECT count(DISTINCT e ->> 'type') = count(*) FROM jsonb_array_elements(evidence) e);
 $$;
 
+-- A version is published by an administrator other than its creator, unless the creator is
+-- the only active administrator.
 CREATE FUNCTION wb_template_version_valid() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -132,6 +136,14 @@ BEGIN
     NEW."requiredClaims", NEW."requiredEvidence", NEW."allowedMethods"
   ) THEN
     RAISE EXCEPTION 'template version requirements are malformed' USING ERRCODE = 'WB003';
+  END IF;
+  IF NEW."status" = 'PUBLISHED' AND (TG_OP = 'INSERT' OR OLD."status" = 'DRAFT')
+     AND NEW."publishedById" = NEW."createdById"
+     AND (SELECT array_agg("userId") FROM "role_assignments"
+          WHERE "role" = 'ADMIN' AND "revokedAt" IS NULL) IS DISTINCT FROM ARRAY[NEW."createdById"]
+  THEN
+    RAISE EXCEPTION 'template versions are published by an administrator other than their creator'
+      USING ERRCODE = 'WB003';
   END IF;
   RETURN NEW;
 END;
@@ -158,10 +170,12 @@ BEGIN
   IF OLD."status" = 'PUBLISHED' AND (
     NEW."status" <> 'RETIRED'
     OR (NEW."templateId", NEW."version", NEW."requiredClaims", NEW."requiredEvidence", NEW."allowedMethods",
-        NEW."minVerifiers", NEW."createdById", NEW."publishedById", NEW."publishedAt", NEW."createdAt")
+        NEW."minVerifiers", NEW."validityMonths", NEW."createdById", NEW."publishedById", NEW."publishedAt",
+        NEW."createdAt")
        IS DISTINCT FROM
        (OLD."templateId", OLD."version", OLD."requiredClaims", OLD."requiredEvidence", OLD."allowedMethods",
-        OLD."minVerifiers", OLD."createdById", OLD."publishedById", OLD."publishedAt", OLD."createdAt")
+        OLD."minVerifiers", OLD."validityMonths", OLD."createdById", OLD."publishedById", OLD."publishedAt",
+        OLD."createdAt")
   ) THEN
     RAISE EXCEPTION 'published template versions are immutable; only retirement is allowed' USING ERRCODE = 'WB002';
   END IF;
@@ -291,7 +305,8 @@ CREATE UNIQUE INDEX "attestations_current_claim_key"
 
 -- As in the verifier system migration, plus: the attestation belongs to a request assigned to
 -- the verifier for the same asset and template version, the asset accepts attestations, the claim
--- is required by the template and the method allowed, and a superseded attestation is the same
+-- is required by the template and the method allowed, the attestation expires within the
+-- template's validity (months counted in UTC), and a superseded attestation is the same
 -- verifier's attestation of the same claim on the same asset, already marked SUPERSEDED.
 CREATE OR REPLACE FUNCTION wb_attestation_authority() RETURNS trigger
 LANGUAGE plpgsql AS $$
@@ -307,7 +322,7 @@ BEGIN
     JOIN "users" u ON u."id" = ver."userId"
     WHERE ver."id" = NEW."verifierId";
   SELECT "ownerId", "category", "status" INTO a FROM "assets" WHERE "id" = NEW."assetId";
-  SELECT tv2."status", t."category", tv2."requiredClaims", tv2."allowedMethods" INTO tv
+  SELECT tv2."status", t."category", tv2."requiredClaims", tv2."allowedMethods", tv2."validityMonths" INTO tv
     FROM "verification_template_versions" tv2
     JOIN "verification_templates" t ON t."id" = tv2."templateId"
     WHERE tv2."id" = NEW."templateVersionId";
@@ -354,6 +369,12 @@ BEGIN
   END IF;
   IF NOT (tv."allowedMethods" ? NEW."method"::text) THEN
     RAISE EXCEPTION 'method % is not allowed by the template', NEW."method" USING ERRCODE = 'WB003';
+  END IF;
+  IF NEW."expiresAt" IS NULL OR NEW."expiresAt" <= NEW."issuedAt"
+     OR NEW."expiresAt" > ((NEW."issuedAt" AT TIME ZONE 'UTC')
+                           + make_interval(months => tv."validityMonths")) AT TIME ZONE 'UTC' THEN
+    RAISE EXCEPTION 'attestations expire within the template validity of % months', tv."validityMonths"
+      USING ERRCODE = 'WB003';
   END IF;
   IF NEW."supersedesId" IS NOT NULL THEN
     SELECT "verifierId", "assetId", "claimType", "status" INTO s

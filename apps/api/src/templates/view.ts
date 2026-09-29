@@ -34,6 +34,7 @@ export const requirementsOf = (
 export const adminTemplateVersionSchema = requirementsSchema.extend({
   id: z.uuid(),
   version: z.int(),
+  validityMonths: z.int(),
   status: z.enum(TEMPLATE_VERSION_STATUSES),
   createdById: z.string().nullable(),
   publishedById: z.string().nullable(),
@@ -60,6 +61,7 @@ export const publishedTemplateSchema = requirementsSchema.extend({
   name: z.string(),
   description: z.string().nullable(),
   version: z.int(),
+  validityMonths: z.int(),
   publishedAt: z.iso.datetime(),
 });
 
@@ -76,6 +78,7 @@ const requirementsView = (v: VerificationTemplateVersion) => {
 export const toAdminTemplateVersion = (v: VerificationTemplateVersion) => ({
   id: v.id,
   version: v.version,
+  validityMonths: v.validityMonths,
   status: v.status,
   ...requirementsView(v),
   createdById: v.createdById,
@@ -106,6 +109,7 @@ export const toPublishedTemplate = (
   name: v.template.name,
   description: v.template.description,
   version: v.version,
+  validityMonths: v.validityMonths,
   ...requirementsView(v),
   publishedAt: (v.publishedAt as Date).toISOString(),
 });

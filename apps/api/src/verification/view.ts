@@ -69,6 +69,7 @@ const templateSummarySchema = requirementsSchema.extend({
   code: z.string(),
   name: z.string(),
   version: z.int(),
+  validityMonths: z.int(),
 });
 
 const attestationSummarySchema = z.object({
@@ -153,6 +154,7 @@ const templateSummary = (r: RequestRecord) => {
     code: r.templateVersion.template.code,
     name: r.templateVersion.template.name,
     version: r.templateVersion.version,
+    validityMonths: r.templateVersion.validityMonths,
     requiredClaims: [...requirements.requiredClaims],
     requiredEvidence: [...requirements.requiredEvidence],
     allowedMethods: [...requirements.allowedMethods],

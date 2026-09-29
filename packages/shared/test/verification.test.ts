@@ -4,6 +4,7 @@ import {
   ATTESTATION_STATEMENT,
   type AttestationAuthorityContext,
   attestationAuthorityViolations,
+  attestationExpiryLimit,
   type AttestationFact,
   attestationMessage,
   type AttestationMessageFields,
@@ -155,6 +156,19 @@ describe("VERIFIER_EVIDENCE_TYPES", () => {
       expect(VERIFIER_EVIDENCE_TYPES).not.toContain(type);
     }
     expect(VERIFIER_EVIDENCE_TYPES).toContain("INSPECTION_REPORT");
+  });
+});
+
+describe("attestationExpiryLimit", () => {
+  it.each([
+    ["2026-09-29T10:15:30.123Z", 60, "2031-09-29T10:15:30.123Z"],
+    ["2026-01-31T23:59:59.999Z", 1, "2026-02-28T23:59:59.999Z"],
+    ["2028-01-31T00:00:00.000Z", 1, "2028-02-29T00:00:00.000Z"],
+    ["2028-02-29T12:00:00.000Z", 12, "2029-02-28T12:00:00.000Z"],
+    ["2026-11-30T08:00:00.000Z", 3, "2027-02-28T08:00:00.000Z"],
+    ["2026-12-15T08:00:00.000Z", 120, "2036-12-15T08:00:00.000Z"],
+  ])("from %s plus %i months is %s", (issuedAt, months, expected) => {
+    expect(attestationExpiryLimit(new Date(issuedAt), months).toISOString()).toBe(expected);
   });
 });
 

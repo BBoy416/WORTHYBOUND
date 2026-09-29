@@ -120,6 +120,7 @@ export function createTemplateService({ prisma, now }: TemplateServiceOptions) {
             requiredEvidence: input.requiredEvidence,
             allowedMethods: input.allowedMethods,
             minVerifiers: input.minVerifiers,
+            validityMonths: input.validityMonths,
             createdById: actor.userId,
             createdAt: at,
           },
@@ -140,7 +141,8 @@ export function createTemplateService({ prisma, now }: TemplateServiceOptions) {
     },
 
     /**
-     * Publishes a draft (by an administrator other than its creator), retiring the template's
+     * Publishes a draft (by an administrator other than its creator, unless the creator is the
+     * only active administrator), retiring the template's
      * previously published version, or retires a published version. Requests still open against
      * a retired version are cancelled.
      */
@@ -164,7 +166,11 @@ export function createTemplateService({ prisma, now }: TemplateServiceOptions) {
         if (input.status === "RETIRED") {
           await retire(tx, version, actor, at);
         } else {
-          if (version.createdById === actor.userId) {
+          const soleAdmin =
+            (await tx.roleAssignment.count({
+              where: { role: "ADMIN", revokedAt: null, userId: { not: actor.userId } },
+            })) === 0;
+          if (version.createdById === actor.userId && !soleAdmin) {
             throw new ApiError(
               403,
               "four_eyes",
@@ -186,7 +192,11 @@ export function createTemplateService({ prisma, now }: TemplateServiceOptions) {
               action: "template.version_published",
               targetType: "template_version",
               targetId: versionId,
-              metadata: { templateId: version.templateId, version: version.version },
+              metadata: {
+                templateId: version.templateId,
+                version: version.version,
+                selfPublished: version.createdById === actor.userId,
+              },
             },
             actor.fp,
           );

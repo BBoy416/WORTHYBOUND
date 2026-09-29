@@ -6,8 +6,10 @@ import {
   ATTESTATION_RESULTS,
   CATEGORY_PERMISSION_STATUSES,
   CLAIM_TYPES,
+  DEFAULT_TEMPLATE_VALIDITY_MONTHS,
   EVIDENCE_TYPES,
   ITEM_CONDITIONS,
+  MAX_TEMPLATE_VALIDITY_MONTHS,
   PERMISSION_STATUSES_REQUIRING_REASON,
   REVIEW_STATUSES,
   TEMPLATE_VERSION_STATUSES,
@@ -105,6 +107,12 @@ export const templateRequirementsSchema = z.strictObject({
     ),
   allowedMethods: uniqueArray(z.enum(ATTESTATION_METHODS)).min(1),
   minVerifiers: z.int().min(1).max(MAX_VERIFIERS_PER_CLAIM),
+  /** Attestations under the version are valid for at most this many months. */
+  validityMonths: z
+    .int()
+    .min(1)
+    .max(MAX_TEMPLATE_VALIDITY_MONTHS)
+    .default(DEFAULT_TEMPLATE_VALIDITY_MONTHS),
 });
 export type TemplateRequirementsInput = z.infer<typeof templateRequirementsSchema>;
 

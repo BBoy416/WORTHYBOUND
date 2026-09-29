@@ -701,7 +701,8 @@ model VerificationTemplate {
 }
 
 /// Immutable once PUBLISHED (only PUBLISHED -> RETIRED is allowed). At most one PUBLISHED version
-/// per template; it is published by an admin other than its creator.
+/// per template; it is published by an admin other than its creator, unless the creator is the
+/// only active admin.
 model VerificationTemplateVersion {
   id               String                @id @default(uuid(7)) @db.Uuid
   templateId       String                @db.Uuid
@@ -713,6 +714,8 @@ model VerificationTemplateVersion {
   minVerifiers     Int                   @default(1)
   createdById      String?               @db.Uuid
   publishedById    String?               @db.Uuid
+  /// Attestations under this version are valid for at most this many months.
+  validityMonths   Int                   @default(60)
   publishedAt      DateTime?             @db.Timestamptz(3)
   createdAt        DateTime              @default(now()) @db.Timestamptz(3)
 

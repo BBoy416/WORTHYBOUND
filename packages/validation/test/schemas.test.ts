@@ -374,6 +374,13 @@ describe("templateRequirementsSchema", () => {
     expect(requirements.requiredClaims).toEqual(["SERIAL_NUMBER", "AUTHENTICATION"]);
   });
 
+  it("defaults attestation validity to five years", () => {
+    expect(templateRequirementsSchema.parse(valid).validityMonths).toBe(60);
+    expect(templateRequirementsSchema.parse({ ...valid, validityMonths: 12 }).validityMonths).toBe(
+      12,
+    );
+  });
+
   it.each([
     ["no claims", { requiredClaims: [] }, "too_small:requiredClaims"],
     ["duplicate claims", { requiredClaims: ["POSSESSION", "POSSESSION"] }, "custom:requiredClaims"],
@@ -390,6 +397,9 @@ describe("templateRequirementsSchema", () => {
     ["no methods", { allowedMethods: [] }, "too_small:allowedMethods"],
     ["zero verifiers", { minVerifiers: 0 }, "too_small:minVerifiers"],
     ["too many verifiers", { minVerifiers: 6 }, "too_big:minVerifiers"],
+    ["zero validity", { validityMonths: 0 }, "too_small:validityMonths"],
+    ["validity over ten years", { validityMonths: 121 }, "too_big:validityMonths"],
+    ["fractional validity", { validityMonths: 1.5 }, "invalid_type:validityMonths"],
   ])("rejects %s", (_label, change, issue) => {
     expect(issues(templateRequirementsSchema, { ...valid, ...change })).toEqual([issue]);
   });

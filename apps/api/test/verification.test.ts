@@ -19,6 +19,11 @@ import {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const sha256 = (data: Buffer | string) => createHash("sha256").update(data).digest("hex");
+const fiveYearsAfter = (iso: string) => {
+  const date = new Date(iso);
+  date.setUTCFullYear(date.getUTCFullYear() + 5);
+  return date.toISOString();
+};
 
 const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const base58 = (bytes: Uint8Array) => {
@@ -275,7 +280,12 @@ describe.skipIf(!TEST_DATABASE_URL)("verification", () => {
         call(adminA, "POST", `/admin/templates/${t.id}/versions`, f.requirements),
         201,
       );
-      expect(v).toMatchObject({ version: 1, status: "DRAFT", createdById: adminA.id });
+      expect(v).toMatchObject({
+        version: 1,
+        status: "DRAFT",
+        createdById: adminA.id,
+        validityMonths: 60,
+      });
 
       const publish = (who: Person) =>
         call(who, "POST", `/admin/template-versions/${v.id}/status`, { status: "PUBLISHED" });
@@ -293,9 +303,13 @@ describe.skipIf(!TEST_DATABASE_URL)("verification", () => {
           code: t.code,
           requiredClaims: ["AUTHENTICATION", "CONDITION"],
           requiredEvidence: [{ type: "PHOTO", minCount: 1 }],
+          validityMonths: 60,
         }),
       );
-      expect((await audits("template.version_published")).map((a) => a.targetId)).toContain(v.id);
+      const [published] = (await audits("template.version_published")).filter(
+        (a) => a.targetId === v.id,
+      );
+      expect(published?.metadata).toMatchObject({ selfPublished: false });
     });
 
     it("retires the previous version and cancels its open requests when a new one is published", async () => {
@@ -573,6 +587,7 @@ describe.skipIf(!TEST_DATABASE_URL)("verification", () => {
           `Verification request: ${request.id}`,
           "Claim: CONDITION",
           "Condition grade: VERY_GOOD",
+          `Expires at: ${fiveYearsAfter(body.issuedAt)}`,
           `Notes SHA-256: ${sha256("PRIVATE verifier notes")}`,
           `Nonce: ${body.nonce}`,
         ]),
@@ -733,12 +748,109 @@ describe.skipIf(!TEST_DATABASE_URL)("verification", () => {
       ).toMatchObject({ status: "OPEN" });
     });
 
+    it("expires within the template's validity, five years unless the verifier chooses less", async () => {
+      const { v, request } = await assigned();
+      const issuedAt = clock.now();
+      const fiveYears = new Date(issuedAt);
+      fiveYears.setUTCFullYear(fiveYears.getUTCFullYear() + 5);
+      expect(
+        await errorCode(
+          f.attest(v, request.id, {
+            issuedAt: issuedAt.toISOString(),
+            expiresAt: new Date(fiveYears.getTime() + 1).toISOString(),
+          }),
+          422,
+        ),
+      ).toBe("expiry_too_late");
+      const oneYear = new Date(issuedAt.getTime() + 365 * DAY_MS);
+      const res = await f.attest(v, request.id, {
+        issuedAt: issuedAt.toISOString(),
+        expiresAt: oneYear.toISOString(),
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      expect(res.json().expiresAt).toBe(oneYear.toISOString());
+
+      const defaulted = await f.attest(v, request.id, {
+        claimType: "CONDITION",
+        conditionGrade: "GOOD",
+        issuedAt: issuedAt.toISOString(),
+      });
+      expect(defaulted.statusCode, defaulted.body).toBe(201);
+      expect(defaulted.json().expiresAt).toBe(fiveYears.toISOString());
+    });
+
+    it("uses a shorter validity set by the template", async () => {
+      const { versionId } = await f.template(adminA, adminB, "LUXURY_WATCH", {
+        ...f.requirements,
+        validityMonths: 12,
+      });
+      const owner = await f.person();
+      const request = await f.openRequest(owner, await f.asset(owner), versionId);
+      expect(request.template.validityMonths).toBe(12);
+      const v = await f.verifier(adminA);
+      await expectOk(f.claim(v, request.id));
+      const res = await f.attest(v, request.id);
+      expect(res.statusCode, res.body).toBe(201);
+      const { issuedAt, expiresAt } = res.json();
+      const limit = new Date(issuedAt);
+      limit.setUTCFullYear(limit.getUTCFullYear() + 1);
+      expect(expiresAt).toBe(limit.toISOString());
+    });
+
     it("needs an attestation before the request is completed", async () => {
       const { v, request } = await assigned();
       expect(
         await errorCode(call(v, "POST", `/verifier/requests/${request.id}/complete`), 409),
       ).toBe("no_attestations");
     });
+  });
+});
+
+describe.skipIf(!TEST_DATABASE_URL)("templates with a single administrator", () => {
+  let db: TestDatabase;
+  let app: FastifyInstance;
+  let clock: Clock;
+  const f = fixtures(() => ({ app, db, clock }));
+  const { call, expectOk, errorCode } = f;
+
+  beforeAll(async () => {
+    db = await createTestDatabase();
+    clock = testClock();
+    app = await testApp(db.prisma, { now: clock.now });
+  });
+
+  afterAll(async () => {
+    await app?.close();
+    await db?.drop();
+  });
+
+  it("lets the only administrator publish their own version until a second one exists", async () => {
+    const solo = await f.newAdmin();
+    const { versionId } = await f.template(solo, solo);
+    const [audit] = await db.prisma.auditLog.findMany({
+      where: { action: "template.version_published", targetId: versionId },
+    });
+    expect(audit?.metadata).toMatchObject({ selfPublished: true });
+
+    await f.newAdmin();
+    const t = await expectOk(
+      call(solo, "POST", "/admin/templates", {
+        code: "jewellery-basic",
+        category: "JEWELRY",
+        name: "Jewellery",
+      }),
+      201,
+    );
+    const v = await expectOk(
+      call(solo, "POST", `/admin/templates/${t.id}/versions`, f.requirements),
+      201,
+    );
+    expect(
+      await errorCode(
+        call(solo, "POST", `/admin/template-versions/${v.id}/status`, { status: "PUBLISHED" }),
+        403,
+      ),
+    ).toBe("four_eyes");
   });
 });
 

@@ -36,13 +36,15 @@ WorthyBound, can later claim a verifier said something they did not. Templates m
 | `POST /verifier/requests/:requestId/attestations`          | assigned verifier | Submits the claim with its signature       |
 | `POST /attestations/:attestationId/revoke`                 | issuer            | Revokes own attestation with a reason      |
 
-**Templates.** A template has a fixed code and category; its versions list required claims,
-required evidence (type and minimum count) and allowed methods, and `minVerifiers`. Versions
-follow `DRAFT → PUBLISHED → RETIRED`. A version is published by a different administrator than
-the one who created it (`403 four_eyes`, also enforced by the database, which records
-`createdById` and `publishedById`). Publishing retires the template's previous published version;
-open requests against a retired version are cancelled (`template_retired`). Published versions
-never change (ADR 0005).
+**Templates.** A template has a fixed code and category; its versions list required claims, required
+evidence (type and minimum count) and allowed methods, `minVerifiers` and `validityMonths` (1-120,
+default 60). Versions follow `DRAFT → PUBLISHED → RETIRED`. A version is published by a different
+administrator than the one who created it (`403 four_eyes`, also enforced by the database, which
+records `createdById` and `publishedById`), unless its creator is the only active administrator;
+such a publication is audited with `selfPublished: true`, and the rule applies again as soon as a
+second administrator is granted. Publishing retires the template's previous published version; open
+requests against a retired version are cancelled (`template_retired`). Published versions never
+change (ADR 0005).
 
 **Requests.** The owner of a published, attestable asset opens a request against a published
 version for the asset's category; at most one open request per asset and version. Requests follow
@@ -102,6 +104,13 @@ template (ADR 0006) and cannot support an attestation (`evidence_rejected`).
    wallet over exactly that text (`422 invalid_signature`). The issue date must be within
    10 minutes of the server's clock; each nonce is used once per verifier (`409 nonce_reused`).
 
+**Validity.** Every attestation has an expiry, which is part of the signed message. It defaults to
+the template's `validityMonths` after the issue date (five years unless the template says
+otherwise); the verifier may choose an earlier one, never a later one (`422 expiry_too_late`).
+Months are counted in UTC and end on the last day of a shorter month (`attestationExpiryLimit`); the
+database checks the same limit. Validity does not end with a transfer: a sale does not require a new
+appraisal (ADR 0002 keeps authentication counting).
+
 The attestation stores the signed message, its SHA-256 (`signedPayloadHash`, checked by the
 database), the signature and the nonce, and is immutable (ADR 0005). It writes an
 `ATTESTATION_ADDED` provenance event, a status event and an audit entry. The database accepts an
@@ -127,6 +136,8 @@ public name; never notes, signed messages, signatures, nonces or wallets.
   Phase 11 can anchor attestations on Solana (`chainAttestationAddress`) and publish what is
   needed to check them without exposing individual verifiers' wallets.
 - Owners cannot choose a verifier; if no eligible verifier claims a request it expires.
+- A single administrator can define and publish templates alone until a second administrator is
+  granted; operators should grant a second one before launch.
 - Expiry happens when a request is read or acted on; a worker job can do it on a schedule later.
 - Disputes, and administrators reviewing evidence or revoking attestations, need admin tooling
   (later phase).

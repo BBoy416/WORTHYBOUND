@@ -12,6 +12,7 @@ import {
   ATTESTATION_LIFECYCLE,
   assertTransition,
   attestationAuthorityViolations,
+  attestationExpiryLimit,
   attestationMessage,
   type Lifecycle,
   requestAssignmentViolations,
@@ -219,6 +220,15 @@ export function createVerificationService({ prisma, config, now }: VerificationS
     if (draft.expiresAt && draft.expiresAt <= at) {
       throw new ApiError(422, "already_expired", "expiresAt must be in the future");
     }
+    const expiryLimit = attestationExpiryLimit(draft.issuedAt, version.validityMonths);
+    if (draft.expiresAt && draft.expiresAt > expiryLimit) {
+      throw new ApiError(
+        422,
+        "expiry_too_late",
+        `expiresAt must be within the template's validity of ${version.validityMonths} months`,
+      );
+    }
+    const expiresAt = draft.expiresAt ?? expiryLimit;
 
     const ids = draft.evidence.map((e) => e.evidenceId);
     const stored = await db.evidence.findMany({
@@ -297,13 +307,13 @@ export function createVerificationService({ prisma, config, now }: VerificationS
       method: draft.method,
       assuranceLevel: draft.assuranceLevel,
       issuedAt: draft.issuedAt,
-      expiresAt: draft.expiresAt ?? null,
+      expiresAt,
       supersedesId: draft.supersedesId ?? null,
       notesSha256,
       evidence: draft.evidence,
       nonce: draft.nonce,
     });
-    return { message, superseded };
+    return { message, superseded, expiresAt };
   }
 
   /** The assigned request, for reads that do not change it. */
@@ -619,7 +629,7 @@ export function createVerificationService({ prisma, config, now }: VerificationS
           const verifier = await activeVerifier(tx, actor);
           const at = now();
           const { signature, ...draft } = input;
-          const { message, superseded } = await prepareClaim(
+          const { message, superseded, expiresAt } = await prepareClaim(
             tx,
             request,
             asset,
@@ -684,7 +694,7 @@ export function createVerificationService({ prisma, config, now }: VerificationS
               signedPayloadHash: sha256Hex(message),
               signature,
               issuedAt: draft.issuedAt,
-              expiresAt: draft.expiresAt ?? null,
+              expiresAt,
               supersedesId: superseded?.id ?? null,
               createdAt: at,
               updatedAt: at,

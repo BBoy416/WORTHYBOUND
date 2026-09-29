@@ -113,7 +113,7 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
     allowedMethods: ["IN_PERSON"],
   };
 
-  /** Published versions are created by one admin and published by another. */
+  /** Published versions are created by one user and published by another. */
   const templateVersion = async (
     category: AssetCategory = "LUXURY_WATCH",
     status: TemplateVersionStatus = "PUBLISHED",
@@ -178,6 +178,7 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
     ...signed(),
     signature: randomBytes(64).toString("base64url"),
     issuedAt: new Date(),
+    expiresAt: new Date(Date.now() + 365 * 86_400_000),
   });
 
   /** An asset, an approved verifier, a published template and a request assigned to the verifier. */
@@ -757,6 +758,23 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
       );
     });
 
+    it("requires an expiry within the template's validity", async () => {
+      const { request } = await assigned();
+      const issuedAt = new Date("2026-01-31T12:00:00.000Z");
+      const create = (expiresAt: Date | null) =>
+        db.prisma.attestation.create({
+          data: { ...attestationData(request), issuedAt, expiresAt },
+        });
+      await expectDbError(create(null), DatabaseErrorCode.AUTHORITY);
+      await expectDbError(
+        create(new Date("2031-01-31T12:00:00.001Z")),
+        DatabaseErrorCode.AUTHORITY,
+      );
+      await expect(create(new Date("2031-01-31T12:00:00.000Z"))).resolves.toMatchObject({
+        status: "ACTIVE",
+      });
+    });
+
     it("keeps one current attestation per verifier, asset and claim", async () => {
       const { request } = await assigned();
       const first = await db.prisma.attestation.create({ data: attestationData(request) });
@@ -942,9 +960,28 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
         data: { status: "PUBLISHED", publishedAt: new Date(), publishedById },
       });
 
-    it("is published by an admin other than its creator", async () => {
-      const tv = await draft();
-      await expectDbError(publish(tv.id, tv.createdById as string), CHECK_VIOLATION);
+    it("is published by an admin other than its creator, unless the creator is the only admin", async () => {
+      const [creator] = [await admin(), await admin()];
+      const tv = await draft({ createdById: creator.id });
+      await expectDbError(publish(tv.id, creator.id), DatabaseErrorCode.AUTHORITY);
+
+      const rolledBack = new Error("rolled back");
+      await expect(
+        db.prisma.$transaction(async (tx) => {
+          await tx.roleAssignment.updateMany({
+            where: { role: "ADMIN", revokedAt: null, userId: { not: creator.id } },
+            data: { revokedAt: new Date() },
+          });
+          await expect(
+            tx.verificationTemplateVersion.update({
+              where: { id: tv.id },
+              data: { status: "PUBLISHED", publishedAt: new Date(), publishedById: creator.id },
+            }),
+          ).resolves.toMatchObject({ status: "PUBLISHED" });
+          throw rolledBack;
+        }),
+      ).rejects.toBe(rolledBack);
+
       await expectDbError(
         db.prisma.verificationTemplateVersion.update({
           where: { id: tv.id },
@@ -1016,6 +1053,20 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
 
     it("requires 1-5 verifiers per claim", async () => {
       await expectDbError(draft({ minVerifiers: 6 }), CHECK_VIOLATION);
+    });
+
+    it("keeps attestation validity between 1 and 120 months, fixed once published", async () => {
+      expect((await draft()).validityMonths).toBe(60);
+      await expectDbError(draft({ validityMonths: 0 }), CHECK_VIOLATION);
+      await expectDbError(draft({ validityMonths: 121 }), CHECK_VIOLATION);
+      const tv = await templateVersion();
+      await expectDbError(
+        db.prisma.verificationTemplateVersion.update({
+          where: { id: tv.id },
+          data: { validityMonths: 12 },
+        }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
     });
 
     it("never changes a template's code or category", async () => {

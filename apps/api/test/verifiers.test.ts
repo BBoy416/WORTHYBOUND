@@ -584,6 +584,7 @@ describe.skipIf(!TEST_DATABASE_URL)("verifier system", () => {
             signedPayloadHash: createHash("sha256").update(signedMessage).digest("hex"),
             signature: randomBytes(64).toString("base64url"),
             issuedAt: clock.now(),
+            expiresAt: new Date(clock.now().getTime() + 365 * DAY_MS),
           },
         });
         await db.prisma.verificationRequest.update({

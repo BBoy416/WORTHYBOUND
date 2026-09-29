@@ -158,6 +158,25 @@ export const ATTESTATION_MESSAGE_VERSION = "wb-attestation-v1";
 export const ATTESTATION_STATEMENT =
   "I attest to the claim below. Signing does not trigger a blockchain transaction or cost any fees.";
 
+/** Default validity of attestations under a template version, in months. */
+export const DEFAULT_TEMPLATE_VALIDITY_MONTHS = 60;
+export const MAX_TEMPLATE_VALIDITY_MONTHS = 120;
+
+/**
+ * The latest expiry an attestation issued at `issuedAt` may have under a template valid for
+ * `validityMonths`: the same UTC day and time that many months later, or the last day of that
+ * month if it is shorter (as PostgreSQL adds months, which the database uses to check it).
+ */
+export function attestationExpiryLimit(issuedAt: Date, validityMonths: number): Date {
+  const months = issuedAt.getUTCMonth() + validityMonths;
+  const year = issuedAt.getUTCFullYear() + Math.floor(months / 12);
+  const month = months % 12;
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const limit = new Date(issuedAt);
+  limit.setUTCFullYear(year, month, Math.min(issuedAt.getUTCDate(), lastDay));
+  return limit;
+}
+
 /** How far `issuedAt` may be from the server's clock when the attestation is submitted. */
 export const ATTESTATION_CLOCK_TOLERANCE_MS = 10 * 60 * 1000;
 
