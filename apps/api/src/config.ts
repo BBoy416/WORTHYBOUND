@@ -11,6 +11,8 @@ const configSchema = z.object({
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
   API_HOST: z.string().min(1).default("127.0.0.1"),
   API_PORT: z.coerce.number().int().min(1).max(65535).default(4000),
+  /** Reverse proxies in front of the API whose X-Forwarded-For entries are trusted; 0 = none. */
+  TRUST_PROXY: z.coerce.number().int().min(0).max(5).default(0),
   DATABASE_URL: z.string().regex(/^postgres(ql)?:\/\//, "expected a PostgreSQL connection string"),
   /** Host (and port, if any) of the website users sign in to; bound into every sign-in message. */
   AUTH_DOMAIN: z

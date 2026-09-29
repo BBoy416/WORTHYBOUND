@@ -10,8 +10,8 @@ verification by approved professionals raises its Trust Score.
 
 ## Status
 
-Phase 9: Trust Score snapshots and system-set verified status, on top of verification templates,
-requests and signed attestations (Phase 8).
+Phase 10: Solana program on devnet: frozen Metaplex Core tokens, on-chain status and Trust Score,
+tokenization and chain sync (ADR 0016), on top of the Trust Score and verified status (Phase 9).
 Solana work targets **Devnet only**.
 
 ## Repository layout
@@ -19,21 +19,23 @@ Solana work targets **Devnet only**.
 ```text
 apps/
   api/                REST API (Fastify): wallet sign-in, assets, evidence, verifiers, templates,
-                      verification requests, attestations, passports
+                      verification requests, attestations, passports, tokenization, token
+                      metadata and the chain sync worker
 packages/
   database/           Prisma schema, migrations and client (PostgreSQL)
   shared/             domain enums, asset IDs, lifecycle rules, public passport and verifier
                       profile, evidence seals, attestation messages
+  solana/             client for the program (generated with Codama from the IDL), oracle
+                      client, LiteSVM tests and devnet scripts
   storage/            S3-compatible object storage for evidence
   trust-engine/       pure, versioned Trust Score calculation
   validation/         request validation schemas (Zod)
-programs/             Anchor program (Phase 10)
+programs/worthybound/ Anchor program (Rust)
 docs/adr/             architecture decision records
 tests/                integration and end-to-end tests (later phases)
 docker-compose.yml    local PostgreSQL and S3-compatible storage
+render.yaml           Render Blueprint for the demo deployment (API, PostgreSQL; evidence in R2)
 ```
-
-Planned packages (see [ADR 0001](docs/adr/0001-monorepo-and-stack.md)): `solana`.
 
 ## Requirements
 
@@ -41,6 +43,7 @@ Planned packages (see [ADR 0001](docs/adr/0001-monorepo-and-stack.md)): `solana`
 - pnpm (`corepack enable`)
 - [gitleaks](https://github.com/gitleaks/gitleaks#installing) (required by the pre-commit hook)
 - Docker (for local services)
+- For the program only: Rust (`rust-toolchain.toml`), the Agave (Solana) CLI and Anchor 0.32.1
 
 ## Getting started
 
@@ -69,6 +72,36 @@ Run the API (needs `SESSION_SECRET` and `SERIAL_FINGERPRINT_KEY` in `.env`, each
 ```sh
 pnpm api:start        # http://127.0.0.1:4000/health
 ```
+
+To tokenize assets, set `SOLANA_TRUST_ORACLE_KEYPAIR_PATH` to the oracle keypair (outside the
+repository). Without it the API starts, but `POST /assets/:wbId/tokenize` answers 503.
+
+## Solana program (devnet)
+
+```sh
+anchor build                                   # target/deploy/worthybound.so and the IDL
+pnpm --filter @worthybound/solana generate:client   # after changing the IDL
+pnpm --filter @worthybound/solana test         # LiteSVM tests (skipped if the program is not built)
+anchor deploy --provider.cluster devnet        # deploy or upgrade (wallet in Anchor.toml)
+pnpm --filter @worthybound/solana build
+node packages/solana/scripts/devnet.mjs init <admin keypair> <oracle keypair>   # once
+node packages/solana/scripts/devnet.mjs smoke <oracle keypair>
+```
+
+The program admin must be the upgrade authority. The oracle key only mirrors backend state and
+pays for it; keep it funded with devnet SOL.
+
+## Deployment (demo)
+
+`render.yaml` defines the API and PostgreSQL 16 on Render. Before the first deploy:
+
+1. Create a private R2 bucket `worthybound-evidence-private` and an R2 API token with Object Read
+   & Write on it. Enter the endpoint (`https://<account id>.r2.cloudflarestorage.com`) and the
+   token's keys when Render asks for them.
+2. Add the oracle keypair as a Render secret file named `wb-oracle.json`.
+3. Set `AUTH_DOMAIN` and `API_PUBLIC_URL` (the service's public URL).
+4. After the first deploy, run `pnpm storage:setup` once from the Render shell. It sets the
+   bucket's lifecycle and CORS rules and needs a token that may change bucket settings.
 
 Grant the first administrator (server operators only; there is no API for this):
 
@@ -133,3 +166,4 @@ pnpm kyc:record <wallet address> <provider> <reference> [VERIFIED|REJECTED|EXPIR
 - [0014 Checks before buying, and escrowed transfers](docs/adr/0014-transfer-checks-and-escrow.md)
   (proposed)
 - [0015 Trust Score and verified status](docs/adr/0015-trust-score-and-verified-status.md)
+- [0016 Solana program, tokenization and chain sync](docs/adr/0016-solana-program.md)

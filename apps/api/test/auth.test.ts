@@ -12,6 +12,7 @@ import {
   TEST_DATABASE_URL,
   testApp,
   testClock,
+  testConfig,
   TestWallet,
   verifyPayload,
   type TestDatabase,
@@ -384,5 +385,55 @@ describe.skipIf(!TEST_DATABASE_URL)("rate limiting", () => {
     const res = await app.inject({ method: "POST", url: "/auth/nonce", payload: { address } });
     expect(res.json().error.code).toBe("rate_limited");
     expect((await app.inject({ method: "GET", url: "/health" })).statusCode).toBe(200);
+  });
+});
+
+describe.skipIf(!TEST_DATABASE_URL)("client IP behind a proxy", () => {
+  let db: TestDatabase;
+
+  beforeAll(async () => {
+    db = await createTestDatabase();
+  });
+
+  afterAll(async () => {
+    await db?.drop();
+  });
+
+  /** Signs in with the given X-Forwarded-For header and returns the session's IP hash. */
+  const ipHashVia = async (app: FastifyInstance, forwardedFor: string) => {
+    const wallet = new TestWallet();
+    const { message } = await requestNonce(app, wallet.address);
+    const res = await app.inject({
+      method: "POST",
+      url: "/auth/verify",
+      headers: { "x-forwarded-for": forwardedFor },
+      payload: verifyPayload(wallet.address, message, wallet.sign(message)),
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const session = await db.prisma.session.findFirstOrThrow({
+      where: { user: { walletAddress: wallet.address } },
+    });
+    return session.ipHash;
+  };
+
+  it("ignores X-Forwarded-For unless TRUST_PROXY is set", async () => {
+    const direct = await testApp(db.prisma);
+    try {
+      expect(await ipHashVia(direct, "203.0.113.1")).toBe(await ipHashVia(direct, "203.0.113.2"));
+    } finally {
+      await direct.close();
+    }
+  });
+
+  it("uses the address added by the trusted proxy", async () => {
+    const proxied = await testApp(db.prisma, { config: testConfig({ TRUST_PROXY: "1" }) });
+    try {
+      const a = await ipHashVia(proxied, "203.0.113.1");
+      expect(a).not.toBe(await ipHashVia(proxied, "203.0.113.2"));
+      // Only the last hop is trusted; a client-supplied entry before it is ignored.
+      expect(await ipHashVia(proxied, "198.51.100.7, 203.0.113.1")).toBe(a);
+    } finally {
+      await proxied.close();
+    }
   });
 });

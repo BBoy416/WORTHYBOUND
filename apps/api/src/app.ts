@@ -60,6 +60,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       },
     },
     bodyLimit: 64 * 1024,
+    // Behind a reverse proxy (Render), client IPs come from X-Forwarded-For.
+    trustProxy: (_address: string, hop: number) => hop < config.TRUST_PROXY,
   }).withTypeProvider<ZodTypeProvider>();
 
   app.setValidatorCompiler(validatorCompiler);
