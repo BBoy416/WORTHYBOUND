@@ -19,6 +19,7 @@
     "db:migrate:dev": "pnpm --filter @worthybound/database db:migrate:dev",
     "db:migrate:deploy": "pnpm --filter @worthybound/database db:migrate:deploy",
     "db:migrate:status": "pnpm --filter @worthybound/database db:migrate:status",
+    "web:dev": "turbo run build --filter=@worthybound/shared --output-logs=errors-only && pnpm --filter @worthybound/web dev",
     "api:start": "turbo run build --filter=@worthybound/api --output-logs=errors-only && pnpm --filter @worthybound/api start",
     "admin:grant": "turbo run build --filter=@worthybound/api --output-logs=errors-only && pnpm --filter @worthybound/api admin:grant",
     "kyc:record": "turbo run build --filter=@worthybound/api --output-logs=errors-only && pnpm --filter @worthybound/api kyc:record",

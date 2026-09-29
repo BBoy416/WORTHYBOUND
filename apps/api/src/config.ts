@@ -34,6 +34,8 @@ const configSchema = z.object({
   ),
   /** Oracle keypair file, outside the repository. Tokenization is unavailable without it. */
   SOLANA_TRUST_ORACLE_KEYPAIR_PATH: optional(z.string()),
+  /** Built web app (apps/web/dist) to serve on this origin; the API alone when unset. */
+  WEB_DIST_DIR: optional(z.string()),
   /** Public address of this API; token metadata links point here. */
   API_PUBLIC_URL: optional(z.url({ protocol: /^https?$/ })),
   /** S3 API endpoint of the evidence storage; omit for AWS S3. */
