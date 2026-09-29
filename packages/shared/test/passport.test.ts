@@ -24,6 +24,7 @@ function source(overrides: Partial<PassportSource> = {}): PassportSource {
     status: "VERIFIED",
     tokenizationStatus: "TOKENIZED",
     chainAssetAddress: "AssetAddr1111111111111111111111111111111111",
+    chainRecordAddress: "RecordAddr111111111111111111111111111111111",
     verificationLevel: "AUTHENTICATED",
     condition: "EXCELLENT",
     publishedAt: d("2025-12-01T00:00:00Z"),
@@ -230,6 +231,24 @@ describe("toPublicPassport", () => {
         confirmedAt: "2026-01-05T00:00:00.000Z",
       },
     ]);
+  });
+
+  it("shows the token and record addresses only once tokenized", () => {
+    expect(toPublicPassport(source())?.tokenization).toEqual({
+      status: "TOKENIZED",
+      chainAssetAddress: "AssetAddr1111111111111111111111111111111111",
+      chainRecordAddress: "RecordAddr111111111111111111111111111111111",
+    });
+    const pending = source();
+    const passport = toPublicPassport({
+      ...pending,
+      asset: { ...pending.asset, tokenizationStatus: "PENDING" },
+    });
+    expect(passport?.tokenization).toEqual({
+      status: "PENDING",
+      chainAssetAddress: null,
+      chainRecordAddress: null,
+    });
   });
 
   it("always shows the Trust Score with its disclaimer and versions", () => {

@@ -1,0 +1,879 @@
+{
+  "address": "5stfBCcoD9mpW3514ycoKZBQ4Xzav3KpbZHTC9AUGMem",
+  "metadata": {
+    "name": "worthybound",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "WorthyBound asset registry: frozen Metaplex Core tokens, status and Trust Score"
+  },
+  "instructions": [
+    {
+      "name": "commit_trust_score",
+      "docs": ["Records a Trust Score snapshot computed by the backend (ADR 0015)."],
+      "discriminator": [45, 44, 254, 206, 7, 145, 200, 38],
+      "accounts": [
+        {
+          "name": "oracle",
+          "signer": true,
+          "relations": ["config"]
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "asset_record",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [97, 115, 115, 101, 116]
+              },
+              {
+                "kind": "account",
+                "path": "asset_record.wb_id",
+                "account": "AssetRecord"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "score",
+          "type": "u8"
+        },
+        {
+          "name": "level",
+          "type": {
+            "defined": {
+              "name": "VerificationLevel"
+            }
+          }
+        },
+        {
+          "name": "engine_version",
+          "type": "string"
+        },
+        {
+          "name": "weights_version",
+          "type": "string"
+        },
+        {
+          "name": "inputs_hash",
+          "type": {
+            "array": ["u8", 32]
+          }
+        },
+        {
+          "name": "trust_seq",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "initialize",
+      "docs": ["Creates the config. Only the program's upgrade authority can call it, once."],
+      "discriminator": [175, 175, 109, 31, 13, 152, 155, 237],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program",
+          "address": "5stfBCcoD9mpW3514ycoKZBQ4Xzav3KpbZHTC9AUGMem"
+        },
+        {
+          "name": "program_data"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "oracle",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "register_asset",
+      "docs": ["Creates the asset record and mints its Core asset, frozen, to the owner's wallet."],
+      "discriminator": [21, 80, 155, 149, 117, 207, 235, 16],
+      "accounts": [
+        {
+          "name": "oracle",
+          "docs": ["Signs and pays for the record and the Core asset."],
+          "writable": true,
+          "signer": true,
+          "relations": ["config"]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "asset_record",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [97, 115, 115, 101, 116]
+              },
+              {
+                "kind": "arg",
+                "path": "wb_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "core_asset",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 114, 101]
+              },
+              {
+                "kind": "arg",
+                "path": "wb_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner"
+        },
+        {
+          "name": "mpl_core_program",
+          "address": "CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "wb_id",
+          "type": "string"
+        },
+        {
+          "name": "uri",
+          "type": "string"
+        },
+        {
+          "name": "status",
+          "type": {
+            "defined": {
+              "name": "AssetStatus"
+            }
+          }
+        },
+        {
+          "name": "status_seq",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_oracle",
+      "discriminator": [186, 128, 81, 104, 74, 79, 18, 224],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": ["config"]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "oracle",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_paused",
+      "docs": ["Stops registrations, status and score updates and transfers until unpaused."],
+      "discriminator": [91, 60, 125, 192, 176, 225, 166, 218],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": ["config"]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "paused",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "transfer_asset",
+      "docs": [
+        "Completes a transfer (ADR 0002): seller, buyer and oracle sign; the oracle confirms the",
+        "backend checks (buyer KYC, acceptance). Thaws, transfers and re-freezes the Core asset in",
+        "this one instruction."
+      ],
+      "discriminator": [126, 66, 109, 18, 60, 172, 131, 124],
+      "accounts": [
+        {
+          "name": "oracle",
+          "docs": ["Signs for the backend checks and pays the fees."],
+          "writable": true,
+          "signer": true,
+          "relations": ["config"]
+        },
+        {
+          "name": "seller",
+          "signer": true
+        },
+        {
+          "name": "buyer",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "asset_record",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [97, 115, 115, 101, 116]
+              },
+              {
+                "kind": "account",
+                "path": "asset_record.wb_id",
+                "account": "AssetRecord"
+              }
+            ]
+          }
+        },
+        {
+          "name": "core_asset",
+          "writable": true,
+          "relations": ["asset_record"]
+        },
+        {
+          "name": "mpl_core_program",
+          "address": "CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "status_after",
+          "type": {
+            "defined": {
+              "name": "AssetStatus"
+            }
+          }
+        },
+        {
+          "name": "status_seq",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "update_status",
+      "docs": [
+        "Mirrors a status change recorded by the backend. Ownership changes only through",
+        "`transfer_asset`, and REVOKED is final."
+      ],
+      "discriminator": [147, 215, 74, 174, 55, 191, 42, 0],
+      "accounts": [
+        {
+          "name": "oracle",
+          "signer": true,
+          "relations": ["config"]
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "asset_record",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [97, 115, 115, 101, 116]
+              },
+              {
+                "kind": "account",
+                "path": "asset_record.wb_id",
+                "account": "AssetRecord"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "status",
+          "type": {
+            "defined": {
+              "name": "AssetStatus"
+            }
+          }
+        },
+        {
+          "name": "status_seq",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "AssetRecord",
+      "discriminator": [26, 40, 78, 169, 45, 6, 254, 10]
+    },
+    {
+      "name": "Config",
+      "discriminator": [155, 12, 170, 224, 30, 250, 204, 130]
+    }
+  ],
+  "events": [
+    {
+      "name": "AssetRegistered",
+      "discriminator": [252, 56, 47, 89, 8, 180, 249, 254]
+    },
+    {
+      "name": "AssetTransferred",
+      "discriminator": [140, 41, 238, 26, 65, 135, 56, 36]
+    },
+    {
+      "name": "ConfigChanged",
+      "discriminator": [147, 25, 86, 98, 98, 77, 78, 192]
+    },
+    {
+      "name": "StatusUpdated",
+      "discriminator": [19, 149, 70, 150, 145, 120, 241, 11]
+    },
+    {
+      "name": "TrustScoreCommitted",
+      "discriminator": [74, 40, 117, 48, 200, 38, 14, 104]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "NotUpgradeAuthority",
+      "msg": "Only the program upgrade authority can initialize the program"
+    },
+    {
+      "code": 6001,
+      "name": "NotAdmin",
+      "msg": "Signer is not the program admin"
+    },
+    {
+      "code": 6002,
+      "name": "NotOracle",
+      "msg": "Signer is not the WorthyBound oracle"
+    },
+    {
+      "code": 6003,
+      "name": "Paused",
+      "msg": "The program is paused"
+    },
+    {
+      "code": 6004,
+      "name": "InvalidWbId",
+      "msg": "Expected an asset ID like WB-7F93A281"
+    },
+    {
+      "code": 6005,
+      "name": "InvalidUri",
+      "msg": "Metadata URI is empty or too long"
+    },
+    {
+      "code": 6006,
+      "name": "InvalidVersion",
+      "msg": "Version label is empty or too long"
+    },
+    {
+      "code": 6007,
+      "name": "InvalidTrustScore",
+      "msg": "Trust Score must be between 0 and 100"
+    },
+    {
+      "code": 6008,
+      "name": "InvalidInitialStatus",
+      "msg": "Assets can only be registered as ACTIVE, VERIFIED or REVERIFICATION_REQUIRED"
+    },
+    {
+      "code": 6009,
+      "name": "InvalidStatus",
+      "msg": "This status cannot be set directly"
+    },
+    {
+      "code": 6010,
+      "name": "StaleUpdate",
+      "msg": "A newer update has already been recorded"
+    },
+    {
+      "code": 6011,
+      "name": "AssetRevoked",
+      "msg": "A revoked asset cannot change"
+    },
+    {
+      "code": 6012,
+      "name": "NotTransferPending",
+      "msg": "The asset is not pending transfer"
+    },
+    {
+      "code": 6013,
+      "name": "InvalidStatusAfterTransfer",
+      "msg": "A transfer must complete as ACTIVE, VERIFIED or REVERIFICATION_REQUIRED"
+    },
+    {
+      "code": 6014,
+      "name": "NotOwner",
+      "msg": "The seller is not the current owner"
+    },
+    {
+      "code": 6015,
+      "name": "SameOwner",
+      "msg": "The buyer is already the owner"
+    },
+    {
+      "code": 6016,
+      "name": "CoreAssetMismatch",
+      "msg": "The Core asset does not match the record"
+    }
+  ],
+  "types": [
+    {
+      "name": "AssetRecord",
+      "docs": [
+        "Public on-chain record of a WorthyBound asset. Holds no private data: no serial number,",
+        "evidence, owner identity or attestation notes."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wb_id",
+            "type": "string"
+          },
+          {
+            "name": "core_asset",
+            "docs": ["Metaplex Core asset, frozen from creation."],
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "AssetStatus"
+              }
+            }
+          },
+          {
+            "name": "status_seq",
+            "docs": [
+              "Number of backend status events mirrored so far; lower or equal numbers are rejected, so",
+              "retried or reordered updates cannot roll the status back."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "trust_score",
+            "type": "u8"
+          },
+          {
+            "name": "verification_level",
+            "type": {
+              "defined": {
+                "name": "VerificationLevel"
+              }
+            }
+          },
+          {
+            "name": "engine_version",
+            "type": "string"
+          },
+          {
+            "name": "weights_version",
+            "type": "string"
+          },
+          {
+            "name": "inputs_hash",
+            "docs": ["SHA-256 of the Trust Score inputs, as stored in the backend snapshot."],
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "trust_seq",
+            "docs": [
+              "Number of backend Trust Score snapshots when the committed one was taken; 0 before the first."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "registered_at",
+            "type": "i64"
+          },
+          {
+            "name": "transfer_count",
+            "type": "u32"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "core_asset_bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AssetRegistered",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wb_id",
+            "type": "string"
+          },
+          {
+            "name": "core_asset",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "AssetStatus"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "AssetStatus",
+      "docs": ["Mirrors `AssetStatus` in `packages/shared/src/enums.ts`, in the same order."],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Draft"
+          },
+          {
+            "name": "Tokenized"
+          },
+          {
+            "name": "Active"
+          },
+          {
+            "name": "Verified"
+          },
+          {
+            "name": "TransferPending"
+          },
+          {
+            "name": "ReverificationRequired"
+          },
+          {
+            "name": "Disputed"
+          },
+          {
+            "name": "ReportedLost"
+          },
+          {
+            "name": "ReportedStolen"
+          },
+          {
+            "name": "Revoked"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AssetTransferred",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wb_id",
+            "type": "string"
+          },
+          {
+            "name": "seller",
+            "type": "pubkey"
+          },
+          {
+            "name": "buyer",
+            "type": "pubkey"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "AssetStatus"
+              }
+            }
+          },
+          {
+            "name": "status_seq",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Config",
+      "docs": [
+        "Program settings. Its PDA is the update authority, permanent freeze delegate and permanent",
+        "transfer delegate of every WorthyBound Core asset."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "docs": [
+              "Program upgrade authority at initialization; changes the oracle and pauses the program."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oracle",
+            "docs": [
+              "Backend key that registers assets and mirrors their status and Trust Score (ADR 0016)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          },
+          {
+            "name": "asset_count",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ConfigChanged",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "oracle",
+            "type": "pubkey"
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "StatusUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wb_id",
+            "type": "string"
+          },
+          {
+            "name": "previous",
+            "type": {
+              "defined": {
+                "name": "AssetStatus"
+              }
+            }
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "AssetStatus"
+              }
+            }
+          },
+          {
+            "name": "status_seq",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TrustScoreCommitted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wb_id",
+            "type": "string"
+          },
+          {
+            "name": "score",
+            "type": "u8"
+          },
+          {
+            "name": "level",
+            "type": {
+              "defined": {
+                "name": "VerificationLevel"
+              }
+            }
+          },
+          {
+            "name": "engine_version",
+            "type": "string"
+          },
+          {
+            "name": "weights_version",
+            "type": "string"
+          },
+          {
+            "name": "inputs_hash",
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "trust_seq",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VerificationLevel",
+      "docs": ["Mirrors `VerificationLevel` in `packages/shared/src/enums.ts`, in the same order."],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Unverified"
+          },
+          {
+            "name": "SelfDocumented"
+          },
+          {
+            "name": "Inspected"
+          },
+          {
+            "name": "Authenticated"
+          },
+          {
+            "name": "MultiVerified"
+          }
+        ]
+      }
+    }
+  ]
+}

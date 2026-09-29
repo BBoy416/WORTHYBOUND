@@ -1,6 +1,7 @@
 import type { PrismaClient, Role } from "@worthybound/database";
 import type { Storage } from "@worthybound/storage";
 import type { preHandlerAsyncHookHandler } from "fastify";
+import type { ChainSync } from "./chain/sync.js";
 import type { Config } from "./config.js";
 
 export interface AppContext {
@@ -11,6 +12,8 @@ export interface AppContext {
   authenticate: preHandlerAsyncHookHandler;
   requireRole: (...roles: Role[]) => preHandlerAsyncHookHandler;
   rateLimits: RateLimits;
+  /** Null when no oracle key is configured; tokenization is then unavailable. */
+  chainSync: ChainSync | null;
 }
 
 export interface RateLimit {

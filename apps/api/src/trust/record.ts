@@ -13,6 +13,7 @@ import {
   type SourceStatus,
   type TrustResult,
 } from "@worthybound/trust-engine";
+import { enqueueChainSync } from "../chain/sync.js";
 import { requirementsOf } from "../templates/view.js";
 
 type Tx = Prisma.TransactionClient;
@@ -61,7 +62,8 @@ export interface TrustRecord {
  * asset. Templates are those the owner requested verification against (open, completed or
  * attested requests), in their current published version. Sets VERIFIED when one is met, and
  * returns a VERIFIED asset to ACTIVE when none is met any more (ADR 0006: only the system sets
- * VERIFIED). Run inside the transaction that changed the facts, after locking the asset.
+ * VERIFIED). For tokenized assets, queues mirroring of the status and score on-chain (ADR 0016).
+ * Run inside the transaction that changed the facts, after locking the asset.
  */
 export async function recordTrust(tx: Tx, assetId: string, at: Date): Promise<TrustRecord> {
   const asset = await tx.asset.findUniqueOrThrow({
@@ -254,6 +256,7 @@ export async function recordTrust(tx: Tx, assetId: string, at: Date): Promise<Tr
     where: { id: assetId },
     data: { status, currentTrustScore: result.score, verificationLevel: result.verificationLevel },
   });
+  await enqueueChainSync(tx, assetId);
   return { result, status, evaluations };
 }
 

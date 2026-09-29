@@ -38,6 +38,7 @@ export interface PassportSource {
     status: AssetStatus;
     tokenizationStatus: TokenizationStatus;
     chainAssetAddress: string | null;
+    chainRecordAddress: string | null;
     verificationLevel: VerificationLevel;
     condition: ItemCondition | null;
     publishedAt: Date | null;
@@ -122,7 +123,12 @@ export interface PublicPassport {
     weightsVersion: string;
     disclaimer: string;
   } | null;
-  tokenization: { status: TokenizationStatus; chainAssetAddress: string | null };
+  /** Addresses are shown once the asset is tokenized, not while registration is pending. */
+  tokenization: {
+    status: TokenizationStatus;
+    chainAssetAddress: string | null;
+    chainRecordAddress: string | null;
+  };
   custody: { currentSince: string | null; transferCount: number };
   publicEvidence: {
     evidenceId: string;
@@ -255,7 +261,15 @@ export function toPublicPassport(source: PassportSource): PublicPassport | null 
       weightsVersion: source.trust.weightsVersion,
       disclaimer: TRUST_SCORE_DISCLAIMER,
     },
-    tokenization: { status: asset.tokenizationStatus, chainAssetAddress: asset.chainAssetAddress },
+    tokenization: {
+      status: asset.tokenizationStatus,
+      ...(asset.tokenizationStatus === "TOKENIZED"
+        ? {
+            chainAssetAddress: asset.chainAssetAddress,
+            chainRecordAddress: asset.chainRecordAddress,
+          }
+        : { chainAssetAddress: null, chainRecordAddress: null }),
+    },
     custody: {
       currentSince: isoOrNull(source.custody.currentSince),
       transferCount: source.custody.transferCount,

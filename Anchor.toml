@@ -1,0 +1,22 @@
+[toolchain]
+anchor_version = "0.32.1"
+package_manager = "pnpm"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+worthybound = "5stfBCcoD9mpW3514ycoKZBQ4Xzav3KpbZHTC9AUGMem"
+
+[programs.devnet]
+worthybound = "5stfBCcoD9mpW3514ycoKZBQ4Xzav3KpbZHTC9AUGMem"
+
+# Devnet only. The wallet is the deployer, upgrade authority and program admin; it lives outside
+# the repository.
+[provider]
+cluster = "devnet"
+wallet = "~/id.json"
+
+[scripts]
+test = "pnpm --filter @worthybound/solana test"

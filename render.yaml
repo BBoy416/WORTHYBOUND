@@ -1,0 +1,76 @@
+# Render Blueprint for the WorthyBound API on Solana devnet (ADR 0016).
+# Evidence is stored in Cloudflare R2 through its S3 API. Secret values are entered in the Render
+# Dashboard (`sync: false`) and never committed. The oracle keypair is a Render secret file named
+# `wb-oracle.json` (Dashboard > Environment > Secret Files), mounted at /etc/secrets/.
+
+services:
+  - type: web
+    name: worthybound-api
+    runtime: node
+    region: frankfurt
+    # One instance only: the chain sync worker runs inside the API (ADR 0016). Free instances
+    # sleep when idle, which pauses the worker, and do not run preDeployCommand.
+    plan: 0.5c-512mb
+    numInstances: 1
+    branch: dev
+    autoDeployTrigger: checksPass
+    buildCommand: >-
+      corepack enable && pnpm install --frozen-lockfile &&
+      pnpm turbo run build --filter=@worthybound/api... --output-logs=errors-only
+    preDeployCommand: pnpm db:migrate:deploy
+    startCommand: pnpm --filter @worthybound/api start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: info
+      - key: API_HOST
+        value: 0.0.0.0
+      - key: API_PORT
+        value: "10000"
+      # Render's proxy adds the client address to X-Forwarded-For.
+      - key: TRUST_PROXY
+        value: "1"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: worthybound-db
+          property: connectionString
+      # Website domain that users sign in to, e.g. app.example.com.
+      - key: AUTH_DOMAIN
+        sync: false
+      # This service's public URL, e.g. https://worthybound-api.onrender.com.
+      - key: API_PUBLIC_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      # Must never change once assets are registered (ADR 0009).
+      - key: SERIAL_FINGERPRINT_KEY
+        generateValue: true
+      - key: SOLANA_CLUSTER
+        value: devnet
+      - key: SOLANA_RPC_URL
+        value: https://api.devnet.solana.com
+      - key: WORTHYBOUND_PROGRAM_ID
+        value: 5stfBCcoD9mpW3514ycoKZBQ4Xzav3KpbZHTC9AUGMem
+      - key: SOLANA_TRUST_ORACLE_KEYPAIR_PATH
+        value: /etc/secrets/wb-oracle.json
+      # Cloudflare R2: https://<account id>.r2.cloudflarestorage.com. The bucket is the default,
+      # worthybound-evidence-private.
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_REGION
+        value: auto
+      # R2 API token with Object Read & Write on the evidence bucket only.
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+
+databases:
+  - name: worthybound-db
+    region: frankfurt
+    plan: 0.1c-256mb
+    postgresMajorVersion: "16"
+    databaseName: worthybound
+    user: worthybound
