@@ -25,6 +25,7 @@ import type {
 import { writeAudit } from "../audit.js";
 import type { Actor } from "../assets/service.js";
 import { ApiError, fromDomainError, notFound } from "../errors.js";
+import { recordTrustForAssets } from "../trust/record.js";
 import { releaseVerifierRequests } from "../verification/requests.js";
 import {
   lastRejectedAt,
@@ -382,6 +383,16 @@ export function createVerifierService({ prisma, now }: VerifierServiceOptions) {
             metadata: { fromStatus: from, toStatus: to },
           },
           reviewer.fp,
+        );
+        const attested = await tx.attestation.findMany({
+          where: { verifierId: id },
+          distinct: ["assetId"],
+          select: { assetId: true },
+        });
+        await recordTrustForAssets(
+          tx,
+          attested.map((a) => a.assetId),
+          at,
         );
         return (await load(tx, { id })) as VerifierRecord;
       });

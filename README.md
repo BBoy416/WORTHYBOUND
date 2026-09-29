@@ -10,8 +10,8 @@ verification by approved professionals raises its Trust Score.
 
 ## Status
 
-Phase 8: Verification templates, verification requests, verifier evidence and review, signed
-attestations.
+Phase 9: Trust Score snapshots and system-set verified status, on top of verification templates,
+requests and signed attestations (Phase 8).
 Solana work targets **Devnet only**.
 
 ## Repository layout
@@ -132,3 +132,4 @@ pnpm kyc:record <wallet address> <provider> <reference> [VERIFIED|REJECTED|EXPIR
 - [0013 Automated checks and guided capture](docs/adr/0013-automated-checks.md) (proposed)
 - [0014 Checks before buying, and escrowed transfers](docs/adr/0014-transfer-checks-and-escrow.md)
   (proposed)
+- [0015 Trust Score and verified status](docs/adr/0015-trust-score-and-verified-status.md)

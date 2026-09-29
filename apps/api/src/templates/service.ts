@@ -14,6 +14,7 @@ import type {
 import { writeAudit } from "../audit.js";
 import type { Actor } from "../assets/service.js";
 import { ApiError, fromDomainError, notFound } from "../errors.js";
+import { recordTrustForAssets } from "../trust/record.js";
 import { closeRequestsAsSystem } from "../verification/requests.js";
 
 type Tx = Prisma.TransactionClient;
@@ -163,6 +164,17 @@ export function createTemplateService({ prisma, now }: TemplateServiceOptions) {
           throw fromDomainError(error);
         }
         const at = now();
+        const requested = await tx.verificationRequest.findMany({
+          where: {
+            templateVersion: { templateId: version.templateId },
+            OR: [
+              { status: { in: ["OPEN", "ASSIGNED", "COMPLETED"] } },
+              { attestations: { some: {} } },
+            ],
+          },
+          distinct: ["assetId"],
+          select: { assetId: true },
+        });
         if (input.status === "RETIRED") {
           await retire(tx, version, actor, at);
         } else {
@@ -201,6 +213,11 @@ export function createTemplateService({ prisma, now }: TemplateServiceOptions) {
             actor.fp,
           );
         }
+        await recordTrustForAssets(
+          tx,
+          requested.map((r) => r.assetId),
+          at,
+        );
         return tx.verificationTemplateVersion.findUniqueOrThrow({ where: { id: versionId } });
       });
     },

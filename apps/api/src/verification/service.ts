@@ -34,6 +34,7 @@ import type { Config } from "../config.js";
 import { decodeBase58, sha256Hex } from "../crypto.js";
 import { ApiError, fromDomainError, notFound } from "../errors.js";
 import { requirementsOf } from "../templates/view.js";
+import { recordTrust } from "../trust/record.js";
 import { closeRequestsAsSystem, lockAssignedRequest } from "./requests.js";
 import { requestInclude, type RequestRecord } from "./view.js";
 
@@ -750,6 +751,7 @@ export function createVerificationService({ prisma, config, now }: VerificationS
             },
             actor.fp,
           );
+          await recordTrust(tx, asset.id, at);
           return tx.attestation.findUniqueOrThrow({
             where: { id: attestation.id },
             include: { evidence: true, asset: { select: { wbId: true } } },
@@ -816,6 +818,7 @@ export function createVerificationService({ prisma, config, now }: VerificationS
           },
           actor.fp,
         );
+        await recordTrust(tx, attestation.assetId, at);
         return tx.attestation.findUniqueOrThrow({
           where: { id: attestationId },
           include: { evidence: true, asset: { select: { wbId: true } } },
