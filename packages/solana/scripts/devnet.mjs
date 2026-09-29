@@ -4,8 +4,9 @@
 //   node scripts/devnet.mjs smoke <oracle keypair path>
 //
 // `init` creates the program config once; the admin must be the program upgrade authority.
-// `smoke` registers a throwaway asset, mirrors a status and a Trust Score, transfers it between
-// two throwaway wallets and checks that the new owner cannot move it directly.
+// `smoke` registers a throwaway asset through the oracle client (twice, to check retries),
+// mirrors a Trust Score and a status (and a stale repeat), transfers it between two throwaway
+// wallets and checks that the new owner cannot move it directly.
 // Uses SOLANA_RPC_URL (default https://api.devnet.solana.com). Prints addresses and signatures only.
 import {
   AccountRole,
@@ -17,22 +18,19 @@ import { generateWbId } from "@worthybound/shared";
 import {
   AssetStatus,
   BPF_LOADER_UPGRADEABLE_ADDRESS,
+  chainAddresses,
   createConnection,
+  createWorthyBoundOracle,
   explorerUrl,
   fetchAssetRecord,
   fetchMaybeConfig,
-  findAssetRecordPda,
   findConfigPda,
-  findCoreAssetPda,
-  getCommitTrustScoreInstructionAsync,
   getInitializeInstructionAsync,
-  getRegisterAssetInstructionAsync,
   getTransferAssetInstructionAsync,
-  getUpdateStatusInstructionAsync,
   loadKeypairSigner,
   MPL_CORE_PROGRAM_ADDRESS,
   sendInstructions,
-  VerificationLevel,
+  StaleChainUpdateError,
   WORTHYBOUND_PROGRAM_ADDRESS,
 } from "../dist/index.js";
 
@@ -64,60 +62,60 @@ async function init(adminPath, oraclePath) {
 }
 
 async function smoke(oraclePath) {
-  const oracle = await loadKeypairSigner(oraclePath);
+  const oracleSigner = await loadKeypairSigner(oraclePath);
+  const oracle = createWorthyBoundOracle(connection, oracleSigner);
   const [seller, buyer] = await Promise.all([generateKeyPairSigner(), generateKeyPairSigner()]);
   const wbId = generateWbId();
-  const [assetRecord] = await findAssetRecordPda({ wbId });
-  const [coreAsset] = await findCoreAssetPda({ wbId });
-  const step = async (name, instruction, extra = {}) => {
-    const signature = await sendInstructions(connection, oracle, [instruction], extra);
-    console.log(`${name}: ${explorerUrl("tx", signature)}`);
-  };
+  const { record: assetRecord, coreAsset } = await chainAddresses(wbId);
+  const log = (name, signature) => console.log(`${name}: ${explorerUrl("tx", signature)}`);
 
-  await step(
-    "register",
-    await getRegisterAssetInstructionAsync({
-      oracle,
-      owner: seller.address,
-      wbId,
-      uri: `https://worthybound.example/metadata/${wbId}.json`,
-      status: AssetStatus.Active,
-      statusSeq: 1n,
-    }),
-  );
-  await step(
+  const registration = {
+    wbId,
+    owner: seller.address,
+    uri: `https://worthybound.example/metadata/${wbId}`,
+    status: "ACTIVE",
+    statusSeq: 1n,
+  };
+  const registered = await oracle.registerAsset(registration);
+  log("register", registered);
+  if ((await oracle.registerAsset(registration)) !== registered) {
+    throw new Error("smoke: a repeated registration did not return the original signature");
+  }
+  log(
     "commit_trust_score",
-    await getCommitTrustScoreInstructionAsync({
-      oracle,
-      assetRecord,
+    await oracle.commitTrustScore({
+      wbId,
       score: 42,
-      level: VerificationLevel.SelfDocumented,
+      level: "SELF_DOCUMENTED",
       engineVersion: "1.1.0",
       weightsVersion: "weights-2026.2",
-      inputsHash: new Uint8Array(32),
+      inputsHash: "00".repeat(32),
       trustSeq: 1n,
     }),
   );
-  await step(
+  log(
     "update_status",
-    await getUpdateStatusInstructionAsync({
-      oracle,
-      assetRecord,
-      status: AssetStatus.TransferPending,
-      statusSeq: 2n,
-    }),
+    await oracle.updateStatus({ wbId, status: "TRANSFER_PENDING", statusSeq: 2n }),
   );
-  await step(
+  try {
+    await oracle.updateStatus({ wbId, status: "ACTIVE", statusSeq: 2n });
+    throw new Error("smoke: a repeated status update was accepted");
+  } catch (error) {
+    if (!(error instanceof StaleChainUpdateError)) throw error;
+  }
+  log(
     "transfer_asset",
-    await getTransferAssetInstructionAsync({
-      oracle,
-      seller,
-      buyer,
-      assetRecord,
-      coreAsset,
-      statusAfter: AssetStatus.Active,
-      statusSeq: 3n,
-    }),
+    await sendInstructions(connection, oracleSigner, [
+      await getTransferAssetInstructionAsync({
+        oracle: oracleSigner,
+        seller,
+        buyer,
+        assetRecord,
+        coreAsset,
+        statusAfter: AssetStatus.Active,
+        statusSeq: 3n,
+      }),
+    ]),
   );
 
   const record = await fetchAssetRecord(connection.rpc, assetRecord);
@@ -132,7 +130,7 @@ async function smoke(oraclePath) {
     accounts: [
       { address: coreAsset, role: AccountRole.WRITABLE },
       none,
-      { address: oracle.address, role: AccountRole.WRITABLE_SIGNER, signer: oracle },
+      { address: oracleSigner.address, role: AccountRole.WRITABLE_SIGNER, signer: oracleSigner },
       { address: buyer.address, role: AccountRole.READONLY_SIGNER, signer: buyer },
       { address: seller.address, role: AccountRole.READONLY },
       none,
@@ -142,7 +140,7 @@ async function smoke(oraclePath) {
   };
   let rejected = false;
   try {
-    await sendInstructions(connection, oracle, [direct]);
+    await sendInstructions(connection, oracleSigner, [direct]);
   } catch {
     rejected = true;
   }

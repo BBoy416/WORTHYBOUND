@@ -1,9 +1,22 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  getProgramDerivedAddress,
+  SOLANA_ERROR__INSTRUCTION_ERROR__CUSTOM,
+  SOLANA_ERROR__JSON_RPC__SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE,
+  SolanaError,
+} from "@solana/kit";
 import { ASSET_STATUSES, VERIFICATION_LEVELS } from "@worthybound/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { loadKeypairSigner, toChainAssetStatus, toChainVerificationLevel } from "../src/index.js";
+import {
+  chainAddresses,
+  customProgramErrorCode,
+  loadKeypairSigner,
+  toChainAssetStatus,
+  toChainVerificationLevel,
+  WORTHYBOUND_PROGRAM_ADDRESS,
+} from "../src/index.js";
 
 describe("enum mapping", () => {
   it("maps every asset status to the on-chain value in the same order", () => {
@@ -47,5 +60,43 @@ describe("loadKeypairSigner", () => {
     await writeFile(path, JSON.stringify([1, 2, 3]));
     await expect(loadKeypairSigner(path)).rejects.toThrow(/not a 64-byte JSON array/);
     await expect(loadKeypairSigner(join(dir, "missing.json"))).rejects.toThrow(/Cannot read/);
+  });
+});
+
+describe("customProgramErrorCode", () => {
+  it("finds the program error code in a preflight failure", () => {
+    const custom = new SolanaError(SOLANA_ERROR__INSTRUCTION_ERROR__CUSTOM, {
+      code: 6010,
+      index: 0,
+    });
+    const preflight = new SolanaError(
+      SOLANA_ERROR__JSON_RPC__SERVER_ERROR_SEND_TRANSACTION_PREFLIGHT_FAILURE,
+      { cause: custom } as never,
+    );
+    expect(customProgramErrorCode(preflight)).toBe(6010);
+    expect(customProgramErrorCode(custom)).toBe(6010);
+  });
+
+  it("returns undefined for other errors", () => {
+    expect(customProgramErrorCode(new Error("network"))).toBeUndefined();
+    expect(customProgramErrorCode(undefined)).toBeUndefined();
+  });
+});
+
+describe("chainAddresses", () => {
+  it("derives the same addresses as the program's seeds", async () => {
+    const wbId = "WB-7F93A281";
+    const { record, coreAsset } = await chainAddresses(wbId);
+    const utf8 = new TextEncoder();
+    const [expectedRecord] = await getProgramDerivedAddress({
+      programAddress: WORTHYBOUND_PROGRAM_ADDRESS,
+      seeds: [utf8.encode("asset"), utf8.encode(wbId)],
+    });
+    const [expectedCore] = await getProgramDerivedAddress({
+      programAddress: WORTHYBOUND_PROGRAM_ADDRESS,
+      seeds: [utf8.encode("core"), utf8.encode(wbId)],
+    });
+    expect(record).toBe(expectedRecord);
+    expect(coreAsset).toBe(expectedCore);
   });
 });
