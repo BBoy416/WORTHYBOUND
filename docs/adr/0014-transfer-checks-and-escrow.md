@@ -60,9 +60,12 @@ grades from before the transfer stay flagged `fromPreviousCustody` (ADR 0007).
 **Still blocked.** Transfers stay impossible while an asset is `DISPUTED` or `REPORTED_STOLEN`
 (ADR 0002).
 
-**Payments.** Holding a buyer's money is regulated. Escrow uses a licensed escrow or payment
-provider for marketplaces, or a stablecoin escrow in the WorthyBound program; which one is decided
-with legal advice before Phase 10. Token and payment are released atomically either way.
+**Payments.** Deferred; not part of the demo (Solana School, 12 October 2026). Holding a buyer's
+money is regulated whether or not it moves on Solana. The preferred direction is an outside
+payment provider (e.g. PayPal) that holds and releases the money, with WorthyBound acting only as
+the on-chain verifier: it records checks and releases the token when the provider confirms
+payment. A stablecoin escrow in the WorthyBound program remains an alternative. The choice needs
+legal advice before payments are built.
 
 **Remaining fraud and its limits.**
 
