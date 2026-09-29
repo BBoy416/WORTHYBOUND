@@ -25,6 +25,7 @@ import type {
 import { writeAudit } from "../audit.js";
 import type { Actor } from "../assets/service.js";
 import { ApiError, fromDomainError, notFound } from "../errors.js";
+import { releaseVerifierRequests } from "../verification/requests.js";
 import {
   lastRejectedAt,
   verifierInclude,
@@ -363,6 +364,14 @@ export function createVerifierService({ prisma, now }: VerifierServiceOptions) {
         }
         if (to === "APPROVED") await syncVerifierRole(tx, verifier.userId, true, reviewer, at);
         if (to === "REVOKED") await syncVerifierRole(tx, verifier.userId, false, reviewer, at);
+        if (to === "SUSPENDED" || to === "REVOKED") {
+          await releaseVerifierRequests(
+            tx,
+            id,
+            to === "SUSPENDED" ? "verifier_suspended" : "verifier_revoked",
+            at,
+          );
+        }
         await writeAudit(
           tx,
           {
@@ -406,6 +415,11 @@ export function createVerifierService({ prisma, now }: VerifierServiceOptions) {
         }
         const at = now();
         await setPermissionStatus(tx, permission, to, input.reason ?? null, reviewer, at);
+        if (to === "SUSPENDED" || to === "REVOKED") {
+          await releaseVerifierRequests(tx, id, "category_permission_withdrawn", at, {
+            asset: { category },
+          });
+        }
         await tx.verifier.update({ where: { id }, data: { updatedAt: at } });
         await writeAudit(
           tx,

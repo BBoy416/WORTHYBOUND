@@ -46,6 +46,7 @@ export async function loadPassportSource(
         select: {
           id: true,
           type: true,
+          source: true,
           visibility: true,
           reviewStatus: true,
           sha256: true,

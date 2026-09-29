@@ -209,6 +209,11 @@ export const TEMPLATE_VERSION_LIFECYCLE: Lifecycle<TemplateVersionStatus, Templa
 
 export type VerificationRequestActor = "REQUESTER" | "VERIFIER" | "ADMIN" | "SYSTEM";
 
+/**
+ * A verifier claims an open request and may release it again. The system releases a request when
+ * the assigned verifier loses their authority (suspension, revocation, expired identity) and
+ * cancels it when the asset can no longer be verified (reported lost or stolen, revoked).
+ */
 export const VERIFICATION_REQUEST_LIFECYCLE: Lifecycle<
   VerificationRequestStatus,
   VerificationRequestActor
@@ -217,13 +222,13 @@ export const VERIFICATION_REQUEST_LIFECYCLE: Lifecycle<
   transitions: {
     OPEN: {
       ASSIGNED: ["VERIFIER", "ADMIN"],
-      CANCELLED: ["REQUESTER", "ADMIN"],
+      CANCELLED: ["REQUESTER", "ADMIN", "SYSTEM"],
       EXPIRED: SYSTEM_ONLY,
     },
     ASSIGNED: {
-      OPEN: ["VERIFIER", "ADMIN"],
+      OPEN: ["VERIFIER", "ADMIN", "SYSTEM"],
       COMPLETED: ["VERIFIER", "SYSTEM"],
-      CANCELLED: ["REQUESTER", "ADMIN"],
+      CANCELLED: ["REQUESTER", "ADMIN", "SYSTEM"],
       EXPIRED: SYSTEM_ONLY,
     },
     COMPLETED: {},

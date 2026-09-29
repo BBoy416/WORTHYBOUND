@@ -10,18 +10,20 @@ verification by approved professionals raises its Trust Score.
 
 ## Status
 
-Phase 7: Verifier system (applications, review, category permissions, public verifier profiles).
+Phase 8: Verification templates, verification requests, verifier evidence and review, signed
+attestations.
 Solana work targets **Devnet only**.
 
 ## Repository layout
 
 ```text
 apps/
-  api/                REST API (Fastify): wallet sign-in, assets, evidence, verifiers, passports
+  api/                REST API (Fastify): wallet sign-in, assets, evidence, verifiers, templates,
+                      verification requests, attestations, passports
 packages/
   database/           Prisma schema, migrations and client (PostgreSQL)
   shared/             domain enums, asset IDs, lifecycle rules, public passport and verifier
-                      profile, evidence seals
+                      profile, evidence seals, attestation messages
   storage/            S3-compatible object storage for evidence
   trust-engine/       pure, versioned Trust Score calculation
   validation/         request validation schemas (Zod)
@@ -126,3 +128,4 @@ pnpm kyc:record <wallet address> <provider> <reference> [VERIFIED|REJECTED|EXPIR
 - [0009 Asset registration and passports](docs/adr/0009-asset-registration.md)
 - [0010 Evidence Vault](docs/adr/0010-evidence-vault.md)
 - [0011 Verifier system](docs/adr/0011-verifier-system.md)
+- [0012 Verification requests and signed attestations](docs/adr/0012-verification.md)

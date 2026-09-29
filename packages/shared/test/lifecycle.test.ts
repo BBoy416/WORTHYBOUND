@@ -239,6 +239,15 @@ describe("verification lifecycles", () => {
     expect(canTransition(ATTESTATION_LIFECYCLE, "DISPUTED", "REVOKED", "VERIFIER")).toBe(false);
   });
 
+  it("lets the system release or cancel a request but never complete it for a person", () => {
+    expect(canTransition(VERIFICATION_REQUEST_LIFECYCLE, "ASSIGNED", "OPEN", "SYSTEM")).toBe(true);
+    expect(canTransition(VERIFICATION_REQUEST_LIFECYCLE, "OPEN", "CANCELLED", "SYSTEM")).toBe(true);
+    expect(canTransition(VERIFICATION_REQUEST_LIFECYCLE, "OPEN", "ASSIGNED", "REQUESTER")).toBe(
+      false,
+    );
+    expect(isTerminal(VERIFICATION_REQUEST_LIFECYCLE, "COMPLETED")).toBe(true);
+  });
+
   it("does not let a verifier reopen a finished evidence review", () => {
     expect(isTerminal(EVIDENCE_REVIEW_LIFECYCLE, "ACCEPTED")).toBe(true);
     expect(isTerminal(EVIDENCE_REVIEW_LIFECYCLE, "REJECTED")).toBe(true);

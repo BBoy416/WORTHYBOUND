@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { grantAdmin } from "../src/cli/admin-grant.js";
@@ -548,6 +548,8 @@ describe.skipIf(!TEST_DATABASE_URL)("verifier system", () => {
           templateId: template.id,
           version: 1,
           status: "PUBLISHED",
+          createdById: admin.id,
+          publishedById: rev.id,
           publishedAt: clock.now(),
           requiredClaims: ["AUTHENTICATION"],
           requiredEvidence: [],
@@ -555,20 +557,39 @@ describe.skipIf(!TEST_DATABASE_URL)("verifier system", () => {
         },
       });
       for (const verifierId of [org.id, individual.id]) {
+        const request = await db.prisma.verificationRequest.create({
+          data: {
+            assetId: asset.id,
+            requesterId: owner.id,
+            templateVersionId: version.id,
+            status: "ASSIGNED",
+            assignedVerifierId: verifierId,
+            assignedAt: clock.now(),
+            expiresAt: new Date(clock.now().getTime() + DAY_MS),
+          },
+        });
+        const signedMessage = `WorthyBound attestation (wb-attestation-v1)\nNonce: ${randomUUID()}`;
         await db.prisma.attestation.create({
           data: {
             assetId: asset.id,
             verifierId,
+            verificationRequestId: request.id,
             templateVersionId: version.id,
             claimType: "AUTHENTICATION",
             result: "CONFIRMED",
             method: "IN_PERSON",
             assuranceLevel: "HIGH",
             nonce: randomBytes(16).toString("hex"),
-            signedPayloadHash: randomBytes(32).toString("hex"),
+            signedMessage,
+            signedPayloadHash: createHash("sha256").update(signedMessage).digest("hex"),
             signature: randomBytes(64).toString("base64url"),
             issuedAt: clock.now(),
+            expiresAt: new Date(clock.now().getTime() + 365 * DAY_MS),
           },
+        });
+        await db.prisma.verificationRequest.update({
+          where: { id: request.id },
+          data: { status: "COMPLETED", completedAt: clock.now() },
         });
       }
       const res = await call(null, "GET", `/passport/${created.wbId}`);

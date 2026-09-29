@@ -8,12 +8,15 @@ import {
   assetParamsSchema,
   assetStatusChangeSchema,
   assetStatusRequestSchema,
+  attestationDraftSchema,
+  attestationRevokeSchema,
   attestationSubmissionSchema,
   authNonceRequestSchema,
   authVerifyRequestSchema,
   categoryPermissionChangeSchema,
   EVIDENCE_MAX_BYTES,
   evidenceParamsSchema,
+  evidenceReviewSchema,
   evidenceUploadParamsSchema,
   evidenceUploadSchema,
   evidenceVisibilitySchema,
@@ -24,7 +27,9 @@ import {
   roleAssignmentParamsSchema,
   roleGrantSchema,
   roleListQuerySchema,
+  templateCreateSchema,
   templateRequirementsSchema,
+  templateVersionStatusSchema,
   transferRequestSchema,
   updateDraftAssetSchema,
   verificationRequestSchema,
@@ -33,6 +38,8 @@ import {
   verifierCategoryRequestSchema,
   verifierListQuerySchema,
   verifierParamsSchema,
+  verifierEvidenceUploadSchema,
+  verifierRequestListQuerySchema,
   verifierStatusChangeSchema,
 } from "../src/index.js";
 
@@ -367,6 +374,13 @@ describe("templateRequirementsSchema", () => {
     expect(requirements.requiredClaims).toEqual(["SERIAL_NUMBER", "AUTHENTICATION"]);
   });
 
+  it("defaults attestation validity to five years", () => {
+    expect(templateRequirementsSchema.parse(valid).validityMonths).toBe(60);
+    expect(templateRequirementsSchema.parse({ ...valid, validityMonths: 12 }).validityMonths).toBe(
+      12,
+    );
+  });
+
   it.each([
     ["no claims", { requiredClaims: [] }, "too_small:requiredClaims"],
     ["duplicate claims", { requiredClaims: ["POSSESSION", "POSSESSION"] }, "custom:requiredClaims"],
@@ -383,6 +397,9 @@ describe("templateRequirementsSchema", () => {
     ["no methods", { allowedMethods: [] }, "too_small:allowedMethods"],
     ["zero verifiers", { minVerifiers: 0 }, "too_small:minVerifiers"],
     ["too many verifiers", { minVerifiers: 6 }, "too_big:minVerifiers"],
+    ["zero validity", { validityMonths: 0 }, "too_small:validityMonths"],
+    ["validity over ten years", { validityMonths: 121 }, "too_big:validityMonths"],
+    ["fractional validity", { validityMonths: 1.5 }, "invalid_type:validityMonths"],
   ])("rejects %s", (_label, change, issue) => {
     expect(issues(templateRequirementsSchema, { ...valid, ...change })).toEqual([issue]);
   });
@@ -390,8 +407,6 @@ describe("templateRequirementsSchema", () => {
 
 describe("attestationSubmissionSchema", () => {
   const valid = {
-    assetId: "WB-7F93A281",
-    templateVersionId: UUID,
     claimType: "AUTHENTICATION",
     result: "CONFIRMED",
     method: "IN_PERSON",
@@ -419,14 +434,31 @@ describe("attestationSubmissionSchema", () => {
     ).toBe(true);
   });
 
-  it.each(["verifierId", "status", "chainAttestationAddress", "trustScore", "verified"])(
-    "rejects the backend-controlled field %s",
-    (field) => {
-      expect(issues(attestationSubmissionSchema, { ...valid, [field]: "x" })).toEqual([
-        "unrecognized_keys",
-      ]);
-    },
-  );
+  it("takes the claim without a signature when preparing the message to sign", () => {
+    const draft: Partial<typeof valid> = { ...valid };
+    delete draft.signature;
+    expect(attestationDraftSchema.safeParse(draft).success).toBe(true);
+    expect(issues(attestationDraftSchema, valid)).toEqual(["unrecognized_keys"]);
+    expect(issues(attestationDraftSchema, { ...draft, claimType: "CONDITION" })).toEqual([
+      "custom:conditionGrade",
+    ]);
+  });
+
+  it.each([
+    "verifierId",
+    "status",
+    "chainAttestationAddress",
+    "trustScore",
+    "verified",
+    "assetId",
+    "templateVersionId",
+    "verificationRequestId",
+    "signedMessage",
+  ])("rejects the backend-controlled field %s", (field) => {
+    expect(issues(attestationSubmissionSchema, { ...valid, [field]: "x" })).toEqual([
+      "unrecognized_keys",
+    ]);
+  });
 
   it.each([
     ["an expiry before issuance", { expiresAt: "2026-02-01T00:00:00Z" }, "custom:expiresAt"],
@@ -455,14 +487,14 @@ describe("attestationSubmissionSchema", () => {
 });
 
 describe("requests, transfers and disputes", () => {
-  it("validates verification requests", () => {
+  it("validates verification requests; the asset comes from the path", () => {
+    expect(verificationRequestSchema.safeParse({ templateVersionId: UUID }).success).toBe(true);
+    expect(issues(verificationRequestSchema, { templateVersionId: "1" })).toEqual([
+      "invalid_format:templateVersionId",
+    ]);
     expect(
-      verificationRequestSchema.safeParse({ assetId: "WB-7F93A281", templateVersionId: UUID })
-        .success,
-    ).toBe(true);
-    expect(
-      issues(verificationRequestSchema, { assetId: "WB-7F93A281", templateVersionId: "1" }),
-    ).toEqual(["invalid_format:templateVersionId"]);
+      issues(verificationRequestSchema, { templateVersionId: UUID, assetId: "WB-7F93A281" }),
+    ).toEqual(["unrecognized_keys"]);
   });
 
   it("validates transfers and defaults the expiry", () => {
@@ -540,5 +572,69 @@ describe("asset endpoint inputs", () => {
     expect(
       assetConditionRequestSchema.safeParse({ condition: "GOOD", assetId: "WB-7F93A281" }).success,
     ).toBe(false);
+  });
+});
+
+describe("verification templates", () => {
+  it("accepts a template with a readable code", () => {
+    expect(
+      templateCreateSchema.safeParse({
+        code: "luxury-watch-standard",
+        category: "LUXURY_WATCH",
+        name: "Luxury watch — standard",
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    ["an upper-case code", { code: "Watch" }, "invalid_format:code"],
+    ["a short code", { code: "ab" }, "invalid_format:code"],
+    ["an unknown category", { category: "CARS" }, "invalid_value:category"],
+    ["a status", { status: "PUBLISHED" }, "unrecognized_keys"],
+  ])("rejects %s", (_label, change, issue) => {
+    const valid = { code: "watch-basic", category: "LUXURY_WATCH", name: "Basic" };
+    expect(issues(templateCreateSchema, { ...valid, ...change })).toEqual([issue]);
+  });
+
+  it("only publishes or retires versions", () => {
+    expect(templateVersionStatusSchema.safeParse({ status: "PUBLISHED" }).success).toBe(true);
+    expect(issues(templateVersionStatusSchema, { status: "DRAFT" })).toEqual([
+      "invalid_value:status",
+    ]);
+  });
+});
+
+describe("verifier work", () => {
+  it("defaults the request list to the open queue", () => {
+    expect(verifierRequestListQuerySchema.parse({})).toEqual({ scope: "open", limit: 20 });
+    expect(issues(verifierRequestListQuerySchema, { scope: "all" })).toEqual([
+      "invalid_value:scope",
+    ]);
+  });
+
+  it("requires a reason to reject evidence and never sets it back to pending", () => {
+    expect(evidenceReviewSchema.safeParse({ status: "ACCEPTED" }).success).toBe(true);
+    expect(issues(evidenceReviewSchema, { status: "REJECTED" })).toEqual(["custom:reason"]);
+    expect(issues(evidenceReviewSchema, { status: "PENDING" })).toEqual(["invalid_value:status"]);
+  });
+
+  it("requires a reason to revoke an attestation", () => {
+    expect(issues(attestationRevokeSchema, {})).toEqual(["invalid_type:reason"]);
+  });
+
+  it("keeps verifier evidence private and limits its types", () => {
+    const valid = {
+      type: "INSPECTION_REPORT",
+      sha256: SHA,
+      mimeType: "application/pdf",
+      sizeBytes: 10,
+    };
+    expect(verifierEvidenceUploadSchema.safeParse(valid).success).toBe(true);
+    expect(issues(verifierEvidenceUploadSchema, { ...valid, visibility: "PUBLIC" })).toEqual([
+      "unrecognized_keys",
+    ]);
+    expect(issues(verifierEvidenceUploadSchema, { ...valid, type: "RECEIPT" })).toEqual([
+      "invalid_value:type",
+    ]);
   });
 });

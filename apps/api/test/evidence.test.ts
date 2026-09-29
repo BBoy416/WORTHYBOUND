@@ -189,6 +189,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         evidenceId: evidence.id,
         type: "RECEIPT",
         sha256: sha256(body),
+        source: "OWNER",
       });
       const [commitment] = await db.prisma.evidenceCommitment.findMany({
         where: { assetId: id },

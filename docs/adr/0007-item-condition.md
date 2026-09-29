@@ -39,3 +39,4 @@ regardless of the grade, and still stops counting after a transfer (ADR 0002).
 - The trust engine has no condition input, so the grade cannot change a score by accident.
 - A change of condition after verification requires a new `CONDITION` attestation; the old grade
   is superseded, never edited.
+- Phase 8: the grade is a line of the signed attestation message (`wb-attestation-v1`, ADR 0012).

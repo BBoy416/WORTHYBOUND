@@ -222,6 +222,7 @@ enum ProvenanceEventType {
   TOKENIZED
   EVIDENCE_ADDED
   EVIDENCE_VISIBILITY_CHANGED
+  EVIDENCE_REVIEWED
   EVIDENCE_COMMITTED
   ATTESTATION_ADDED
   ATTESTATION_REVOKED
@@ -289,30 +290,32 @@ model User {
   createdAt           DateTime       @default(now()) @db.Timestamptz(3)
   updatedAt           DateTime       @updatedAt @db.Timestamptz(3)
 
-  sessions                Session[]
-  roles                   RoleAssignment[]              @relation("RoleHolder")
-  rolesGranted            RoleAssignment[]              @relation("RoleGranter")
-  assets                  Asset[]
-  ownerships              Ownership[]
-  transfersSent           TransferRequest[]             @relation("TransferFrom")
-  transfersReceived       TransferRequest[]             @relation("TransferTo")
-  evidenceUploaded        Evidence[]                    @relation("EvidenceUploader")
-  evidenceReviewed        Evidence[]                    @relation("EvidenceReviewer")
-  evidenceUploads         EvidenceUpload[]
-  verifier                Verifier?                     @relation("VerifierUser")
-  verifiersApproved       Verifier[]                    @relation("VerifierApprover")
-  permissionsApproved     VerifierCategoryPermission[]
-  verificationRequests    VerificationRequest[]
-  templateVersionsCreated VerificationTemplateVersion[]
-  disputesOpened          Dispute[]                     @relation("DisputeOpener")
-  disputesResolved        Dispute[]                     @relation("DisputeResolver")
-  assetStatusEvents       AssetStatusEvent[]
-  verifierStatusEvents    VerifierStatusEvent[]
-  permissionEvents        VerifierCategoryPermissionEvent[]
-  attestationStatusEvents AttestationStatusEvent[]
-  provenanceEvents        ProvenanceEvent[]
-  auditLogs               AuditLog[]
-  idempotencyKeys         IdempotencyKey[]
+  sessions                  Session[]
+  roles                     RoleAssignment[]                  @relation("RoleHolder")
+  rolesGranted              RoleAssignment[]                  @relation("RoleGranter")
+  assets                    Asset[]
+  ownerships                Ownership[]
+  transfersSent             TransferRequest[]                 @relation("TransferFrom")
+  transfersReceived         TransferRequest[]                 @relation("TransferTo")
+  evidenceUploaded          Evidence[]                        @relation("EvidenceUploader")
+  evidenceReviewed          Evidence[]                        @relation("EvidenceReviewer")
+  evidenceUploads           EvidenceUpload[]
+  verifier                  Verifier?                         @relation("VerifierUser")
+  verifiersApproved         Verifier[]                        @relation("VerifierApprover")
+  permissionsApproved       VerifierCategoryPermission[]
+  verificationRequests      VerificationRequest[]
+  templateVersionsCreated   VerificationTemplateVersion[]     @relation("TemplateVersionCreator")
+  templateVersionsPublished VerificationTemplateVersion[]     @relation("TemplateVersionPublisher")
+  disputesOpened            Dispute[]                         @relation("DisputeOpener")
+  disputesResolved          Dispute[]                         @relation("DisputeResolver")
+  assetStatusEvents         AssetStatusEvent[]
+  verifierStatusEvents      VerifierStatusEvent[]
+  permissionEvents          VerifierCategoryPermissionEvent[]
+  attestationStatusEvents   AttestationStatusEvent[]
+  requestStatusEvents       VerificationRequestStatusEvent[]
+  provenanceEvents          ProvenanceEvent[]
+  auditLogs                 AuditLog[]
+  idempotencyKeys           IdempotencyKey[]
 
   @@map("users")
 }
@@ -476,39 +479,44 @@ model TransferRequest {
 // ─── Evidence ─────────────────────────────────────────────────────────────────
 
 model Evidence {
-  id               String             @id @default(uuid(7)) @db.Uuid
-  assetId          String             @db.Uuid
-  uploaderId       String             @db.Uuid
-  type             EvidenceType
-  source           ProofSource        @default(OWNER)
+  id                    String             @id @default(uuid(7)) @db.Uuid
+  assetId               String             @db.Uuid
+  uploaderId            String             @db.Uuid
+  type                  EvidenceType
+  source                ProofSource        @default(OWNER)
   /// Private object-storage key. Never a public URL.
-  storageKey       String             @unique
+  storageKey            String             @unique
   /// Storage key of the metadata-free public copy; set only while the photo is public.
-  publicStorageKey String?            @unique
+  publicStorageKey      String?            @unique
   /// Earliest evidence with the same file on another asset; flagged for admin review.
-  duplicateOfId    String?            @db.Uuid
-  sha256           String
-  mimeType         String
-  sizeBytes        Int
-  visibility       EvidenceVisibility @default(PRIVATE)
-  reviewStatus     ReviewStatus       @default(PENDING)
-  reviewedById     String?            @db.Uuid
-  reviewedAt       DateTime?          @db.Timestamptz(3)
-  originalFilename String?
-  description      String?
-  capturedAt       DateTime?          @db.Timestamptz(3)
-  createdAt        DateTime           @default(now()) @db.Timestamptz(3)
-  updatedAt        DateTime           @updatedAt @db.Timestamptz(3)
+  duplicateOfId         String?            @db.Uuid
+  sha256                String
+  mimeType              String
+  sizeBytes             Int
+  visibility            EvidenceVisibility @default(PRIVATE)
+  reviewStatus          ReviewStatus       @default(PENDING)
+  reviewedById          String?            @db.Uuid
+  reviewedAt            DateTime?          @db.Timestamptz(3)
+  /// Shown to the owner; required when the evidence is rejected.
+  reviewReason          String?
+  /// Set on evidence added by the verifier assigned to this request (source VERIFIER).
+  verificationRequestId String?            @db.Uuid
+  originalFilename      String?
+  description           String?
+  capturedAt            DateTime?          @db.Timestamptz(3)
+  createdAt             DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime           @updatedAt @db.Timestamptz(3)
 
-  asset           Asset                    @relation(fields: [assetId], references: [id], onDelete: Restrict)
-  duplicateOf     Evidence?                @relation("EvidenceDuplicate", fields: [duplicateOfId], references: [id], onDelete: Restrict)
-  duplicates      Evidence[]               @relation("EvidenceDuplicate")
-  upload          EvidenceUpload?
-  uploader        User                     @relation("EvidenceUploader", fields: [uploaderId], references: [id], onDelete: Restrict)
-  reviewedBy      User?                    @relation("EvidenceReviewer", fields: [reviewedById], references: [id], onDelete: Restrict)
-  commitmentItems EvidenceCommitmentItem[]
-  attestations    AttestationEvidence[]
-  disputes        Dispute[]
+  asset               Asset                    @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  verificationRequest VerificationRequest?     @relation(fields: [verificationRequestId], references: [id], onDelete: Restrict)
+  duplicateOf         Evidence?                @relation("EvidenceDuplicate", fields: [duplicateOfId], references: [id], onDelete: Restrict)
+  duplicates          Evidence[]               @relation("EvidenceDuplicate")
+  upload              EvidenceUpload?
+  uploader            User                     @relation("EvidenceUploader", fields: [uploaderId], references: [id], onDelete: Restrict)
+  reviewedBy          User?                    @relation("EvidenceReviewer", fields: [reviewedById], references: [id], onDelete: Restrict)
+  commitmentItems     EvidenceCommitmentItem[]
+  attestations        AttestationEvidence[]
+  disputes            Dispute[]
 
   @@unique([assetId, sha256])
   @@index([sha256])
@@ -523,30 +531,33 @@ enum EvidenceUploadStatus {
 
 /// A requested upload. Evidence is created only after the server has checked the stored file.
 model EvidenceUpload {
-  id               String               @id @default(uuid(7)) @db.Uuid
-  assetId          String               @db.Uuid
-  uploaderId       String               @db.Uuid
-  type             EvidenceType
+  id                    String               @id @default(uuid(7)) @db.Uuid
+  assetId               String               @db.Uuid
+  uploaderId            String               @db.Uuid
+  type                  EvidenceType
   /// Declared by the client; checked against the stored file.
-  mimeType         String
-  sizeBytes        Int
-  sha256           String
-  visibility       EvidenceVisibility
-  originalFilename String?
-  description      String?
-  capturedAt       DateTime?            @db.Timestamptz(3)
+  mimeType              String
+  sizeBytes             Int
+  sha256                String
+  visibility            EvidenceVisibility
+  originalFilename      String?
+  description           String?
+  capturedAt            DateTime?            @db.Timestamptz(3)
+  /// Set when the verifier assigned to this request uploads.
+  verificationRequestId String?              @db.Uuid
   /// Holding-area key the client uploads to. Never a public URL.
-  stagingKey       String               @unique
-  status           EvidenceUploadStatus @default(PENDING)
-  failureReason    String?
-  evidenceId       String?              @unique @db.Uuid
-  expiresAt        DateTime             @db.Timestamptz(3)
-  createdAt        DateTime             @default(now()) @db.Timestamptz(3)
-  completedAt      DateTime?            @db.Timestamptz(3)
+  stagingKey            String               @unique
+  status                EvidenceUploadStatus @default(PENDING)
+  failureReason         String?
+  evidenceId            String?              @unique @db.Uuid
+  expiresAt             DateTime             @db.Timestamptz(3)
+  createdAt             DateTime             @default(now()) @db.Timestamptz(3)
+  completedAt           DateTime?            @db.Timestamptz(3)
 
-  asset    Asset     @relation(fields: [assetId], references: [id], onDelete: Restrict)
-  uploader User      @relation(fields: [uploaderId], references: [id], onDelete: Restrict)
-  evidence Evidence? @relation(fields: [evidenceId], references: [id], onDelete: Restrict)
+  asset               Asset                @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  uploader            User                 @relation(fields: [uploaderId], references: [id], onDelete: Restrict)
+  evidence            Evidence?            @relation(fields: [evidenceId], references: [id], onDelete: Restrict)
+  verificationRequest VerificationRequest? @relation(fields: [verificationRequestId], references: [id], onDelete: Restrict)
 
   @@index([assetId, status])
   @@index([uploaderId, createdAt])
@@ -605,11 +616,12 @@ model Verifier {
   createdAt               DateTime           @default(now()) @db.Timestamptz(3)
   updatedAt               DateTime           @updatedAt @db.Timestamptz(3)
 
-  user                User                         @relation("VerifierUser", fields: [userId], references: [id], onDelete: Restrict)
-  approvedBy          User?                        @relation("VerifierApprover", fields: [approvedById], references: [id], onDelete: Restrict)
+  user                User                             @relation("VerifierUser", fields: [userId], references: [id], onDelete: Restrict)
+  approvedBy          User?                            @relation("VerifierApprover", fields: [approvedById], references: [id], onDelete: Restrict)
   categoryPermissions VerifierCategoryPermission[]
   statusEvents        VerifierStatusEvent[]
   assignedRequests    VerificationRequest[]
+  requestStatusEvents VerificationRequestStatusEvent[]
   attestations        Attestation[]
 
   @@index([status])
@@ -672,6 +684,7 @@ model VerifierStatusEvent {
   @@map("verifier_status_events")
 }
 
+/// Code and category never change.
 model VerificationTemplate {
   id          String        @id @default(uuid(7)) @db.Uuid
   code        String        @unique
@@ -687,7 +700,9 @@ model VerificationTemplate {
   @@map("verification_templates")
 }
 
-/// Immutable once PUBLISHED (only PUBLISHED -> RETIRED is allowed).
+/// Immutable once PUBLISHED (only PUBLISHED -> RETIRED is allowed). At most one PUBLISHED version
+/// per template; it is published by an admin other than its creator, unless the creator is the
+/// only active admin.
 model VerificationTemplateVersion {
   id               String                @id @default(uuid(7)) @db.Uuid
   templateId       String                @db.Uuid
@@ -698,11 +713,15 @@ model VerificationTemplateVersion {
   allowedMethods   Json
   minVerifiers     Int                   @default(1)
   createdById      String?               @db.Uuid
+  publishedById    String?               @db.Uuid
+  /// Attestations under this version are valid for at most this many months.
+  validityMonths   Int                   @default(60)
   publishedAt      DateTime?             @db.Timestamptz(3)
   createdAt        DateTime              @default(now()) @db.Timestamptz(3)
 
   template     VerificationTemplate  @relation(fields: [templateId], references: [id], onDelete: Restrict)
-  createdBy    User?                 @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  createdBy    User?                 @relation("TemplateVersionCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  publishedBy  User?                 @relation("TemplateVersionPublisher", fields: [publishedById], references: [id], onDelete: Restrict)
   requests     VerificationRequest[]
   attestations Attestation[]
 
@@ -710,6 +729,8 @@ model VerificationTemplateVersion {
   @@map("verification_template_versions")
 }
 
+/// Opened by the asset owner, claimed by one verifier. At most one OPEN or ASSIGNED request per
+/// asset and template version. Every status change is recorded in VerificationRequestStatusEvent.
 model VerificationRequest {
   id                 String                    @id @default(uuid(7)) @db.Uuid
   assetId            String                    @db.Uuid
@@ -717,27 +738,56 @@ model VerificationRequest {
   templateVersionId  String                    @db.Uuid
   assignedVerifierId String?                   @db.Uuid
   status             VerificationRequestStatus @default(OPEN)
+  assignedAt         DateTime?                 @db.Timestamptz(3)
   completedAt        DateTime?                 @db.Timestamptz(3)
+  expiresAt          DateTime                  @db.Timestamptz(3)
+  /// Why the request was cancelled or expired.
+  closedReason       String?
   createdAt          DateTime                  @default(now()) @db.Timestamptz(3)
   updatedAt          DateTime                  @updatedAt @db.Timestamptz(3)
 
-  asset            Asset                       @relation(fields: [assetId], references: [id], onDelete: Restrict)
-  requester        User                        @relation(fields: [requesterId], references: [id], onDelete: Restrict)
-  templateVersion  VerificationTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
-  assignedVerifier Verifier?                   @relation(fields: [assignedVerifierId], references: [id], onDelete: Restrict)
+  asset            Asset                            @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  requester        User                             @relation(fields: [requesterId], references: [id], onDelete: Restrict)
+  templateVersion  VerificationTemplateVersion      @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
+  assignedVerifier Verifier?                        @relation(fields: [assignedVerifierId], references: [id], onDelete: Restrict)
   attestations     Attestation[]
+  evidence         Evidence[]
+  evidenceUploads  EvidenceUpload[]
+  statusEvents     VerificationRequestStatusEvent[]
 
   @@index([assetId, status])
+  @@index([status, createdAt])
+  @@index([assignedVerifierId, status])
   @@map("verification_requests")
 }
 
-/// Signed claim by an approved verifier. Claim, signature and payload fields are immutable;
-/// only status may change, and every change is recorded in AttestationStatusEvent.
+/// Append-only. `verifierId` is the assigned verifier after the change.
+model VerificationRequestStatusEvent {
+  id         String                     @id @default(uuid(7)) @db.Uuid
+  requestId  String                     @db.Uuid
+  fromStatus VerificationRequestStatus?
+  toStatus   VerificationRequestStatus
+  verifierId String?                    @db.Uuid
+  reason     String?
+  actorId    String?                    @db.Uuid
+  createdAt  DateTime                   @default(now()) @db.Timestamptz(3)
+
+  request  VerificationRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  verifier Verifier?           @relation(fields: [verifierId], references: [id], onDelete: Restrict)
+  actor    User?               @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([requestId, createdAt])
+  @@map("verification_request_status_events")
+}
+
+/// Signed claim by the verifier assigned to a verification request. Claim, signature and payload
+/// fields are immutable; only status may change, and every change is recorded in
+/// AttestationStatusEvent. At most one ACTIVE or DISPUTED attestation per verifier, asset and claim.
 model Attestation {
   id                      String            @id @default(uuid(7)) @db.Uuid
   assetId                 String            @db.Uuid
   verifierId              String            @db.Uuid
-  verificationRequestId   String?           @db.Uuid
+  verificationRequestId   String            @db.Uuid
   templateVersionId       String            @db.Uuid
   claimType               ClaimType
   result                  AttestationResult
@@ -747,7 +797,11 @@ model Attestation {
   conditionGrade          ItemCondition?
   notes                   String?
   nonce                   String
+  /// The exact text the verifier's wallet signed (wb-attestation-v1). Private: names the wallet.
+  signedMessage           String
+  /// SHA-256 of signedMessage.
   signedPayloadHash       String
+  /// Base58 Ed25519 signature by the verifier's wallet over signedMessage.
   signature               String
   issuedAt                DateTime          @db.Timestamptz(3)
   expiresAt               DateTime?         @db.Timestamptz(3)
@@ -759,7 +813,7 @@ model Attestation {
 
   asset               Asset                       @relation(fields: [assetId], references: [id], onDelete: Restrict)
   verifier            Verifier                    @relation(fields: [verifierId], references: [id], onDelete: Restrict)
-  verificationRequest VerificationRequest?        @relation(fields: [verificationRequestId], references: [id], onDelete: Restrict)
+  verificationRequest VerificationRequest         @relation(fields: [verificationRequestId], references: [id], onDelete: Restrict)
   templateVersion     VerificationTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
   supersedes          Attestation?                @relation("Supersession", fields: [supersedesId], references: [id], onDelete: Restrict)
   supersededBy        Attestation?                @relation("Supersession")

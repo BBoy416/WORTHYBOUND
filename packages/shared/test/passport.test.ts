@@ -38,6 +38,7 @@ function source(overrides: Partial<PassportSource> = {}): PassportSource {
   const privateEvidence = {
     id: `${SECRET}-evidence-private`,
     type: "RECEIPT",
+    source: "OWNER",
     visibility: "PRIVATE",
     reviewStatus: "ACCEPTED",
     sha256: hash("a"),
@@ -52,8 +53,11 @@ function source(overrides: Partial<PassportSource> = {}): PassportSource {
   const publicPhoto = {
     id: "ev-photo",
     type: "PHOTO",
+    source: "VERIFIER",
     visibility: "PUBLIC",
     reviewStatus: "ACCEPTED",
+    reviewReason: `${SECRET}-review-reason`,
+    verificationRequestId: `${SECRET}-request`,
     sha256: hash("b"),
     mimeType: "image/jpeg",
     capturedAt: d("2026-01-01T12:00:00Z"),
@@ -88,6 +92,8 @@ function source(overrides: Partial<PassportSource> = {}): PassportSource {
     verifier,
     notes: `${SECRET}-notes`,
     nonce: `${SECRET}-nonce`,
+    signedMessage: `${SECRET}-signed-message`,
+    verificationRequestId: `${SECRET}-request`,
   } as const;
   const revoked = {
     ...attestation,
@@ -169,6 +175,7 @@ describe("toPublicPassport", () => {
       {
         evidenceId: "ev-photo",
         type: "PHOTO",
+        source: "VERIFIER",
         sha256: hash("b"),
         mimeType: "image/jpeg",
         capturedAt: "2026-01-01T12:00:00.000Z",
