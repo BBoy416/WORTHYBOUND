@@ -112,6 +112,32 @@ or neither does; the program is unchanged. The buyer sees the price before accep
 signing, and WorthyBound checks the buyer's balance before accepting the signature. This covers
 in-person transfers; escrow for shipped items is still to come.
 
+**Escrow on devnet in SOL (2026-10-07).** A shipped transfer (`delivery: "SHIPPED"`, with a
+price) is escrowed without a program change. When the buyer accepts, the oracle creates the
+transfer's durable nonce account, which also holds the escrow, and a second nonce account for the
+payment. Both parties sign the transfer, which pays the seller from the escrow account (a nonce
+withdrawal the oracle signs) together with `transfer_asset`; the buyer then signs the payment of
+the price into escrow (`POST /transfers/:id/payment`). A refund returns the price and advances the
+escrow nonce, so the signed transfer can no longer run. Deadlines:
+
+- The seller films the item and the sealed package with the session's code
+  (`POST /transfers/:id/shipment-session`) and ships within 3 days of payment, or the buyer is
+  refunded. Until shipping, the seller can cancel with a refund.
+- The buyer confirms delivery within 21 days of shipping. Afterwards they can cancel with a
+  refund, or extend by 7 days up to 3 times. Without either, the sale is released 7 days after the
+  delivery period.
+- Confirming delivery starts a receipt check (`kind: "RECEIPT"`): within 48 hours the buyer
+  photographs the package with the seller's code, then the item. The photos are compared with the
+  seller's photos before shipping. A match releases the sale; no match holds it for an
+  administrator; otherwise it is released 7 days after delivery.
+- The buyer can report a problem until the release (`POST /transfers/:id/dispute`). An
+  administrator releases the sale or refunds the buyer (`POST /admin/transfers/:id/resolution`).
+  A transfer that could not be sent is held the same way and can only be refunded.
+
+Photos taken before shipping are not recorded photos for other checks and do not count toward the
+evidence limit. If the owner reports the item lost or stolen, a paid escrow is refunded before
+shipping and held for an administrator after.
+
 **Remaining fraud and its limits.**
 
 | Fraud                                                 | Countermeasure                                                                         |

@@ -149,15 +149,20 @@ export function createCaptureService({ prisma, now }: CaptureServiceOptions) {
           throw new ApiError(409, "asset_revoked", "Evidence cannot be added to a revoked asset");
         }
         await expireDue(tx, asset.id, at);
-        // Sessions for remote checks are started from the check and limited with it.
+        // Sessions for remote checks and shipments are started from them and limited with them.
         const open = await tx.captureSession.findFirst({
-          where: { assetId: asset.id, purchaseCheckId: null, status: "OPEN" },
+          where: {
+            assetId: asset.id,
+            purchaseCheckId: null,
+            transferRequestId: null,
+            status: "OPEN",
+          },
           include: withEvidence,
         });
         if (open) return { session: open, created: false };
 
         const since = new Date(at.getTime() - DAY_MS);
-        const own = { purchaseCheckId: null, createdAt: { gt: since } };
+        const own = { purchaseCheckId: null, transferRequestId: null, createdAt: { gt: since } };
         const [forAsset, forUser] = await Promise.all([
           tx.captureSession.count({ where: { ...own, assetId: asset.id } }),
           tx.captureSession.count({ where: { ...own, ownerId: actor.userId } }),

@@ -17,8 +17,10 @@ import type { Asset, AutomatedJob, Evidence, PrismaClient } from "@worthybound/d
 import {
   CAPTURE_CODE_SHOT,
   CAPTURE_SHOT_INSTRUCTIONS,
+  CAPTURE_SHOTS_WITH_CODE,
   type CaptureShot,
   type CheckProblem,
+  MAX_REFERENCE_PHOTOS,
 } from "@worthybound/shared";
 import type { Storage } from "@worthybound/storage";
 import { canonicalJson, sha256Hex } from "@worthybound/trust-engine";
@@ -26,6 +28,7 @@ import type { FastifyBaseLogger } from "fastify";
 import { writeAudit } from "../audit.js";
 import { checkImage, perceptualHash, readAll } from "../evidence/inspect.js";
 import { recordInconclusive, referencePhotos } from "../purchase-checks/service.js";
+import { receiptChecked } from "../transfers/escrow.js";
 import { recordTrust } from "../trust/record.js";
 import { checksAllowed, isCheckedEvidence } from "./queue.js";
 
@@ -193,8 +196,9 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
           ? {
               shot: evidence.captureShot as CaptureShot,
               instruction: CAPTURE_SHOT_INSTRUCTIONS[evidence.captureShot as CaptureShot],
-              code:
-                evidence.captureShot === CAPTURE_CODE_SHOT ? evidence.captureSession.code : null,
+              code: CAPTURE_SHOTS_WITH_CODE.includes(evidence.captureShot as CaptureShot)
+                ? evidence.captureSession.code
+                : null,
             }
           : null,
       file: {
@@ -375,7 +379,9 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
 
   /**
    * Compares a buyer's photos, or for a remote check the photos the seller took in the check's
-   * capture session, with the item's recorded photos.
+   * capture session, with the item's recorded photos. A receipt check compares the buyer's photos
+   * of the delivered package and item with the seller's photos before shipping, and its result
+   * releases or holds the escrow.
    */
   async function matchItem(job: AutomatedJob): Promise<void> {
     const check = await prisma.purchaseCheck.findUnique({
@@ -395,10 +401,19 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
     if (!checksAllowed(check.asset)) return finish("ASSET_REVOKED");
 
     const reference: { id: string; label: string; data: Buffer }[] = [];
-    for (const e of await referencePhotos(prisma, check.assetId)) {
+    const recorded =
+      check.kind === "RECEIPT"
+        ? await shipmentPhotos(check.transferRequestId)
+        : await referencePhotos(prisma, check.assetId);
+    for (const e of recorded) {
       const data = await evidencePhoto(e);
       if (!data) continue;
-      const label = e.source === "VERIFIER" ? "verifier photo" : `owner photo: ${e.captureShot}`;
+      const label =
+        check.kind === "RECEIPT"
+          ? `seller photo before shipping: ${e.captureShot}`
+          : e.source === "VERIFIER"
+            ? "verifier photo"
+            : `owner photo: ${e.captureShot}`;
       reference.push({ id: e.id, label, data });
     }
     if (reference.length === 0) return finish("NO_REFERENCE_PHOTOS");
@@ -472,7 +487,31 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
         },
         null,
       );
+      if (check.kind === "RECEIPT" && check.transferRequestId) {
+        await receiptChecked(tx, check.transferRequestId, outcome.result, at);
+      }
     });
+  }
+
+  /** The seller's photos of the item and the sealed package before shipping, in shot order. */
+  async function shipmentPhotos(transferRequestId: string | null) {
+    const session = transferRequestId
+      ? await prisma.captureSession.findFirst({
+          where: { transferRequestId, status: "COMPLETED" },
+          orderBy: [{ completedAt: "desc" }, { id: "desc" }],
+          select: { id: true, shots: true },
+        })
+      : null;
+    if (!session) return [];
+    const photos = await prisma.evidence.findMany({
+      where: { captureSessionId: session.id, type: "PHOTO", mimeType: { startsWith: "image/" } },
+    });
+    return photos
+      .sort(
+        (a, b) =>
+          session.shots.indexOf(a.captureShot ?? "") - session.shots.indexOf(b.captureShot ?? ""),
+      )
+      .slice(0, MAX_REFERENCE_PHOTOS);
   }
 
   async function fail(job: AutomatedJob, error: unknown): Promise<void> {

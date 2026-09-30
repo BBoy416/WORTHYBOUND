@@ -105,20 +105,26 @@ const rejectionError = (reason: Rejection) =>
 /** Discarded drafts are hidden from everyone, including their owner. */
 const isDiscardedDraft = (asset: Asset) => asset.status === "REVOKED" && asset.publishedAt === null;
 
-/** Files counted toward MAX_EVIDENCE_PER_ASSET; shots filmed for remote checks are not. */
+/**
+ * Files counted toward MAX_EVIDENCE_PER_ASSET; shots filmed for remote checks or before shipping
+ * are not.
+ */
 const counted = (assetId: string) => ({
   assetId,
-  OR: [{ captureSessionId: null }, { captureSession: { purchaseCheckId: null } }],
+  OR: [
+    { captureSessionId: null },
+    { captureSession: { purchaseCheckId: null, transferRequestId: null } },
+  ],
 });
 
-/** Whether a shot belongs to a session filmed for a remote check (ADR 0014). */
-async function forRemoteCheck(tx: Tx, captureSessionId: string | null | undefined) {
+/** Whether a shot belongs to a session filmed for a remote check or before shipping (ADR 0014). */
+async function forSale(tx: Tx, captureSessionId: string | null | undefined) {
   if (!captureSessionId) return false;
   const session = await tx.captureSession.findUnique({
     where: { id: captureSessionId },
-    select: { purchaseCheckId: true },
+    select: { purchaseCheckId: true, transferRequestId: true },
   });
-  return session?.purchaseCheckId != null;
+  return session?.purchaseCheckId != null || session?.transferRequestId != null;
 }
 
 export function createEvidenceService({
@@ -301,7 +307,7 @@ export function createEvidenceService({
       if (asset.status === "REVOKED") {
         throw new ApiError(409, "asset_revoked", "Evidence cannot be added to a revoked asset");
       }
-      if (!(await forRemoteCheck(tx, input.captureSessionId))) {
+      if (!(await forSale(tx, input.captureSessionId))) {
         const [stored, pending] = await Promise.all([
           tx.evidence.count({ where: counted(asset.id) }),
           tx.evidenceUpload.count({
@@ -594,7 +600,7 @@ export function createEvidenceService({
           }
           if (asset.status === "REVOKED") throw new UploadRejected("asset_unavailable");
           if (
-            !(await forRemoteCheck(tx, upload.captureSessionId)) &&
+            !(await forSale(tx, upload.captureSessionId)) &&
             (await tx.evidence.count({ where: counted(asset.id) })) >= MAX_EVIDENCE_PER_ASSET
           ) {
             throw new UploadRejected("evidence_limit_reached");

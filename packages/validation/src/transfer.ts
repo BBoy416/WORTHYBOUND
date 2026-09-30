@@ -1,4 +1,9 @@
-import { CAPTURE_CODE_ALPHABET, CAPTURE_CODE_LENGTH, CAPTURE_SHOTS } from "@worthybound/shared";
+import {
+  CAPTURE_CODE_ALPHABET,
+  CAPTURE_CODE_LENGTH,
+  CAPTURE_SHOTS,
+  TRANSFER_DELIVERIES,
+} from "@worthybound/shared";
 import { z } from "zod";
 import {
   solanaAddressSchema,
@@ -17,6 +22,8 @@ export const transferRequestSchema = z.strictObject({
     .string()
     .regex(/^(0|[1-9][0-9]{0,17})$/, "expected a whole number of lamports")
     .default("0"),
+  /** Shipped items are paid into escrow and need a price (ADR 0014). */
+  delivery: z.enum(TRANSFER_DELIVERIES).default("IN_PERSON"),
 });
 export type TransferRequestInput = z.infer<typeof transferRequestSchema>;
 
@@ -30,6 +37,24 @@ export const transferSignatureSchema = z.strictObject({
     .regex(/^[A-Za-z0-9+/]+={0,2}$/, "expected base64"),
 });
 export type TransferSignatureInput = z.infer<typeof transferSignatureSchema>;
+
+/** The seller has shipped the filmed, sealed package. */
+export const shipmentSchema = z.strictObject({
+  carrier: text(100),
+  trackingNumber: text(100),
+});
+export type ShipmentInput = z.infer<typeof shipmentSchema>;
+
+/** The buyer reports a problem with a shipped item; the escrow is held for an administrator. */
+export const escrowDisputeSchema = z.strictObject({ reason: text(2000) });
+export type EscrowDisputeInput = z.infer<typeof escrowDisputeSchema>;
+
+/** An administrator's decision on a disputed escrow: pay the seller or refund the buyer. */
+export const resolveEscrowSchema = z.strictObject({
+  outcome: z.enum(["RELEASE", "REFUND"]),
+  resolution: text(2000),
+});
+export type ResolveEscrowInput = z.infer<typeof resolveEscrowSchema>;
 
 export const purchaseCheckParamsSchema = z.strictObject({ checkId: uuidSchema });
 export const purchaseCheckPhotoParamsSchema = z.strictObject({

@@ -28,6 +28,7 @@ import { passportRoutes } from "./passport/routes.js";
 import { purchaseCheckRoutes } from "./purchase-checks/routes.js";
 import { templateRoutes } from "./templates/routes.js";
 import { captureRoutes } from "./capture/routes.js";
+import { escrowChainHooks, runEscrowDeadlines } from "./transfers/escrow.js";
 import { completeTransfer } from "./transfers/service.js";
 import { transferRoutes } from "./transfers/routes.js";
 import { verificationRoutes } from "./verification/routes.js";
@@ -139,6 +140,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         log: app.log,
         metadataUrl: (wbId) => `${config.apiPublicUrl}/metadata/${wbId}`,
         completeTransfer,
+        escrow: escrowChainHooks,
+        escrowDeadlines: (at) => runEscrowDeadlines(prisma, at),
       })
     : null;
   app.decorate("chainSync", chainSync);

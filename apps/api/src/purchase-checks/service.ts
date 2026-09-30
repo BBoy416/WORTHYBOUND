@@ -76,7 +76,9 @@ const wrongKind = (kind: PurchaseCheckKind) =>
     "purchase_check_kind",
     kind === "REMOTE"
       ? "This is a remote check; the seller films the item"
-      : "This check is in person; the buyer photographs the item",
+      : kind === "RECEIPT"
+        ? "This check is of a delivered item; the buyer photographs the package and the item"
+        : "This check is in person; the buyer photographs the item",
   );
 
 /**
@@ -98,9 +100,9 @@ export async function referencePhotos(db: Db, assetId: string): Promise<Evidence
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: MAX_REFERENCE_PHOTOS,
     }),
-    // Sessions filmed for a remote check are compared, not compared with.
+    // Sessions filmed for a remote check or before shipping are compared, not compared with.
     db.captureSession.findFirst({
-      where: { assetId, purchaseCheckId: null, status: "COMPLETED" },
+      where: { assetId, purchaseCheckId: null, transferRequestId: null, status: "COMPLETED" },
       orderBy: [{ completedAt: "desc" }, { id: "desc" }],
       select: { id: true, shots: true },
     }),
@@ -307,9 +309,11 @@ export function createPurchaseCheckService({
       if (current) return { check: current, created: false };
 
       const since = new Date(at.getTime() - DAY_MS);
+      // Receipt checks come with a shipped transfer and are not limited.
+      const started = { createdAt: { gt: since }, kind: { not: "RECEIPT" as const } };
       const [forBuyer, forAsset, remoteForAsset] = await Promise.all([
-        tx.purchaseCheck.count({ where: { buyerId: actor.userId, createdAt: { gt: since } } }),
-        tx.purchaseCheck.count({ where: { assetId: asset.id, createdAt: { gt: since } } }),
+        tx.purchaseCheck.count({ where: { ...started, buyerId: actor.userId } }),
+        tx.purchaseCheck.count({ where: { ...started, assetId: asset.id } }),
         tx.purchaseCheck.count({
           where: { assetId: asset.id, kind: "REMOTE", createdAt: { gt: since } },
         }),
@@ -463,13 +467,14 @@ export function createPurchaseCheckService({
     },
 
     /**
-     * Stores a photo the buyer took with the app's camera, without its metadata. The last photo
-     * queues the comparison with the recorded photos.
+     * Stores a photo the buyer took with the app's camera, without its metadata, in person or of
+     * a delivered item. The last photo queues the comparison with the recorded photos, or with
+     * the seller's photos before shipping.
      */
     async addPhoto(id: string, shot: CaptureShot, body: Buffer, actor: Actor) {
       const at = now();
       const assertOpen = (check: CheckRecord) => {
-        if (check.kind !== "IN_PERSON") throw wrongKind(check.kind);
+        if (check.kind === "REMOTE") throw wrongKind(check.kind);
         if (check.status !== "OPEN" || check.photosCompletedAt !== null || check.expiresAt <= at) {
           throw checkClosed();
         }

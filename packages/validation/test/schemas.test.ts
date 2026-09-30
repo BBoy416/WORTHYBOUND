@@ -16,6 +16,7 @@ import {
   automatedCheckListQuerySchema,
   categoryPermissionChangeSchema,
   EVIDENCE_MAX_BYTES,
+  escrowDisputeSchema,
   evidenceParamsSchema,
   evidenceReviewSchema,
   evidenceUploadParamsSchema,
@@ -25,9 +26,11 @@ import {
   openDisputeSchema,
   registerAssetSchema,
   resolveDisputeSchema,
+  resolveEscrowSchema,
   roleAssignmentParamsSchema,
   roleGrantSchema,
   roleListQuerySchema,
+  shipmentSchema,
   templateCreateSchema,
   templateRequirementsSchema,
   templateVersionStatusSchema,
@@ -596,6 +599,29 @@ describe("requests, transfers and disputes", () => {
     ]);
     expect(issues(transferParamsSchema, { transferId: "1" })).toEqual([
       "invalid_format:transferId",
+    ]);
+  });
+
+  it("validates shipped transfers, shipments, escrow disputes and their decisions", () => {
+    const base = { assetId: "WB-7F93A281", toWalletAddress: WALLET };
+    expect(transferRequestSchema.parse(base).delivery).toBe("IN_PERSON");
+    expect(transferRequestSchema.parse({ ...base, delivery: "SHIPPED" }).delivery).toBe("SHIPPED");
+    expect(issues(transferRequestSchema, { ...base, delivery: "POST" })).toEqual([
+      "invalid_value:delivery",
+    ]);
+    expect(shipmentSchema.parse({ carrier: " DHL ", trackingNumber: "JD0142" })).toEqual({
+      carrier: "DHL",
+      trackingNumber: "JD0142",
+    });
+    expect(issues(shipmentSchema, { carrier: "DHL", trackingNumber: " " })).toEqual([
+      "too_small:trackingNumber",
+    ]);
+    expect(issues(escrowDisputeSchema, { reason: "x".repeat(2001) })).toEqual(["too_big:reason"]);
+    expect(resolveEscrowSchema.safeParse({ outcome: "REFUND", resolution: "Fake" }).success).toBe(
+      true,
+    );
+    expect(issues(resolveEscrowSchema, { outcome: "UPHELD", resolution: "Fake" })).toEqual([
+      "invalid_value:outcome",
     ]);
   });
 

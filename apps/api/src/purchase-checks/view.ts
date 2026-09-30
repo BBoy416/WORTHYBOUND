@@ -125,6 +125,7 @@ export function toPurchaseCheck(
 ): PurchaseCheckView {
   const { asset } = check;
   const remote = check.kind === "REMOTE";
+  const inPerson = check.kind === "IN_PERSON";
   const session = check.captureSessions[0];
   const filming = session && (session.status === "COMPLETED" || session.expiresAt > at);
   const taken = new Map<string | null, Date>(
@@ -140,7 +141,7 @@ export function toPurchaseCheck(
     : check.ownerConfirmedAt !== null && check.ownerConfirmedById === asset.ownerId;
   const expired =
     check.status === "OPEN" && check.photosCompletedAt === null && check.expiresAt <= at;
-  const codeValid = remote
+  const codeValid = !inPerson
     ? check.status === "OPEN" && check.photosCompletedAt === null && !expired
     : check.status === "OPEN" &&
       check.ownerConfirmedAt === null &&
@@ -164,9 +165,9 @@ export function toPurchaseCheck(
       confirmedAt: confirmed
         ? iso(remote ? (session?.completedAt ?? null) : check.ownerConfirmedAt)
         : null,
-      code: codeValid || remote ? check.ownerCode : null,
+      code: codeValid || !inPerson ? check.ownerCode : null,
       codeExpiresAt: codeValid ? iso(check.ownerCodeExpiresAt) : null,
-      message: codeValid && !remote ? ownerConfirmationMessage(asset.wbId, check.ownerCode) : null,
+      message: codeValid && inPerson ? ownerConfirmationMessage(asset.wbId, check.ownerCode) : null,
       codeCheck: codeCheck ? codeResult(codeCheck) : null,
     },
     item: {
