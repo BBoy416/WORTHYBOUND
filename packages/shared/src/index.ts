@@ -8,3 +8,4 @@ export * from "./verification.js";
 export * from "./verifiers.js";
 export * from "./passport.js";
 export * from "./evidence.js";
+export * from "./checks.js";

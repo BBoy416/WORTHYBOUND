@@ -11,7 +11,7 @@ export class ApiError extends Error {
 
 /** Calls the API on the same origin with the session cookie. */
 export async function api<T>(
-  method: "GET" | "POST" | "PATCH" | "DELETE",
+  method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
   path: string,
   body?: unknown,
   extraHeaders: Record<string, string> = {},
@@ -36,6 +36,7 @@ export async function api<T>(
 export const get = <T>(path: string) => api<T>("GET", path);
 export const post = <T>(path: string, body?: unknown, headers?: Record<string, string>) =>
   api<T>("POST", path, body, headers);
+export const put = <T>(path: string, body?: unknown) => api<T>("PUT", path, body);
 export const del = <T>(path: string) => api<T>("DELETE", path);
 
 /** Hex SHA-256 of a file, as the API expects when an upload is requested. */

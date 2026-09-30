@@ -1,3 +1,4 @@
+import { createOpenAIEngine } from "@worthybound/automated-checks";
 import { createPrismaClient } from "@worthybound/database";
 import { createConnection, createWorthyBoundOracle, loadKeypairSigner } from "@worthybound/solana";
 import { buildApp } from "./app.js";
@@ -14,12 +15,27 @@ const oracle = config.SOLANA_TRUST_ORACLE_KEYPAIR_PATH
       await loadKeypairSigner(config.SOLANA_TRUST_ORACLE_KEYPAIR_PATH),
     )
   : undefined;
-const app = await buildApp({ config, prisma, storage, ...(oracle ? { oracle } : {}) });
+const checkEngine = config.OPENAI_API_KEY
+  ? createOpenAIEngine({ apiKey: config.OPENAI_API_KEY, model: config.openaiModel })
+  : undefined;
+const app = await buildApp({
+  config,
+  prisma,
+  storage,
+  ...(oracle ? { oracle } : {}),
+  ...(checkEngine ? { checkEngine } : {}),
+});
 if (oracle) {
   app.log.info({ oracle: oracle.oracleAddress }, "chain sync enabled (devnet)");
   app.chainSync?.start();
 } else {
   app.log.warn("SOLANA_TRUST_ORACLE_KEYPAIR_PATH is not set; tokenization is unavailable");
+}
+if (checkEngine) {
+  app.log.info({ model: config.openaiModel }, "AI checks enabled");
+  app.automatedChecks?.start();
+} else {
+  app.log.warn("OPENAI_API_KEY is not set; AI checks are unavailable");
 }
 
 const shutdown = async (signal: string) => {

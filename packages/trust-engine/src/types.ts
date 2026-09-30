@@ -3,12 +3,18 @@ import {
   CLAIM_TYPES,
   PROOF_SOURCES,
   type AssetStatus,
-  type ProofSource,
   type VerificationLevel,
 } from "@worthybound/shared";
 
 export { ASSET_STATUSES, PROOF_SOURCES };
-export type { AssetStatus, ProofSource, VerificationLevel };
+export type { AssetStatus, VerificationLevel };
+
+/**
+ * Who stands behind a proof: the evidence sources, plus AUTOMATED for a passed automated check
+ * of an owner's file (ADR 0013). AUTOMATED is never independent and never confirms a claim.
+ */
+export const TRUST_PROOF_SOURCES = [...PROOF_SOURCES, "AUTOMATED"] as const;
+export type ProofSource = (typeof TRUST_PROOF_SOURCES)[number];
 
 /** What a proof demonstrates: owner-submitted photos and receipts, plus every claim type. */
 export const PROOF_TYPES = ["PHOTO", "RECEIPT", ...CLAIM_TYPES] as const;
@@ -50,6 +56,8 @@ export interface TrustInputs {
   openDisputes: number;
   /** Number of template-required evidence items that are missing. */
   missingRequiredEvidence?: number;
+  /** Owner files whose latest automated check failed and that no verifier has accepted. */
+  failedAutomatedChecks?: number;
   /** ISO-8601 evaluation time. Injected so results are reproducible. */
   evaluatedAt: string;
 }
@@ -87,6 +95,11 @@ export interface TrustWeights {
     selfDocumented: number;
     /** Same as selfDocumented, when the owner is identity-verified (KYC). */
     selfDocumentedIdentityVerified: number;
+    /**
+     * Replaces selfDocumented and withoutInspection once automated checks have passed and none
+     * has failed.
+     */
+    automatedChecksPassed: number;
     /** No counted INSPECTION or AUTHENTICATION from a verifier/manufacturer. */
     withoutInspection: number;
     /** No counted AUTHENTICATION plus PROVENANCE. */
@@ -102,6 +115,7 @@ export interface TrustWeights {
     revokedProof: { points: number; max: number };
     suspendedSource: { points: number; max: number };
     missingRequiredEvidence: { points: number; max: number };
+    failedAutomatedCheck: { points: number; max: number };
     brokenCustody: number;
     staleVerification: number;
   };

@@ -249,6 +249,8 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
       "trust_score_snapshots",
       "provenance_events",
       "audit_logs",
+      "automated_checks",
+      "verifier_application_reports",
     ];
 
     beforeAll(async () => {
@@ -317,6 +319,30 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
         data: { assetId: att.assetId, type: "REGISTERED" },
       });
       await db.prisma.auditLog.create({ data: { action: "test", targetType: "asset" } });
+      await db.prisma.automatedCheck.create({
+        data: {
+          assetId: att.assetId,
+          evidenceId: evidence.id,
+          result: "PASSED",
+          problems: [],
+          summary: "ok",
+          engine: "test",
+          model: "test-model",
+          checkVersion: "evidence-check-v1",
+          sha256: evidence.sha256,
+        },
+      });
+      await db.prisma.verifierApplicationReport.create({
+        data: {
+          verifierId: v.id,
+          recommendation: "APPROVE",
+          summary: "ok",
+          inputHash: randomHex64(),
+          engine: "test",
+          model: "test-model",
+          reportVersion: "verifier-report-v1",
+        },
+      });
     });
 
     it.each(tables)("%s rejects UPDATE", async (table) => {
@@ -1991,6 +2017,98 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
           data: { ...rejected, reviewReason: "Serial not legible" },
         }),
       ).resolves.toMatchObject({ reviewStatus: "REJECTED" });
+    });
+  });
+
+  describe("automated checks", () => {
+    const evidenceOf = async () => {
+      const a = await activeAsset();
+      const e = await db.prisma.evidence.create({
+        data: {
+          assetId: a.id,
+          uploaderId: a.ownerId,
+          type: "PHOTO",
+          storageKey: `evidence/${randomUUID()}`,
+          sha256: randomHex64(),
+          mimeType: "image/jpeg",
+          sizeBytes: 10,
+        },
+      });
+      return { a, e };
+    };
+    const checkData = (assetId: string, evidenceId: string, sha256: string) => ({
+      assetId,
+      evidenceId,
+      result: "FAILED" as const,
+      problems: ["SCREEN_OR_PRINT"],
+      summary: "Moire pattern",
+      confidence: 0.8,
+      engine: "test",
+      model: "test-model",
+      checkVersion: "evidence-check-v1",
+      sha256,
+    });
+
+    it("records a check only for the evidence of the same asset with its sealed hash", async () => {
+      const { a, e } = await evidenceOf();
+      const other = await evidenceOf();
+      await expect(
+        db.prisma.automatedCheck.create({ data: checkData(a.id, e.id, e.sha256) }),
+      ).resolves.toMatchObject({ result: "FAILED" });
+      await expectDbError(
+        db.prisma.automatedCheck.create({ data: checkData(a.id, e.id, randomHex64()) }),
+        DatabaseErrorCode.AUTHORITY,
+      );
+      await expectDbError(
+        db.prisma.automatedCheck.create({ data: checkData(a.id, other.e.id, other.e.sha256) }),
+        DatabaseErrorCode.AUTHORITY,
+      );
+    });
+
+    it("rejects passed checks with problems and confidences outside 0 to 1", async () => {
+      const { a, e } = await evidenceOf();
+      await expectDbError(
+        db.prisma.automatedCheck.create({
+          data: { ...checkData(a.id, e.id, e.sha256), result: "PASSED" },
+        }),
+        CHECK_VIOLATION,
+      );
+      await expectDbError(
+        db.prisma.automatedCheck.create({
+          data: { ...checkData(a.id, e.id, e.sha256), confidence: 1.5 },
+        }),
+        CHECK_VIOLATION,
+      );
+    });
+
+    it("records consent with who and when together", async () => {
+      const a = await activeAsset();
+      await expectDbError(
+        db.prisma.asset.update({
+          where: { id: a.id },
+          data: { automatedChecksConsentById: a.ownerId },
+        }),
+        CHECK_VIOLATION,
+      );
+      await expect(
+        db.prisma.asset.update({
+          where: { id: a.id },
+          data: { automatedChecksConsentById: a.ownerId, automatedChecksConsentAt: new Date() },
+        }),
+      ).resolves.toMatchObject({ automatedChecksConsentById: a.ownerId });
+    });
+
+    it("allows one pending job per file or application", async () => {
+      const { e } = await evidenceOf();
+      const job = { kind: "EVIDENCE_CHECK" as const, entityId: e.id };
+      const first = await db.prisma.automatedJob.create({ data: job });
+      await expect(db.prisma.automatedJob.create({ data: job })).rejects.toMatchObject({
+        code: "P2002",
+      });
+      await db.prisma.automatedJob.update({ where: { id: first.id }, data: { status: "FAILED" } });
+      await expect(db.prisma.automatedJob.create({ data: job })).resolves.toMatchObject({
+        status: "PENDING",
+      });
     });
   });
 });

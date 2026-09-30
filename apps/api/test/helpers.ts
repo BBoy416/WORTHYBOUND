@@ -2,6 +2,13 @@ import { execFileSync } from "node:child_process";
 import { generateKeyPairSync, randomBytes, sign, type KeyObject } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { getAddressDecoder } from "@solana/addresses";
+import type {
+  CheckEngine,
+  EvidenceCheckInput,
+  EvidenceCheckOutcome,
+  VerifierApplicationInput,
+  VerifierReportOutcome,
+} from "@worthybound/automated-checks";
 import { createPrismaClient, type PrismaClient } from "@worthybound/database";
 import { createStorage, type Storage } from "@worthybound/storage";
 import type { FastifyInstance } from "fastify";
@@ -136,6 +143,7 @@ export function testApp(
       upload: { max: 1000, timeWindowMs: 60_000 },
       apply: { max: 1000, timeWindowMs: 60_000 },
       public: { max: 1000, timeWindowMs: 60_000 },
+      checks: { max: 1000, timeWindowMs: 60_000 },
     },
     // Tests that do not touch evidence never reach this address.
     storage: createStorage({
@@ -147,6 +155,43 @@ export function testApp(
     }),
     ...options,
   });
+}
+
+/**
+ * A check engine that records its inputs and answers with `evidence` and `report`, which tests
+ * may replace or make throw.
+ */
+export function fakeCheckEngine() {
+  const engine = {
+    id: "fake",
+    evidenceCalls: [] as EvidenceCheckInput[],
+    reportCalls: [] as VerifierApplicationInput[],
+    evidence: async (_input: EvidenceCheckInput): Promise<EvidenceCheckOutcome> => ({
+      result: "PASSED",
+      problems: [],
+      summary: "Consistent with the description.",
+      confidence: 0.9,
+      model: "fake-model-1",
+    }),
+    report: async (_input: VerifierApplicationInput): Promise<VerifierReportOutcome> => ({
+      recommendation: "NEEDS_MORE_INFORMATION",
+      summary: "An established laboratory.",
+      strengths: ["Specialised in watches"],
+      concerns: ["No certifications named"],
+      questions: ["Ask for a sample report"],
+      sources: ["https://lab.example/about"],
+      model: "fake-model-1",
+    }),
+    checkEvidence(input: EvidenceCheckInput): Promise<EvidenceCheckOutcome> {
+      engine.evidenceCalls.push(input);
+      return engine.evidence(input);
+    },
+    reportOnVerifier(input: VerifierApplicationInput): Promise<VerifierReportOutcome> {
+      engine.reportCalls.push(input);
+      return engine.report(input);
+    },
+  } satisfies CheckEngine & Record<string, unknown>;
+  return engine;
 }
 
 export async function requestNonce(app: FastifyInstance, address: string) {

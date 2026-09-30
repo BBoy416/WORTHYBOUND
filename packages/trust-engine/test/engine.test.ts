@@ -305,6 +305,92 @@ describe("computeTrust: trust must be earned (tier caps)", () => {
   });
 });
 
+describe("computeTrust: automated checks (ADR 0013)", () => {
+  const ownerFiles = () => [
+    ...ownerPhotos(3),
+    proof({ type: "RECEIPT", source: "OWNER" }),
+    proof({ type: "CERTIFICATE", source: "OWNER" }),
+    proof({ type: "PROVENANCE", source: "OWNER" }),
+    proof({ type: "SERIAL_NUMBER", source: "OWNER" }),
+  ];
+  const passedChecks = () => [
+    proof({ type: "PHOTO", source: "AUTOMATED" }),
+    proof({ type: "RECEIPT", source: "AUTOMATED" }),
+    proof({ type: "CERTIFICATE", source: "AUTOMATED" }),
+  ];
+
+  it("lets owner uploads that passed the checks reach 65 without a verifier", () => {
+    const without = computeTrust(inputs({ proofs: ownerFiles() }));
+    const checked = computeTrust(inputs({ proofs: [...ownerFiles(), ...passedChecks()] }));
+    expect(without.score).toBe(DEFAULT_WEIGHTS.caps.selfDocumentedIdentityVerified);
+    expect(checked.score).toBe(DEFAULT_WEIGHTS.caps.automatedChecksPassed);
+    const automated = checked.factors.filter((f) => f.detail?.source === "AUTOMATED");
+    expect(automated.reduce((acc, f) => acc + f.points, 0)).toBeCloseTo(
+      DEFAULT_WEIGHTS.sourceCeiling.AUTOMATED,
+    );
+    expect(checked.verificationLevel).toBe("SELF_DOCUMENTED");
+
+    const many = computeTrust(
+      inputs({
+        proofs: [
+          ...ownerFiles(),
+          ...passedChecks(),
+          ...Array.from({ length: 20 }, () => proof({ type: "PHOTO", source: "AUTOMATED" })),
+        ],
+      }),
+    );
+    expect(many.score).toBe(DEFAULT_WEIGHTS.caps.automatedChecksPassed);
+  });
+
+  it("scores owners without KYC lower, and keeps the owner-only cap when a check failed", () => {
+    const anonymous = computeTrust(
+      inputs({
+        owner: { walletVerified: true, identityVerified: false },
+        proofs: [...ownerFiles(), ...passedChecks()],
+      }),
+    );
+    expect(anonymous.score).toBeGreaterThan(DEFAULT_WEIGHTS.caps.selfDocumentedIdentityVerified);
+    expect(anonymous.score).toBeLessThan(DEFAULT_WEIGHTS.caps.automatedChecksPassed);
+
+    const failed = computeTrust(
+      inputs({ proofs: [...ownerFiles(), ...passedChecks()], failedAutomatedChecks: 1 }),
+    );
+    expect(failed.capsApplied.map((c) => c.code)).toEqual(["SELF_DOCUMENTED_IDENTITY_VERIFIED"]);
+    expect(failed.deductions).toContainEqual({
+      code: "FAILED_AUTOMATED_CHECKS",
+      points: DEFAULT_WEIGHTS.deductions.failedAutomatedCheck.points,
+      count: 1,
+    });
+    expect(failed.score).toBe(
+      DEFAULT_WEIGHTS.caps.selfDocumentedIdentityVerified -
+        DEFAULT_WEIGHTS.deductions.failedAutomatedCheck.points,
+    );
+    const many = computeTrust(inputs({ proofs: ownerFiles(), failedAutomatedChecks: 9 }));
+    expect(many.deductions.find((d) => d.code === "FAILED_AUTOMATED_CHECKS")?.points).toBe(
+      DEFAULT_WEIGHTS.deductions.failedAutomatedCheck.max,
+    );
+  });
+
+  it("raises the no-inspection cap to 65, and never counts as an independent inspection", () => {
+    const proofs = [
+      ...ownerFiles(),
+      ...passedChecks(),
+      proof({ type: "SERIAL_NUMBER", source: "VERIFIER", sourceId: "v-a" }),
+      proof({ type: "APPRAISAL", source: "VERIFIER", sourceId: "v-a" }),
+      proof({ type: "CERTIFICATE", source: "MANUFACTURER" }),
+    ];
+    const result = computeTrust(inputs({ proofs }));
+    expect(result.score).toBe(DEFAULT_WEIGHTS.caps.automatedChecksPassed);
+    expect(result.capsApplied.map((c) => c.code)).toEqual(["AUTOMATED_CHECKS_PASSED"]);
+    expect(result.verificationLevel).toBe("SELF_DOCUMENTED");
+
+    const inspection = computeTrust(
+      inputs({ proofs: [proof({ type: "INSPECTION", source: "AUTOMATED" })] }),
+    );
+    expect(inspection.verificationLevel).toBe("SELF_DOCUMENTED");
+  });
+});
+
 describe("computeTrust: asset status", () => {
   const strong = () => [
     proof({ type: "RECEIPT", source: "OWNER" }),
@@ -517,6 +603,7 @@ describe("computeTrust: input validation", () => {
     ["an invalid currentCustodySince", inputs({ currentCustodySince: "" })],
     ["a negative dispute count", inputs({ openDisputes: -1 })],
     ["a fractional missing-evidence count", inputs({ missingRequiredEvidence: 1.5 })],
+    ["a negative failed-check count", inputs({ failedAutomatedChecks: -1 })],
     [
       "an invalid proof timestamp",
       inputs({ proofs: [proof({ type: "PHOTO", source: "OWNER", issuedAt: "not-a-date" })] }),

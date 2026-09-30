@@ -614,6 +614,11 @@ legend {
   padding-top: 1.25rem;
   border-top: 1px solid var(--line);
 }
+.ai-checks {
+  margin-bottom: 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--line);
+}
 
 .footer {
   border-top: 1px solid var(--line);

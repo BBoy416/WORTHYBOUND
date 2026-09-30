@@ -14,6 +14,7 @@ import { z } from "zod";
 import type { Actor } from "../assets/service.js";
 import { fingerprint } from "../audit.js";
 import type { AuthContext } from "../auth/guard.js";
+import { toVerifierReports, verifierReportsSchema } from "../checks/view.js";
 import type { AppContext, RateLimit } from "../context.js";
 import { createVerifierService, type Reviewer } from "./service.js";
 import {
@@ -40,7 +41,7 @@ const perUser = (limit: RateLimit) => ({
 
 export const verifierRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx) => {
   const { config, prisma, now, authenticate, requireRole, rateLimits } = ctx;
-  const service = createVerifierService({ prisma, now });
+  const service = createVerifierService({ prisma, now, checks: ctx.automatedChecks });
   const actor = (request: FastifyRequest): Actor => ({
     userId: (request.auth as AuthContext).user.id,
     fp: fingerprint(config.SESSION_SECRET, request),
@@ -164,6 +165,41 @@ export const verifierRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx
           reviewer(request),
         ),
       ),
+  );
+
+  /** Advisory AI reports on the application; reviewers decide (ADR 0013). */
+  app.get(
+    "/review/verifiers/:verifierId/ai-reports",
+    {
+      preHandler: review,
+      schema: {
+        params: verifierParamsSchema,
+        response: { 200: verifierReportsSchema, ...errors },
+      },
+    },
+    async (request) => {
+      const { reports, latestJob, available } = await service.reports(request.params.verifierId);
+      return toVerifierReports(reports, latestJob, available);
+    },
+  );
+
+  app.post(
+    "/review/verifiers/:verifierId/ai-reports",
+    {
+      preHandler: review,
+      config: perUser(rateLimits.checks),
+      schema: {
+        params: verifierParamsSchema,
+        response: { 202: verifierReportsSchema, 503: errorSchema, ...errors },
+      },
+    },
+    async (request, reply) => {
+      const { reports, latestJob, available } = await service.requestReport(
+        request.params.verifierId,
+        reviewer(request),
+      );
+      return reply.code(202).send(toVerifierReports(reports, latestJob, available));
+    },
   );
 
   // ─── Public ─────────────────────────────────────────────────────────────────

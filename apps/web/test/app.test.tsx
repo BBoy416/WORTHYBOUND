@@ -105,6 +105,7 @@ const evidence = (overrides: Partial<OwnerEvidence> = {}): OwnerEvidence => ({
   description: null,
   createdAt: "2026-09-29T10:00:00.000Z",
   publicPath: null,
+  automatedCheck: null,
   ...overrides,
 });
 
@@ -399,6 +400,52 @@ describe("owner asset page", () => {
     ).toEqual([`/assets/${WB}/evidence/0199a000-0000-7000-8000-00000000e001/preview`]);
     expect(container.querySelector(".thumb.file")?.textContent).toBe("PDF");
   });
+
+  it("shows AI check results and turns the checks on with the owner's consent", async () => {
+    let enabled = false;
+    const calls = mockFetch({
+      ...ownerRoutes(asset()),
+      [`GET /assets/${WB}/evidence`]: {
+        json: {
+          items: [
+            evidence({
+              automatedCheck: {
+                status: "FAILED",
+                problems: ["SCREEN_OR_PRINT"],
+                checkedAt: "2026-09-29T10:05:00.000Z",
+              },
+            }),
+          ],
+        },
+      },
+      [`GET /assets/${WB}/automated-checks`]: () => ({
+        json: { available: true, enabled, enabledAt: enabled ? "2026-09-30T10:00:00.000Z" : null },
+      }),
+      [`PUT /assets/${WB}/automated-checks`]: () => (
+        (enabled = true),
+        { json: { available: true, enabled: true, enabledAt: "2026-09-30T10:00:00.000Z" } }
+      ),
+    });
+    renderAt(`/assets/${WB}`);
+    await screen.findByText("AI check failed");
+    expect(screen.getByText("This looks like a photo of a screen or a print")).toBeTruthy();
+    fireEvent.click(await screen.findByText("Turn on AI checks"));
+    await screen.findByText("AI checks on");
+    expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ enabled: true });
+  });
+
+  it("hides the AI checks when they are not available", async () => {
+    mockFetch({
+      ...ownerRoutes(asset()),
+      [`GET /assets/${WB}/evidence`]: { json: { items: [evidence()] } },
+      [`GET /assets/${WB}/automated-checks`]: {
+        json: { available: false, enabled: false, enabledAt: null },
+      },
+    });
+    renderAt(`/assets/${WB}`);
+    await screen.findByText("front.jpg", { exact: false });
+    expect(screen.queryByText("Turn on AI checks")).toBeNull();
+  });
 });
 
 describe("my assets", () => {
@@ -621,6 +668,43 @@ describe("admin", () => {
     });
     renderAt(`/admin/verifiers/${VID}`);
     expect((await screen.findByText(/Identity not verified\./)).textContent).toMatch(/KYC/);
+  });
+
+  it("shows the advisory AI report and requests a new one", async () => {
+    const report = {
+      id: "r1",
+      recommendation: "NEEDS_MORE_INFORMATION",
+      summary: "An established watch laboratory.",
+      strengths: ["Specialised in Swiss watches"],
+      concerns: ["No certifications named"],
+      questions: ["Ask for a sample report"],
+      sources: ["https://lab.example/about"],
+      engine: "openai",
+      model: "gpt-6.1-sol",
+      reportVersion: "verifier-report-v1",
+      createdAt: "2026-09-29T10:00:00.000Z",
+    };
+    let pending = false;
+    const calls = mockFetch({
+      "GET /auth/me": { json: me(["USER", "ADMIN"]) },
+      [`GET /review/verifiers/${VID}`]: { json: applicant() },
+      [`GET /review/verifiers/${VID}/ai-reports`]: () => ({
+        json: { available: true, pending, lastError: null, items: [report] },
+      }),
+      [`POST /review/verifiers/${VID}/ai-reports`]: () => (
+        (pending = true),
+        { status: 202, json: { available: true, pending, lastError: null, items: [report] } }
+      ),
+    });
+    renderAt(`/admin/verifiers/${VID}`);
+    expect(await screen.findByText("Needs more information")).toBeTruthy();
+    expect(screen.getByText("No certifications named")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "https://lab.example/about" })).toBeTruthy();
+    fireEvent.click(screen.getByText("Write a new report"));
+    await screen.findByText(/Writing a report/);
+    expect(calls.filter((c) => c.method === "POST").map((c) => c.url)).toEqual([
+      `/review/verifiers/${VID}/ai-reports`,
+    ]);
   });
 
   it("creates a draft template version and publishes it", async () => {

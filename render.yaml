@@ -72,6 +72,9 @@ services:
         sync: false
       - key: S3_SECRET_ACCESS_KEY
         sync: false
+      # AI checks (ADR 0013); unavailable while unset.
+      - key: OPENAI_API_KEY
+        sync: false
 
 databases:
   - name: worthybound-db

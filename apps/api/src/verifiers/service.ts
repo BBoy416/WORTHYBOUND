@@ -24,6 +24,8 @@ import type {
 } from "@worthybound/validation";
 import { writeAudit } from "../audit.js";
 import type { Actor } from "../assets/service.js";
+import { enqueueVerifierReport } from "../checks/queue.js";
+import type { AutomatedChecks } from "../checks/worker.js";
 import { ApiError, fromDomainError, notFound } from "../errors.js";
 import { recordTrustForAssets } from "../trust/record.js";
 import { releaseVerifierRequests } from "../verification/requests.js";
@@ -45,6 +47,8 @@ export interface Reviewer extends Actor {
 export interface VerifierServiceOptions {
   prisma: PrismaClient;
   now: () => Date;
+  /** Null when AI reports are unavailable; applications are then not queued for a report. */
+  checks: AutomatedChecks | null;
 }
 
 const UNIQUE_VIOLATION = "23505";
@@ -67,7 +71,7 @@ function transition<S extends string, A extends string>(
   }
 }
 
-export function createVerifierService({ prisma, now }: VerifierServiceOptions) {
+export function createVerifierService({ prisma, now, checks }: VerifierServiceOptions) {
   const load = (db: Tx | PrismaClient, where: Prisma.VerifierWhereUniqueInput) =>
     db.verifier.findUnique({ where, include: verifierInclude });
 
@@ -175,6 +179,23 @@ export function createVerifierService({ prisma, now }: VerifierServiceOptions) {
     );
   }
 
+  /** AI reports on the application, newest first, for reviewers only (ADR 0013). */
+  async function reports(id: string) {
+    const [verifier, items, latestJob] = await Promise.all([
+      prisma.verifier.findUnique({ where: { id }, select: { id: true } }),
+      prisma.verifierApplicationReport.findMany({
+        where: { verifierId: id },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      }),
+      prisma.automatedJob.findFirst({
+        where: { kind: "VERIFIER_REPORT", entityId: id },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      }),
+    ]);
+    if (!verifier) throw notFound("Verifier");
+    return { reports: items, latestJob, available: checks !== null };
+  }
+
   return {
     /** Applies, or applies again after a rejection once the waiting period has passed. */
     async apply(input: VerifierApplicationInput, actor: Actor): Promise<VerifierRecord> {
@@ -185,7 +206,7 @@ export function createVerifierService({ prisma, now }: VerifierServiceOptions) {
         bio: input.bio ?? null,
       };
       try {
-        return await prisma.$transaction(async (tx) => {
+        const verifier = await prisma.$transaction(async (tx) => {
           const at = now();
           const existing = await lockOwn(tx, actor);
           if (existing && existing.status !== "REJECTED") throw applicationExists();
@@ -234,8 +255,11 @@ export function createVerifierService({ prisma, now }: VerifierServiceOptions) {
             },
             actor.fp,
           );
+          if (checks) await enqueueVerifierReport(tx, verifierId, null, at);
           return (await load(tx, { id: verifierId })) as VerifierRecord;
         });
+        checks?.kick();
+        return verifier;
       } catch (error) {
         // A concurrent first application by the same user won.
         if (isUniqueViolation(error)) throw applicationExists();
@@ -253,7 +277,7 @@ export function createVerifierService({ prisma, now }: VerifierServiceOptions) {
       input: VerifierCategoryRequestInput,
       actor: Actor,
     ): Promise<VerifierRecord> {
-      return prisma.$transaction(async (tx) => {
+      const updated = await prisma.$transaction(async (tx) => {
         const verifier = await lockOwn(tx, actor);
         if (!verifier) throw notFound("Verifier application");
         if (verifier.status !== "APPROVED") {
@@ -286,8 +310,39 @@ export function createVerifierService({ prisma, now }: VerifierServiceOptions) {
           },
           actor.fp,
         );
+        if (checks) await enqueueVerifierReport(tx, verifier.id, null, at);
         return (await load(tx, { id: verifier.id })) as VerifierRecord;
       });
+      checks?.kick();
+      return updated;
+    },
+
+    /** AI reports on the application, newest first, for reviewers only (ADR 0013). */
+    reports,
+
+    /** Queues a new AI report, e.g. after the applicant changed their application. */
+    async requestReport(id: string, reviewer: Reviewer) {
+      if (!checks) {
+        throw new ApiError(503, "ai_reports_unavailable", "AI reports are not available");
+      }
+      await prisma.$transaction(async (tx) => {
+        const verifier = await lockForReview(tx, id, reviewer);
+        const at = now();
+        const queued = await enqueueVerifierReport(tx, verifier.id, reviewer.userId, at);
+        if (!queued) return;
+        await writeAudit(
+          tx,
+          {
+            actorId: reviewer.userId,
+            action: "verifier.ai_report_requested",
+            targetType: "verifier",
+            targetId: verifier.id,
+          },
+          reviewer.fp,
+        );
+      });
+      checks.kick();
+      return reports(id);
     },
 
     /** Review queue, oldest first. */

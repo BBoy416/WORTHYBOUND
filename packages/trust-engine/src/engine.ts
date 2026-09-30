@@ -15,7 +15,7 @@ import type {
 } from "./types.js";
 import { DEFAULT_WEIGHTS } from "./weights.js";
 
-export const ENGINE_VERSION = "1.1.0";
+export const ENGINE_VERSION = "1.2.0";
 
 export { TRUST_SCORE_DISCLAIMER };
 
@@ -50,6 +50,7 @@ export function computeTrust(
   const custodySinceMs = parseTime(inputs.currentCustodySince, "currentCustodySince");
   assertCount(inputs.openDisputes, "openDisputes");
   assertCount(inputs.missingRequiredEvidence ?? 0, "missingRequiredEvidence");
+  assertCount(inputs.failedAutomatedChecks ?? 0, "failedAutomatedChecks");
 
   const proofs = [...inputs.proofs].sort((a, b) => compareStrings(a.id, b.id));
   assertUniqueIds(proofs);
@@ -105,19 +106,32 @@ export function computeTrust(
   const hasInspection = trusted.some((c) => INSPECTION_TYPES.has(c.proof.type));
   const hasAuthentication = trusted.some((c) => c.proof.type === "AUTHENTICATION");
   const hasProvenance = counted.some((c) => c.proof.type === "PROVENANCE");
+  const automatedPassed =
+    counted.some((c) => c.proof.source === "AUTOMATED") &&
+    (inputs.failedAutomatedChecks ?? 0) === 0;
+  const automatedCap: AppliedCap = {
+    code: "AUTOMATED_CHECKS_PASSED",
+    limit: weights.caps.automatedChecksPassed,
+  };
 
   const applicableCaps: AppliedCap[] = [];
   if (trusted.length === 0) {
     applicableCaps.push(
-      inputs.owner.identityVerified
-        ? {
-            code: "SELF_DOCUMENTED_IDENTITY_VERIFIED",
-            limit: weights.caps.selfDocumentedIdentityVerified,
-          }
-        : { code: "SELF_DOCUMENTED", limit: weights.caps.selfDocumented },
+      automatedPassed
+        ? automatedCap
+        : inputs.owner.identityVerified
+          ? {
+              code: "SELF_DOCUMENTED_IDENTITY_VERIFIED",
+              limit: weights.caps.selfDocumentedIdentityVerified,
+            }
+          : { code: "SELF_DOCUMENTED", limit: weights.caps.selfDocumented },
     );
   } else if (!hasInspection) {
-    applicableCaps.push({ code: "WITHOUT_INSPECTION", limit: weights.caps.withoutInspection });
+    applicableCaps.push(
+      automatedPassed
+        ? automatedCap
+        : { code: "WITHOUT_INSPECTION", limit: weights.caps.withoutInspection },
+    );
   } else if (!(hasAuthentication && hasProvenance)) {
     applicableCaps.push({
       code: "WITHOUT_AUTHENTICATION_AND_PROVENANCE",
@@ -303,6 +317,7 @@ function computeDeductions(
     d.missingRequiredEvidence,
     inputs.missingRequiredEvidence ?? 0,
   );
+  perItem("FAILED_AUTOMATED_CHECKS", d.failedAutomatedCheck, inputs.failedAutomatedChecks ?? 0);
   if (!inputs.custodyContinuous) {
     deductions.push({ code: "BROKEN_CUSTODY", points: d.brokenCustody });
   }

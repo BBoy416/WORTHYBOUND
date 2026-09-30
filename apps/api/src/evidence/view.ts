@@ -8,6 +8,7 @@ import {
   REVIEW_STATUSES,
 } from "@worthybound/shared";
 import { z } from "zod";
+import { evidenceCheckSchema, type EvidenceCheckView } from "../checks/view.js";
 
 /**
  * The owner's (and the assigned verifier's) view of an evidence item. Storage keys, duplicate
@@ -31,10 +32,16 @@ export const ownerEvidenceSchema = z.object({
   createdAt: z.iso.datetime(),
   /** Where the public copy is served, while the photo is public. */
   publicPath: z.string().nullable(),
+  /** The AI check of an owner upload; null if it was not checked (ADR 0013). */
+  automatedCheck: evidenceCheckSchema.nullable(),
 });
 export type OwnerEvidence = z.infer<typeof ownerEvidenceSchema>;
 
-export function toOwnerEvidence(evidence: Evidence, wbId: string): OwnerEvidence {
+export function toOwnerEvidence(
+  evidence: Evidence,
+  wbId: string,
+  check: EvidenceCheckView | null = null,
+): OwnerEvidence {
   return {
     id: evidence.id,
     type: evidence.type,
@@ -50,5 +57,6 @@ export function toOwnerEvidence(evidence: Evidence, wbId: string): OwnerEvidence
     capturedAt: evidence.capturedAt?.toISOString() ?? null,
     createdAt: evidence.createdAt.toISOString(),
     publicPath: evidence.visibility === "PUBLIC" ? publicEvidencePath(wbId, evidence.id) : null,
+    automatedCheck: check,
   };
 }

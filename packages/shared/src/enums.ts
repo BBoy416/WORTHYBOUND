@@ -262,6 +262,23 @@ export const CHAIN_TRANSACTION_STATUSES = [
 ] as const;
 export type ChainTransactionStatus = (typeof CHAIN_TRANSACTION_STATUSES)[number];
 
+export const AUTOMATED_CHECK_RESULTS = ["PASSED", "FAILED", "INCONCLUSIVE"] as const;
+export type AutomatedCheckResult = (typeof AUTOMATED_CHECK_RESULTS)[number];
+
+export const AUTOMATED_JOB_KINDS = ["EVIDENCE_CHECK", "VERIFIER_REPORT"] as const;
+export type AutomatedJobKind = (typeof AUTOMATED_JOB_KINDS)[number];
+
+export const AUTOMATED_JOB_STATUSES = ["PENDING", "COMPLETED", "FAILED"] as const;
+export type AutomatedJobStatus = (typeof AUTOMATED_JOB_STATUSES)[number];
+
+/** Advisory only: reviewers decide every application (ADR 0013). */
+export const VERIFIER_REPORT_RECOMMENDATIONS = [
+  "APPROVE",
+  "REJECT",
+  "NEEDS_MORE_INFORMATION",
+] as const;
+export type VerifierReportRecommendation = (typeof VERIFIER_REPORT_RECOMMENDATIONS)[number];
+
 /** Every enumeration keyed by its Prisma enum name. */
 export const DOMAIN_ENUMS = {
   IdentityStatus: IDENTITY_STATUSES,
@@ -294,4 +311,8 @@ export const DOMAIN_ENUMS = {
   ChainTransactionKind: CHAIN_TRANSACTION_KINDS,
   ChainEntityType: CHAIN_ENTITY_TYPES,
   ChainTransactionStatus: CHAIN_TRANSACTION_STATUSES,
+  AutomatedCheckResult: AUTOMATED_CHECK_RESULTS,
+  AutomatedJobKind: AUTOMATED_JOB_KINDS,
+  AutomatedJobStatus: AUTOMATED_JOB_STATUSES,
+  VerifierReportRecommendation: VERIFIER_REPORT_RECOMMENDATIONS,
 } as const;

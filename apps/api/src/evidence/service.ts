@@ -19,6 +19,9 @@ import type {
 } from "@worthybound/validation";
 import { writeAudit } from "../audit.js";
 import type { Actor } from "../assets/service.js";
+import { enqueueEvidenceChecks } from "../checks/queue.js";
+import { evidenceCheckStates } from "../checks/view.js";
+import type { AutomatedChecks } from "../checks/worker.js";
 import { ApiError, fromDomainError, notFound } from "../errors.js";
 import { recordTrust } from "../trust/record.js";
 import { findAssignedRequest, lockAssignedRequest } from "../verification/requests.js";
@@ -31,6 +34,8 @@ export interface EvidenceServiceOptions {
   storage: Storage;
   now: () => Date;
   log: { warn(obj: object, msg: string): void };
+  /** Null when AI checks are unavailable; owner uploads are then not queued for a check. */
+  checks: AutomatedChecks | null;
 }
 
 export const STAGING_PREFIX = "staging/";
@@ -75,7 +80,13 @@ const rejectionError = (reason: Rejection) =>
 /** Discarded drafts are hidden from everyone, including their owner. */
 const isDiscardedDraft = (asset: Asset) => asset.status === "REVOKED" && asset.publishedAt === null;
 
-export function createEvidenceService({ prisma, storage, now, log }: EvidenceServiceOptions) {
+export function createEvidenceService({
+  prisma,
+  storage,
+  now,
+  log,
+  checks,
+}: EvidenceServiceOptions) {
   async function ownedAsset(db: Tx | PrismaClient, wbId: string, actor: Actor): Promise<Asset> {
     const asset = await db.asset.findUnique({ where: { wbId } });
     if (!asset || asset.ownerId !== actor.userId || isDiscardedDraft(asset)) {
@@ -316,13 +327,29 @@ export function createEvidenceService({ prisma, storage, now, log }: EvidenceSer
     /** In the order the files were added, as in the latest seal. */
     async list(wbId: string, actor: Actor) {
       const asset = await ownedAsset(prisma, wbId, actor);
-      return { asset, items: await inSealOrder(asset.id) };
+      const items = await inSealOrder(asset.id);
+      return {
+        asset,
+        items,
+        checks: await evidenceCheckStates(
+          prisma,
+          items.map((e) => e.id),
+        ),
+      };
     },
 
     /** The asset's evidence, for the verifier assigned to a request. */
     async listForRequest(requestId: string, actor: Actor) {
       const request = await findAssignedRequest(prisma, requestId, actor.userId);
-      return { asset: request.asset, items: await inSealOrder(request.assetId) };
+      const items = await inSealOrder(request.assetId);
+      return {
+        asset: request.asset,
+        items,
+        checks: await evidenceCheckStates(
+          prisma,
+          items.map((e) => e.id),
+        ),
+      };
     },
 
     async previewForRequest(requestId: string, evidenceId: string, actor: Actor) {
@@ -590,13 +617,18 @@ export function createEvidenceService({ prisma, storage, now, log }: EvidenceSer
             );
           }
           await recordTrust(tx, asset.id, at);
-          return { evidence, wbId: asset.wbId };
+          const queued =
+            checks && !upload.verificationRequestId
+              ? await enqueueEvidenceChecks(tx, asset.id, actor.userId, at)
+              : 0;
+          return { evidence, wbId: asset.wbId, queued };
         });
         if (!result) {
           await removeQuietly(storageKey, publicKey);
           return completedResult(upload.id);
         }
-        return { ...result, replayed: false };
+        if (result.queued > 0) checks?.kick();
+        return { evidence: result.evidence, wbId: result.wbId, replayed: false };
       } catch (error) {
         await removeQuietly(storageKey, publicKey);
         if (error instanceof UploadRejected) throw await fail(upload, error.reason, actor);
