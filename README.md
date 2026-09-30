@@ -12,7 +12,7 @@ verification by approved professionals raises its Trust Score.
 
 Phase 10: Solana program on devnet: frozen Metaplex Core tokens, on-chain status and Trust Score,
 tokenization and chain sync (ADR 0016), on top of the Trust Score and verified status (Phase 9),
-and the web app for owners, verifiers and public passports.
+and the web app for owners, verifiers, administrators and public passports.
 Solana work targets **Devnet only**.
 
 ## Repository layout
@@ -23,7 +23,8 @@ apps/
                       verification requests, attestations, passports, tokenization, token
                       metadata and the chain sync worker; serves the web app in production
   web/                web app (Vite + React): wallet sign-in, assets, evidence, tokenization,
-                      verification requests, verifier attestations and public passports
+                      verification requests, verifier applications and attestations, admin
+                      (verifier review, templates, reviewer roles) and public passports
 packages/
   database/           Prisma schema, migrations and client (PostgreSQL)
   shared/             domain enums, asset IDs, lifecycle rules, public passport and verifier

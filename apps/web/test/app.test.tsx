@@ -530,3 +530,228 @@ describe("verifier attestation", () => {
     expect(((await screen.findByText("Mark complete")) as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+describe("admin", () => {
+  const VID = "0199a000-0000-7000-8000-0000000000a1";
+  const applicant = (overrides: Record<string, unknown> = {}) => ({
+    id: VID,
+    status: "UNDER_REVIEW",
+    entityType: "BUSINESS",
+    businessName: "Geneva Watch Lab",
+    website: null,
+    bio: null,
+    approvedAt: null,
+    createdAt: "2026-09-29T10:00:00.000Z",
+    updatedAt: "2026-09-29T10:00:00.000Z",
+    identityStatus: "VERIFIED",
+    walletAddress: "Ver1f1erWa11etAddress1111111111111111111111",
+    identityProvider: "manual",
+    identityVerifiedAt: "2026-09-29T10:00:00.000Z",
+    approvedById: null,
+    categories: [
+      {
+        id: "p1",
+        category: "LUXURY_WATCH",
+        status: "PENDING",
+        reason: null,
+        approvedById: null,
+        approvedAt: null,
+        revokedAt: null,
+        createdAt: "2026-09-29T10:00:00.000Z",
+        history: [],
+      },
+    ],
+    history: [],
+    ...overrides,
+  });
+
+  it("shows the Admin link only to administrators and reviewers", async () => {
+    mockFetch({ "GET /auth/me": { json: me(["USER"]) } });
+    const user = renderAt("/");
+    expect(await screen.findByText("Become a verifier")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Admin" })).toBeNull();
+    user.unmount();
+    mockFetch({
+      "GET /auth/me": { json: me(["USER", "ADMIN"]) },
+      "GET /review/verifiers": { json: { items: [], nextCursor: null } },
+    });
+    renderAt("/");
+    fireEvent.click(await screen.findByRole("link", { name: "Admin" }));
+    expect(await screen.findByText("No verifiers with this status.")).toBeTruthy();
+  });
+
+  it("keeps other signed-in users out of the admin pages", async () => {
+    mockFetch({ "GET /auth/me": { json: me(["USER"]) } });
+    renderAt("/admin/templates");
+    expect(await screen.findByText("This page is for administrators.")).toBeTruthy();
+  });
+
+  it("asks for a reason before rejecting, then approves a verifier and a category", async () => {
+    let state = applicant();
+    const calls = mockFetch({
+      "GET /auth/me": { json: me(["USER", "ADMIN"]) },
+      [`GET /review/verifiers/${VID}`]: () => ({ json: state }),
+      [`POST /review/verifiers/${VID}/status`]: () => (
+        (state = applicant({ status: "APPROVED" })),
+        { json: state }
+      ),
+      [`POST /review/verifiers/${VID}/categories/LUXURY_WATCH`]: { json: applicant() },
+    });
+    renderAt(`/admin/verifiers/${VID}`);
+    fireEvent.click(await screen.findByText("Reject"));
+    expect((await screen.findByRole("alert")).textContent).toMatch(/Enter a reason/);
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+
+    fireEvent.click(screen.getByText("Approve"));
+    await screen.findByText("Suspend");
+    expect(calls.find((c) => c.url.endsWith("/status"))?.body).toEqual({ status: "APPROVED" });
+
+    fireEvent.click(screen.getByText("Approve"));
+    await waitFor(() =>
+      expect(calls.find((c) => c.url.endsWith("/categories/LUXURY_WATCH"))?.body).toEqual({
+        status: "APPROVED",
+      }),
+    );
+  });
+
+  it("warns when the applicant's identity is not verified", async () => {
+    mockFetch({
+      "GET /auth/me": { json: me(["USER", "ADMIN"]) },
+      [`GET /review/verifiers/${VID}`]: { json: applicant({ identityStatus: "UNVERIFIED" }) },
+    });
+    renderAt(`/admin/verifiers/${VID}`);
+    expect((await screen.findByText(/Identity not verified\./)).textContent).toMatch(/KYC/);
+  });
+
+  it("creates a draft template version and publishes it", async () => {
+    const draft = {
+      id: "0199a000-0000-7000-8000-0000000000b2",
+      version: 1,
+      validityMonths: 60,
+      status: "DRAFT",
+      requiredClaims: ["AUTHENTICATION"],
+      requiredEvidence: [{ type: "PHOTO", minCount: 4 }],
+      allowedMethods: ["IN_PERSON"],
+      minVerifiers: 1,
+      createdById: "u1",
+      publishedById: null,
+      publishedAt: null,
+      createdAt: "2026-09-29T10:00:00.000Z",
+    };
+    const template = {
+      id: "0199a000-0000-7000-8000-0000000000b1",
+      code: "luxury-watch",
+      category: "LUXURY_WATCH",
+      name: "Luxury watch check",
+      description: null,
+      createdAt: "2026-09-29T10:00:00.000Z",
+      versions: [] as (typeof draft)[],
+    };
+    const calls = mockFetch({
+      "GET /auth/me": { json: me(["USER", "ADMIN"]) },
+      "GET /admin/templates": () => ({ json: { items: [template] } }),
+      [`POST /admin/templates/${template.id}/versions`]: () => (
+        (template.versions = [draft]),
+        { status: 201, json: draft }
+      ),
+      [`POST /admin/template-versions/${draft.id}/status`]: { json: draft },
+    });
+    vi.stubGlobal("confirm", () => true);
+    renderAt("/admin/templates");
+    fireEvent.click(await screen.findByText("Add a version"));
+    fireEvent.click(screen.getByLabelText("Authentication"));
+    fireEvent.click(screen.getByLabelText("In person"));
+    fireEvent.change(screen.getByLabelText("Photo"), { target: { value: "4" } });
+    fireEvent.click(screen.getByText("Save draft"));
+    fireEvent.click(await screen.findByText("Publish"));
+    await waitFor(() =>
+      expect(calls.find((c) => c.url.endsWith("/status"))?.body).toEqual({ status: "PUBLISHED" }),
+    );
+    expect(calls.find((c) => c.url.endsWith("/versions"))?.body).toEqual({
+      requiredClaims: ["AUTHENTICATION"],
+      requiredEvidence: [{ type: "PHOTO", minCount: 4 }],
+      allowedMethods: ["IN_PERSON"],
+      minVerifiers: 1,
+      validityMonths: 60,
+    });
+  });
+
+  it("adds and removes a verifier reviewer", async () => {
+    const assignment = {
+      id: "0199a000-0000-7000-8000-0000000000c1",
+      walletAddress: "Rev1ewerWa11etAddress111111111111111111111",
+      role: "VERIFIER_REVIEWER",
+      grantedById: "u1",
+      grantedAt: "2026-09-29T10:00:00.000Z",
+      revokedAt: null,
+    };
+    let items: (typeof assignment)[] = [];
+    const calls = mockFetch({
+      "GET /auth/me": { json: me(["USER", "ADMIN"]) },
+      "GET /admin/roles": () => ({ json: { items } }),
+      "POST /admin/roles": () => ((items = [assignment]), { status: 201, json: assignment }),
+      [`DELETE /admin/roles/${assignment.id}`]: () => ((items = []), { json: assignment }),
+    });
+    vi.stubGlobal("confirm", () => true);
+    renderAt("/admin/roles");
+    await screen.findByText("No reviewers.");
+    fireEvent.change(screen.getByLabelText("Wallet address"), {
+      target: { value: assignment.walletAddress },
+    });
+    fireEvent.click(screen.getByText("Add reviewer"));
+    fireEvent.click(await screen.findByText("Remove"));
+    expect(await screen.findByText("No reviewers.")).toBeTruthy();
+    expect(calls.find((c) => c.method === "POST")?.body).toEqual({
+      walletAddress: assignment.walletAddress,
+      role: "VERIFIER_REVIEWER",
+    });
+    expect(calls.some((c) => c.method === "DELETE")).toBe(true);
+  });
+});
+
+describe("verifier application", () => {
+  it("sends an application and then shows its status", async () => {
+    let mine: unknown = null;
+    const calls = mockFetch({
+      "GET /auth/me": { json: me(["USER"]) },
+      "GET /verifier/me": () =>
+        mine
+          ? { json: mine }
+          : { status: 404, json: { error: { code: "not_found", message: "Not found" } } },
+      "POST /verifier/application": () => (
+        (mine = {
+          id: "v1",
+          status: "APPLIED",
+          entityType: "BUSINESS",
+          businessName: "Geneva Watch Lab",
+          website: null,
+          bio: null,
+          approvedAt: null,
+          createdAt: "2026-09-29T10:00:00.000Z",
+          updatedAt: "2026-09-29T10:00:00.000Z",
+          identityStatus: "UNVERIFIED",
+          identityRequired: true,
+          canApplyAgainAt: null,
+          categories: [],
+          history: [],
+        }),
+        { status: 201, json: mine }
+      ),
+    });
+    renderAt("/verifier/apply");
+    fireEvent.change(await screen.findByLabelText("You are"), { target: { value: "BUSINESS" } });
+    fireEvent.change(screen.getByLabelText("Business name (shown publicly)"), {
+      target: { value: "Geneva Watch Lab" },
+    });
+    fireEvent.click(screen.getByLabelText("Luxury watch"));
+    fireEvent.click(screen.getByText("Send application"));
+    expect(await screen.findByText("Your application")).toBeTruthy();
+    expect(screen.queryByText("Send application")).toBeNull();
+    expect(screen.getByText(/identity has not been verified/)).toBeTruthy();
+    expect(calls.find((c) => c.method === "POST")?.body).toEqual({
+      entityType: "BUSINESS",
+      businessName: "Geneva Watch Lab",
+      categories: ["LUXURY_WATCH"],
+    });
+  });
+});

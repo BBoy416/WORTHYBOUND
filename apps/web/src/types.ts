@@ -5,15 +5,21 @@ import type {
   AttestationMethod,
   AttestationResult,
   AttestationStatus,
+  CategoryPermissionStatus,
   ClaimType,
   EvidenceType,
   EvidenceVisibility,
+  IdentityStatus,
   ItemCondition,
   ProofSource,
   ReviewStatus,
+  Role,
+  TemplateVersionStatus,
   TokenizationStatus,
   VerificationLevel,
   VerificationRequestStatus,
+  VerifierEntityType,
+  VerifierStatus,
 } from "@worthybound/shared";
 
 /** Response shapes of the API (apps/api `view.ts` schemas). */
@@ -146,4 +152,105 @@ export interface VerifierRequest extends RequestFields {
     serialNumber: string | null;
     attributes: Record<string, unknown> | null;
   };
+}
+
+export interface AdminTemplateVersion {
+  id: string;
+  version: number;
+  validityMonths: number;
+  status: TemplateVersionStatus;
+  requiredClaims: ClaimType[];
+  requiredEvidence: { type: EvidenceType; minCount: number }[];
+  allowedMethods: AttestationMethod[];
+  minVerifiers: number;
+  createdById: string | null;
+  publishedById: string | null;
+  publishedAt: string | null;
+  createdAt: string;
+}
+
+export interface AdminTemplate {
+  id: string;
+  code: string;
+  category: AssetCategory;
+  name: string;
+  description: string | null;
+  createdAt: string;
+  versions: AdminTemplateVersion[];
+}
+
+export interface RoleAssignment {
+  id: string;
+  walletAddress: string;
+  role: Role;
+  grantedById: string | null;
+  grantedAt: string;
+  revokedAt: string | null;
+}
+
+interface VerifierProfile {
+  id: string;
+  status: VerifierStatus;
+  entityType: VerifierEntityType;
+  businessName: string | null;
+  website: string | null;
+  bio: string | null;
+  approvedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  identityStatus: IdentityStatus;
+}
+
+interface StatusChange<S> {
+  fromStatus: S | null;
+  toStatus: S;
+  reason: string | null;
+  createdAt: string;
+}
+
+/** The applicant's own view (`GET /verifier/me`). */
+export interface ApplicantVerifier extends VerifierProfile {
+  identityRequired: boolean;
+  canApplyAgainAt: string | null;
+  categories: {
+    category: AssetCategory;
+    status: CategoryPermissionStatus;
+    reason: string | null;
+    approvedAt: string | null;
+    revokedAt: string | null;
+    createdAt: string;
+  }[];
+  history: StatusChange<VerifierStatus>[];
+}
+
+export interface VerifierSummary {
+  id: string;
+  status: VerifierStatus;
+  entityType: VerifierEntityType;
+  businessName: string | null;
+  walletAddress: string;
+  identityStatus: IdentityStatus;
+  categories: { category: AssetCategory; status: CategoryPermissionStatus }[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Reviewer view (`GET /review/verifiers/:verifierId`). */
+export interface ReviewVerifier extends VerifierProfile {
+  walletAddress: string;
+  identityProvider: string | null;
+  identityVerifiedAt: string | null;
+  approvedById: string | null;
+  categories: {
+    id: string;
+    category: AssetCategory;
+    status: CategoryPermissionStatus;
+    reason: string | null;
+    approvedById: string | null;
+    approvedAt: string | null;
+    revokedAt: string | null;
+    createdAt: string;
+    history: (StatusChange<CategoryPermissionStatus> & { actorId: string | null })[];
+  }[];
+  history: (StatusChange<VerifierStatus> & { actorId: string | null })[];
 }

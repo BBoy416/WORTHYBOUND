@@ -2,12 +2,14 @@ import type { ReactNode } from "react";
 import { ErrorText, Loading, useAction } from "./components/ui.js";
 import { Logo } from "./components/Logo.js";
 import { shortAddress } from "./format.js";
+import { AdminPage, VerifierReviewPage } from "./pages/Admin.js";
 import { AssetDetailPage } from "./pages/AssetDetail.js";
 import { AssetsPage } from "./pages/Assets.js";
 import { HomePage } from "./pages/Home.js";
 import { NewAssetPage } from "./pages/NewAsset.js";
 import { PassportPage } from "./pages/Passport.js";
 import { VerifierQueuePage, VerifierRequestPage } from "./pages/Verifier.js";
+import { VerifierApplyPage } from "./pages/VerifierApply.js";
 import { Link, match, useRouter } from "./router.js";
 import { hasRole, useSession } from "./session.js";
 
@@ -23,6 +25,10 @@ function Header() {
       <nav>
         {me && <Link to="/assets">My assets</Link>}
         {hasRole(me, "VERIFIER") && <Link to="/verifier">Verify</Link>}
+        {me && !hasRole(me, "VERIFIER") && <Link to="/verifier/apply">Become a verifier</Link>}
+        {(hasRole(me, "ADMIN") || hasRole(me, "VERIFIER_REVIEWER")) && (
+          <Link to="/admin">Admin</Link>
+        )}
         {me ? (
           <button
             className="ghost small"
@@ -73,6 +79,29 @@ export function Page({ path }: { path: string }) {
     return (
       <SignedIn>
         <AssetDetailPage wbId={m.wbId as string} />
+      </SignedIn>
+    );
+  if (path === "/verifier/apply")
+    return (
+      <SignedIn>
+        <VerifierApplyPage />
+      </SignedIn>
+    );
+  if (path === "/admin" || path === "/admin/templates" || path === "/admin/roles")
+    return (
+      <SignedIn>
+        <AdminPage
+          key={path}
+          tab={
+            path === "/admin" ? "verifiers" : path === "/admin/templates" ? "templates" : "roles"
+          }
+        />
+      </SignedIn>
+    );
+  if ((m = match("/admin/verifiers/:id", path)))
+    return (
+      <SignedIn>
+        <VerifierReviewPage verifierId={m.id as string} />
       </SignedIn>
     );
   if (path === "/verifier")
