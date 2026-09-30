@@ -1,6 +1,8 @@
 import {
   ASSET_CATEGORIES,
   ATTESTATION_METHODS,
+  AUTOMATED_CHECK_RESULTS,
+  CHECK_PROBLEM_MESSAGES,
   CATEGORY_PERMISSION_LIFECYCLE,
   CLAIM_TYPES,
   DEFAULT_TEMPLATE_VALIDITY_MONTHS,
@@ -12,6 +14,7 @@ import {
   VERIFIER_LIFECYCLE,
   VERIFIER_STATUSES,
   VERIFIER_STATUSES_REQUIRING_REASON,
+  type AutomatedCheckResult,
   type CategoryPermissionStatus,
   type Role,
   type VerifierStatus,
@@ -32,6 +35,7 @@ import { formatDate, formatDateTime, humanize, shortAddress } from "../format.js
 import { Link } from "../router.js";
 import { useSession } from "../session.js";
 import type {
+  AdminCheck,
   AdminTemplate,
   AdminTemplateVersion,
   ReviewVerifier,
@@ -40,7 +44,7 @@ import type {
   VerifierSummary,
 } from "../types.js";
 
-type Tab = "verifiers" | "templates" | "roles";
+type Tab = "verifiers" | "templates" | "roles" | "checks";
 
 const ACTION_LABELS: Record<string, string> = {
   UNDER_REVIEW: "Start review",
@@ -72,12 +76,16 @@ export function AdminPage({ tab }: { tab: Tab }) {
             <TabLink to="/admin/roles" active={current === "roles"}>
               Roles
             </TabLink>
+            <TabLink to="/admin/checks" active={current === "checks"}>
+              AI checks
+            </TabLink>
           </nav>
         )}
       </div>
       {current === "verifiers" && <VerifiersTab />}
       {current === "templates" && <TemplatesTab />}
       {current === "roles" && <RolesTab />}
+      {current === "checks" && <ChecksTab />}
     </div>
   );
 }
@@ -728,6 +736,115 @@ function RolesTab() {
         </button>
       </form>
       <ErrorText error={error} />
+    </Card>
+  );
+}
+
+// ─── AI checks ────────────────────────────────────────────────────────────────
+
+/** Every AI check with its detection details, which owners never see (ADR 0013). */
+function ChecksTab() {
+  const [result, setResult] = useState<AutomatedCheckResult | "">("FAILED");
+  const [wbId, setWbId] = useState("");
+  const [asset, setAsset] = useState("");
+  const list = useLoad(
+    () =>
+      asset
+        ? get<{ items: AdminCheck[] }>(
+            `/admin/assets/${encodeURIComponent(asset)}/automated-checks`,
+          )
+        : get<{ items: AdminCheck[] }>(
+            `/admin/automated-checks?limit=100${result ? `&result=${result}` : ""}`,
+          ),
+    [asset, result],
+  );
+  const items = list.data?.items.filter((c) => !asset || !result || c.result === result);
+  const search = (event: FormEvent) => {
+    event.preventDefault();
+    setAsset(wbId.trim().toUpperCase());
+  };
+  return (
+    <Card
+      title="AI checks"
+      actions={
+        <select
+          aria-label="Result"
+          value={result}
+          onChange={(e) => setResult(e.target.value as AutomatedCheckResult | "")}
+        >
+          <option value="">All results</option>
+          {AUTOMATED_CHECK_RESULTS.map((r) => (
+            <option key={r} value={r}>
+              {humanize(r)}
+            </option>
+          ))}
+        </select>
+      }
+    >
+      <form className="row spaced" onSubmit={search}>
+        <Field label="Asset (WB ID)">
+          <input
+            value={wbId}
+            onChange={(e) => setWbId(e.target.value)}
+            placeholder="WB-…"
+            autoComplete="off"
+          />
+        </Field>
+        <button type="submit" className="small">
+          Show asset
+        </button>
+        {asset && (
+          <button type="button" className="ghost small" onClick={() => (setAsset(""), setWbId(""))}>
+            All assets
+          </button>
+        )}
+      </form>
+      {!items ? (
+        <Loading error={list.error} />
+      ) : items.length === 0 ? (
+        <p className="muted">No checks.</p>
+      ) : (
+        <ul className="list">
+          {items.map((c) => (
+            <li key={c.id}>
+              <div>
+                <Badge value={c.result} /> <strong>{humanize(c.evidence.type)}</strong>{" "}
+                <span className="muted small">{c.evidence.mimeType}</span>
+                {c.evidence.reviewStatus !== "PENDING" && (
+                  <>
+                    {" "}
+                    <Badge
+                      value={c.evidence.reviewStatus}
+                      label={`Verifier ${humanize(c.evidence.reviewStatus).toLowerCase()}`}
+                    />
+                  </>
+                )}
+              </div>
+              {c.problems.length > 0 && (
+                <div className="small error">
+                  {c.problems.map((p) => CHECK_PROBLEM_MESSAGES[p]).join(" · ")}
+                </div>
+              )}
+              <p className="small">{c.summary}</p>
+              <div className="muted small">
+                <button
+                  type="button"
+                  className="ghost small mono"
+                  onClick={() => (setAsset(c.wbId), setWbId(c.wbId))}
+                >
+                  {c.wbId}
+                </button>{" "}
+                · {formatDateTime(c.createdAt)} · {c.engine} {c.model} · {c.checkVersion}
+                {c.confidence !== null && ` · confidence ${Math.round(c.confidence * 100)}%`}
+                {" · "}
+                <span className="mono" title={c.sha256}>
+                  {c.sha256.slice(0, 12)}…
+                </span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </Card>
   );
 }

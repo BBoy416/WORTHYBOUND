@@ -72,6 +72,16 @@ export function PassportPage({ wbId }: { wbId: string }) {
 
       <div className="grid">
         <Card title="Verification">
+          {p.automatedChecks && (
+            <p className="small">
+              <Badge value="PASSED" label="Automated checks passed" />{" "}
+              {p.automatedChecks.filesPassed === 1
+                ? "1 photo or document"
+                : `${p.automatedChecks.filesPassed} photos and documents`}{" "}
+              checked for signs of a fake · {formatDate(p.automatedChecks.lastPassedAt)}. Not an
+              inspection by a verifier.
+            </p>
+          )}
           {p.attestations.length === 0 ? (
             <p className="muted">No verifier has attested to this item yet.</p>
           ) : (

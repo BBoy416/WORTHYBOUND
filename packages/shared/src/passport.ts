@@ -44,6 +44,8 @@ export interface PassportSource {
     publishedAt: Date | null;
   };
   trust: { score: number; computedAt: Date; engineVersion: string; weightsVersion: string } | null;
+  /** Passed automated checks counted in the latest Trust Score, if none failed (ADR 0013). */
+  automatedChecks: { filesPassed: number; lastPassedAt: Date } | null;
   custody: { currentSince: Date | null; transferCount: number };
   evidence: readonly {
     id: string;
@@ -123,6 +125,11 @@ export interface PublicPassport {
     weightsVersion: string;
     disclaimer: string;
   } | null;
+  /**
+   * Only that automated checks passed, and when (ADR 0013). Results and details stay private;
+   * null when none passed or any failed.
+   */
+  automatedChecks: { filesPassed: number; lastPassedAt: string } | null;
   /** Addresses are shown once the asset is tokenized, not while registration is pending. */
   tokenization: {
     status: TokenizationStatus;
@@ -260,6 +267,10 @@ export function toPublicPassport(source: PassportSource): PublicPassport | null 
       engineVersion: source.trust.engineVersion,
       weightsVersion: source.trust.weightsVersion,
       disclaimer: TRUST_SCORE_DISCLAIMER,
+    },
+    automatedChecks: source.automatedChecks && {
+      filesPassed: source.automatedChecks.filesPassed,
+      lastPassedAt: iso(source.automatedChecks.lastPassedAt),
     },
     tokenization: {
       status: asset.tokenizationStatus,

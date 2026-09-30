@@ -87,13 +87,24 @@ export function Page({ path }: { path: string }) {
         <VerifierApplyPage />
       </SignedIn>
     );
-  if (path === "/admin" || path === "/admin/templates" || path === "/admin/roles")
+  if (
+    path === "/admin" ||
+    path === "/admin/templates" ||
+    path === "/admin/roles" ||
+    path === "/admin/checks"
+  )
     return (
       <SignedIn>
         <AdminPage
           key={path}
           tab={
-            path === "/admin" ? "verifiers" : path === "/admin/templates" ? "templates" : "roles"
+            path === "/admin"
+              ? "verifiers"
+              : path === "/admin/templates"
+                ? "templates"
+                : path === "/admin/roles"
+                  ? "roles"
+                  : "checks"
           }
         />
       </SignedIn>

@@ -106,6 +106,9 @@ It is enabled by `OPENAI_API_KEY` (model: `OPENAI_MODEL`); without it the checks
   and the web pages consulted (web search is used only when a business name or website is
   given). Reports are append-only, visible to verifier reviewers and admins only, and never change
   the application: reviewers decide, and can request a new report.
+- The passport states how many files passed and the latest date, read from the latest Trust
+  Score snapshot, only when no check failed. Administrators see every check with its details on
+  the admin page (AI checks).
 - Checks run in a job queue in the API process, like chain sync (ADR 0016), with retries for
   outages and rate limits. Guided capture and the deterministic checks are still to come.
 

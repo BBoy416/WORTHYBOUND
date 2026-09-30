@@ -2,6 +2,10 @@ import type { AutomatedCheck, AutomatedJob, PrismaClient } from "@worthybound/da
 import {
   AUTOMATED_CHECK_RESULTS,
   CHECK_PROBLEMS,
+  EVIDENCE_TYPES,
+  type EvidenceType,
+  REVIEW_STATUSES,
+  type ReviewStatus,
   VERIFIER_REPORT_RECOMMENDATIONS,
 } from "@worthybound/shared";
 import { z } from "zod";
@@ -67,9 +71,26 @@ export const adminCheckSchema = z.object({
   checkVersion: z.string(),
   sha256: z.string(),
   createdAt: z.iso.datetime(),
+  wbId: z.string(),
+  evidence: z.object({
+    type: z.enum(EVIDENCE_TYPES),
+    mimeType: z.string(),
+    reviewStatus: z.enum(REVIEW_STATUSES),
+  }),
 });
 
-export const toAdminCheck = (c: AutomatedCheck): z.infer<typeof adminCheckSchema> => ({
+/** Relations every admin check view needs. */
+export const adminCheckInclude = {
+  asset: { select: { wbId: true } },
+  evidence: { select: { type: true, mimeType: true, reviewStatus: true } },
+} as const;
+
+export const toAdminCheck = (
+  c: AutomatedCheck & {
+    asset: { wbId: string };
+    evidence: { type: EvidenceType; mimeType: string; reviewStatus: ReviewStatus };
+  },
+): z.infer<typeof adminCheckSchema> => ({
   id: c.id,
   evidenceId: c.evidenceId,
   result: c.result,
@@ -81,6 +102,8 @@ export const toAdminCheck = (c: AutomatedCheck): z.infer<typeof adminCheckSchema
   checkVersion: c.checkVersion,
   sha256: c.sha256,
   createdAt: c.createdAt.toISOString(),
+  wbId: c.asset.wbId,
+  evidence: c.evidence,
 });
 
 /** An AI report on a verifier application, for reviewers only (ADR 0013). */
