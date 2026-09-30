@@ -19,7 +19,9 @@ describe("web app on the API origin", () => {
     await mkdir(join(dir, "static"));
     await writeFile(join(dir, "index.html"), "<!doctype html><title>WorthyBound</title>");
     await writeFile(join(dir, "static", "index-abc123.js"), "console.log(1)");
-    await writeFile(join(dir, "favicon.svg"), "<svg/>");
+    for (const file of ["favicon.png", "apple-touch-icon.png", "og-image.png"]) {
+      await writeFile(join(dir, file), "png");
+    }
     await writeFile(join(dir, "secret.env"), "x");
     // The routes checked here never reach the database or storage.
     app = await buildApp({
@@ -81,7 +83,12 @@ describe("web app on the API origin", () => {
     expect(js.statusCode).toBe(200);
     expect(js.headers["content-type"]).toBe("text/javascript; charset=utf-8");
     expect(js.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
-    expect((await app.inject({ method: "GET", url: "/favicon.svg" })).statusCode).toBe(200);
+    for (const url of ["/favicon.png", "/apple-touch-icon.png", "/og-image.png"]) {
+      const res = await app.inject({ method: "GET", url });
+      expect(res.statusCode, url).toBe(200);
+      expect(res.headers["content-type"], url).toBe("image/png");
+    }
+    expect((await app.inject({ method: "GET", url: "/favicon.svg" })).statusCode).toBe(404);
     for (const url of [
       "/static/missing.js",
       "/static/..%2Fsecret.env",
