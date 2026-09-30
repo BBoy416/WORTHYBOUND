@@ -112,10 +112,11 @@ export async function disputeEscrow(
 }
 
 /**
- * Records the buyer's payment confirmed on-chain: the seller now has SHIP_WITHIN_DAYS to ship.
- * A payment that lands after the transfer ended is refunded. Called by the chain worker.
+ * Records the buyer's payment confirmed on-chain (`signature`), or found in escrow after the
+ * worker gave up on it (null): the seller now has SHIP_WITHIN_DAYS to ship. A payment that lands
+ * after the transfer ended is refunded. Called by the chain worker.
  */
-async function paid(tx: Tx, transferId: string, signature: string, at: Date): Promise<void> {
+async function paid(tx: Tx, transferId: string, signature: string | null, at: Date): Promise<void> {
   const transfer = await lockEscrow(tx, transferId);
   if (transfer.escrowStatus !== "AWAITING_PAYMENT") return;
   await tx.transferRequest.update({

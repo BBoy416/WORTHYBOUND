@@ -12,10 +12,10 @@
 // buyer and seller can sign after the blockhash has expired, that the payment and the token move
 // together, that the transaction cannot run twice and that the new owner cannot move the token
 // directly. The oracle pays the fees and funds the buyer (about 0.02 SOL per run).
-// `escrow` sells two throwaway assets in escrow (ADR 0014): the parties sign the transfer, the
-// buyer pays into the escrow nonce account, then the first sale is released (the seller is paid
-// from escrow and the token moves in one transaction) and the second is refunded, after which its
-// prepared transfer can no longer run. The oracle pays the fees and funds the buyer (about
+// `escrow` sells two throwaway assets in escrow (ADR 0014): the parties sign the transfer, a first
+// payment is abandoned and reset so it can no longer land, the buyer pays into the escrow nonce
+// account, then the first sale is released (the seller is paid from escrow and the token moves in
+// one transaction) and the second is refunded, after which its prepared transfer can no longer run. The oracle pays the fees and funds the buyer (about
 // 0.05 SOL per run, including four nonce accounts that stay open).
 // Uses SOLANA_RPC_URL (default https://api.devnet.solana.com). Prints addresses and signatures only.
 import {
@@ -289,12 +289,26 @@ async function escrow(oraclePath, only) {
         systemTransferInstruction({ from: oracleSigner, to: buyer.address, lamports: PRICE }),
       ]),
     );
-    const payment = await oracle.prepareEscrowPayment({
+    const escrowPayment = {
       buyer: buyer.address,
       escrowAccount: prepared.nonceAccount,
       paymentNonceAccount: prepared.paymentNonceAccount,
       priceLamports: PRICE,
-    });
+    };
+    // A payment the worker gives up on can no longer land once its nonce is advanced.
+    const abandoned = await oracle.prepareEscrowPayment(escrowPayment);
+    const abandonedSignatures = { [buyer.address]: await walletSignature(abandoned, buyer) };
+    const reset = await patiently(() => oracle.resetEscrowPayment(escrowPayment));
+    if (reset.held) throw new Error("escrow: reset found a payment that was never sent");
+    const late = await oracle
+      .sendTransfer({ transaction: abandoned, signatures: abandonedSignatures })
+      .then(
+        () => true,
+        () => false,
+      );
+    if (late) throw new Error("escrow: a payment landed after its nonce was advanced");
+    console.log(`${name}: the abandoned payment was rejected after the reset`);
+    const payment = reset.transaction;
     const paymentSignatures = { [buyer.address]: await walletSignature(payment, buyer) };
     const paid = await oracle.sendTransfer({ transaction: payment, signatures: paymentSignatures });
     log(`${name} payment into escrow`, paid);
@@ -302,6 +316,10 @@ async function escrow(oraclePath, only) {
       (await oracle.sendTransfer({ transaction: payment, signatures: paymentSignatures })) !== paid
     ) {
       throw new Error("escrow: a repeated payment did not return the original signature");
+    }
+    // A payment that landed unseen is found by the reset.
+    if (!(await patiently(() => oracle.resetEscrowPayment(escrowPayment))).held) {
+      throw new Error("escrow: reset did not find the payment in escrow");
     }
     const [held, left] = await Promise.all([
       balance(prepared.nonceAccount),

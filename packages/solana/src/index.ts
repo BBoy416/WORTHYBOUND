@@ -19,6 +19,7 @@ export { toChainAssetStatus, toChainVerificationLevel } from "./status.js";
 export {
   buildEscrowPaymentTransaction,
   buildEscrowRefundTransaction,
+  buildNonceAdvanceTransaction,
   buildTransferTransaction,
   completeTransferTransaction,
   createNonceAccountInstructions,

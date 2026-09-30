@@ -79,7 +79,7 @@ export interface ChainSyncOptions {
   completeTransfer: (tx: Tx, transferId: string, signature: string, at: Date) => Promise<void>;
   /** Records escrow payments, refunds and failed releases (ADR 0014), in the job's transaction. */
   escrow: {
-    paid(tx: Tx, transferId: string, signature: string, at: Date): Promise<void>;
+    paid(tx: Tx, transferId: string, signature: string | null, at: Date): Promise<void>;
     refunded(tx: Tx, transferId: string, signature: string | null, at: Date): Promise<void>;
     releaseFailed(tx: Tx, transferId: string, at: Date): Promise<void>;
   };
@@ -278,28 +278,41 @@ export function createChainSync(options: ChainSyncOptions): ChainSync {
     });
   }
 
+  /**
+   * Gives up on a payment into escrow for good: advances its nonce so it can no longer land, then
+   * checks whether it landed anyway. Null if that could not be done now; the job is then retried.
+   */
+  async function resetPayment(job: ChainTransaction) {
+    const t = await prisma.transferRequest.findUniqueOrThrow({ where: { id: job.entityId } });
+    if (t.escrowStatus !== "AWAITING_PAYMENT" || !t.nonceAccount || !t.paymentNonceAccount) {
+      return { held: false as const, transaction: null };
+    }
+    try {
+      return await oracle.resetEscrowPayment({
+        buyer: t.toWalletAddress,
+        escrowAccount: t.nonceAccount,
+        paymentNonceAccount: t.paymentNonceAccount,
+        priceLamports: t.priceLamports,
+      });
+    } catch (error) {
+      log.warn({ jobId: job.id, err: String(error) }, "escrow payment reset failed");
+      return null;
+    }
+  }
+
   async function fail(job: ChainTransaction, error: unknown, final: boolean): Promise<void> {
-    const attempts = final ? MAX_CHAIN_ATTEMPTS : job.attempts + 1;
+    let attempts = final ? MAX_CHAIN_ATTEMPTS : job.attempts + 1;
     const message =
       error instanceof NotTokenizableError || error instanceof TransferFailedError
         ? error.message
         : String((error as Error)?.message ?? error).slice(0, 500);
     log.warn({ jobId: job.id, kind: job.kind, attempts, err: message }, "chain job failed");
-    // A payment that failed or could not be sent is signed again; its nonce may have moved on.
-    let payment: string | null = null;
-    if (job.kind === "ESCROW_PAYMENT" && attempts >= MAX_CHAIN_ATTEMPTS) {
-      const t = await prisma.transferRequest.findUniqueOrThrow({ where: { id: job.entityId } });
-      if (t.nonceAccount && t.paymentNonceAccount) {
-        payment = await oracle
-          .prepareEscrowPayment({
-            buyer: t.toWalletAddress,
-            escrowAccount: t.nonceAccount,
-            paymentNonceAccount: t.paymentNonceAccount,
-            priceLamports: t.priceLamports,
-          })
-          .catch(() => null);
-      }
-    }
+    // A signed payment stays valid until its nonce moves on, so it is given up only once reset.
+    const reset =
+      job.kind === "ESCROW_PAYMENT" && attempts >= MAX_CHAIN_ATTEMPTS
+        ? await resetPayment(job)
+        : undefined;
+    if (reset === null) attempts = MAX_CHAIN_ATTEMPTS - 1;
     await prisma.$transaction(async (tx) => {
       await tx.chainTransaction.update({
         where: { id: job.id },
@@ -311,12 +324,14 @@ export function createChainSync(options: ChainSyncOptions): ChainSync {
           data: { tokenizationStatus: "FAILED", updatedAt: now() },
         });
       }
-      if (job.kind === "ESCROW_PAYMENT" && attempts >= MAX_CHAIN_ATTEMPTS) {
+      if (reset?.held) {
+        await escrow.paid(tx, job.entityId, null, now());
+      } else if (reset) {
         await tx.transferRequest.updateMany({
           where: { id: job.entityId, escrowStatus: "AWAITING_PAYMENT" },
           data: {
             paymentSignature: null,
-            ...(payment ? { paymentTransaction: payment } : {}),
+            ...(reset.transaction ? { paymentTransaction: reset.transaction } : {}),
             updatedAt: now(),
           },
         });

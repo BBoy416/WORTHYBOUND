@@ -52,7 +52,7 @@ type Call =
       price: bigint;
     }
   | { kind: "transfer"; wbId: string; buyer: string }
-  | { kind: "payment"; buyer: string; price: bigint }
+  | { kind: "payment" | "payment_reset"; buyer: string; price: bigint }
   | { kind: "refund"; buyer: string; price: bigint };
 
 type Signer = Awaited<ReturnType<typeof loadKeypairSigner>>;
@@ -82,6 +82,12 @@ class FakeOracle implements WorthyBoundOracle {
   failures = 0;
   /** Makes the next sent payment land and fail, as when the buyer spent the SOL meanwhile. */
   failNextPayment = false;
+  /**
+   * Payments are sent but never seen to confirm, as during an outage; they stay valid, and land
+   * with `landLostPayments`, until their payment nonce is advanced.
+   */
+  losePayments = false;
+  readonly #lost = new Set<string>();
   /** Lamports by wallet; wallets not listed hold 10 SOL. */
   readonly balances = new Map<string, bigint>();
   /** Lamports held in escrow, by nonce account. */
@@ -199,6 +205,32 @@ class FakeOracle implements WorthyBoundOracle {
     return transaction;
   }
 
+  /** Lands the payments that were sent and are still valid. */
+  landLostPayments() {
+    for (const transaction of this.#lost) {
+      const payment = this.#payments.get(transaction);
+      if (!payment) continue;
+      this.#payments.delete(transaction);
+      this.#credit(payment.buyer, -payment.price);
+      this.escrows.set(payment.escrow, (this.escrows.get(payment.escrow) ?? 0n) + payment.price);
+      this.calls.push({ kind: "payment", buyer: payment.buyer, price: payment.price });
+    }
+    this.#lost.clear();
+  }
+
+  async resetEscrowPayment(
+    input: Parameters<WorthyBoundOracle["resetEscrowPayment"]>[0],
+  ): ReturnType<WorthyBoundOracle["resetEscrowPayment"]> {
+    this.#maybeFail();
+    // Advancing the payment nonce invalidates every payment prepared for this escrow.
+    for (const [transaction, payment] of this.#payments) {
+      if (payment.escrow === input.escrowAccount) this.#payments.delete(transaction);
+    }
+    this.calls.push({ kind: "payment_reset", buyer: input.buyer, price: input.priceLamports });
+    if ((this.escrows.get(input.escrowAccount) ?? 0n) >= input.priceLamports) return { held: true };
+    return { held: false, transaction: await this.prepareEscrowPayment(input) };
+  }
+
   async refundEscrow(input: Parameters<WorthyBoundOracle["refundEscrow"]>[0]) {
     this.#maybeFail();
     const held = this.escrows.get(input.escrowAccount) ?? 0n;
@@ -224,6 +256,10 @@ class FakeOracle implements WorthyBoundOracle {
     // Throws unless the parties signed; the oracle signs last.
     await completeTransferTransaction(input.transaction, input.signatures, this.signer);
     const payment = this.#payments.get(input.transaction);
+    if (payment && this.losePayments) {
+      this.#lost.add(input.transaction);
+      throw new Error("transaction confirmation timed out");
+    }
     if (payment) {
       this.#payments.delete(input.transaction);
       if (this.failNextPayment) {
@@ -1015,8 +1051,8 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
         expect(done.statusCode, done.body).toBe(201);
       };
 
-      /** Starts, accepts, signs and pays a shipped transfer; returns it once paid. */
-      const paid = async (alice: Owner, bob: Owner, wbId: string) => {
+      /** Starts, accepts and signs a shipped transfer, and sends the buyer's payment. */
+      const payInto = async (alice: Owner, bob: Owner, wbId: string) => {
         const res = await call(alice, "POST", "/transfers", {
           assetId: wbId,
           toWalletAddress: bob.wallet.address,
@@ -1037,6 +1073,12 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
           signedTransaction: walletSign(bob.wallet, unpaid.escrow?.paymentTransaction as string),
         });
         expect(pay.status, JSON.stringify(pay.body)).toBe(200);
+        return id;
+      };
+
+      /** Starts, accepts, signs and pays a shipped transfer; returns it once paid. */
+      const paid = async (alice: Owner, bob: Owner, wbId: string) => {
+        const id = await payInto(alice, bob, wbId);
         await run();
         const after = await view(bob, id);
         expect(after.escrow?.status).toBe("PAID");
@@ -1353,6 +1395,82 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
         expect((await act(bob, inPerson.id, "delivered")).body.error.code).toBe(
           "not_shipped_transfer",
         );
+      });
+
+      it("gives up on a payment not seen to land only once it can no longer land", async () => {
+        const alice = await owner();
+        const bob = await owner();
+        /** Every attempt at sending the payment, due one after the other. */
+        const retries = async () => {
+          for (let i = 0; i < MAX_CHAIN_ATTEMPTS; i++) {
+            await run();
+            clock.advance(10 * 60_000);
+          }
+        };
+        const resets = () => oracle.calls.filter((c) => c.kind === "payment_reset").length;
+        oracle.losePayments = true;
+        try {
+          // Never landed: the buyer signs a new payment, and the old one cannot land any more.
+          const lost = await payInto(alice, bob, await tokenized(alice));
+          await run();
+          expect((await view(bob, lost)).escrow).toMatchObject({
+            status: "AWAITING_PAYMENT",
+            awaitingYourPayment: false,
+            payment: { status: "PENDING" },
+          });
+          expect((await act(bob, lost, "cancel")).body.error.code).toBe("payment_in_progress");
+          const before = resets();
+          await retries();
+          expect(resets()).toBe(before + 1);
+          const retry = await view(bob, lost);
+          expect(retry.escrow).toMatchObject({
+            status: "AWAITING_PAYMENT",
+            awaitingYourPayment: true,
+            payment: { status: "FAILED" },
+          });
+          oracle.landLostPayments();
+          oracle.losePayments = false;
+          const again = await act(bob, lost, "payment", {
+            signedTransaction: walletSign(bob.wallet, retry.escrow?.paymentTransaction as string),
+          });
+          expect(again.status, JSON.stringify(again.body)).toBe(200);
+          await run();
+          expect((await view(bob, lost)).escrow?.status).toBe("PAID");
+          expect(oracle.balances.get(bob.wallet.address)).toBe(10_000_000_000n - PRICE);
+
+          // Landed unseen: recorded as paid without asking the buyer again. The reset waits while
+          // Solana cannot be reached.
+          oracle.losePayments = true;
+          const carol = await owner();
+          const unseen = await payInto(alice, carol, await tokenized(alice));
+          for (let i = 0; i < MAX_CHAIN_ATTEMPTS - 1; i++) {
+            await run();
+            oracle.landLostPayments();
+            clock.advance(10 * 60_000);
+          }
+          oracle.failures = 2;
+          await run();
+          expect(await row(unseen)).toMatchObject({
+            escrowStatus: "AWAITING_PAYMENT",
+            paymentSignature: expect.any(String),
+          });
+          expect(
+            await db.prisma.chainTransaction.findFirstOrThrow({ where: { entityId: unseen } }),
+          ).toMatchObject({ status: "FAILED", attempts: MAX_CHAIN_ATTEMPTS - 1 });
+          clock.advance(10 * 60_000);
+          await run();
+          const found = await view(carol, unseen);
+          expect(found.escrow).toMatchObject({ status: "PAID", awaitingYourPayment: false });
+          expect(oracle.balances.get(carol.wallet.address)).toBe(10_000_000_000n - PRICE);
+          expect(
+            await db.prisma.auditLog.findFirst({
+              where: { targetId: unseen, action: "transfer.escrow_paid" },
+            }),
+          ).toMatchObject({ metadata: { signature: null } });
+        } finally {
+          oracle.losePayments = false;
+          oracle.landLostPayments();
+        }
       });
     });
   });

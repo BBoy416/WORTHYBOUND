@@ -22,6 +22,7 @@ import { toChainAssetStatus, toChainVerificationLevel } from "./status.js";
 import {
   buildEscrowPaymentTransaction,
   buildEscrowRefundTransaction,
+  buildNonceAdvanceTransaction,
   buildTransferTransaction,
   completeTransferTransaction,
   createNonceAccountInstructions,
@@ -115,6 +116,17 @@ export interface WorthyBoundOracle {
     paymentNonceAccount: string;
     priceLamports: bigint;
   }): Promise<string>;
+  /**
+   * Gives up on a payment into escrow that was signed but not seen to land: advances the payment
+   * nonce, so it can no longer land, then tells whether the escrow holds the price. If not, returns
+   * a new unsigned payment for the buyer to sign.
+   */
+  resetEscrowPayment(input: {
+    buyer: string;
+    escrowAccount: string;
+    paymentNonceAccount: string;
+    priceLamports: bigint;
+  }): Promise<{ held: true } | { held: false; transaction: string }>;
   /**
    * Returns the escrowed price to the buyer and advances the escrow nonce, so the prepared
    * transfer can no longer run. Null if the escrow no longer holds the price (already refunded).
@@ -279,6 +291,27 @@ export function createWorthyBoundOracle(
         nonce,
         priceLamports,
       });
+    },
+
+    async resetEscrowPayment(input) {
+      const paymentNonce = input.paymentNonceAccount as Address;
+      const { nonce } = await readNonce(paymentNonce);
+      await client.sendTransfer({
+        transaction: buildNonceAdvanceTransaction({
+          oracle: oracle.address,
+          nonceAccount: paymentNonce,
+          nonce,
+        }),
+        signatures: {},
+      });
+      const [{ value: balance }, rent] = await Promise.all([
+        connection.rpc
+          .getBalance(input.escrowAccount as Address, { commitment: "confirmed" })
+          .send(),
+        rentExempt(),
+      ]);
+      if (BigInt(balance) >= rent + input.priceLamports) return { held: true };
+      return { held: false, transaction: await client.prepareEscrowPayment(input) };
     },
 
     async refundEscrow({ escrowAccount, buyer, priceLamports }) {

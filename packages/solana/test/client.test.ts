@@ -26,6 +26,8 @@ import { FailedTransactionMetadata, LiteSVM } from "litesvm";
 import { ASSET_STATUSES, VERIFICATION_LEVELS } from "@worthybound/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  buildEscrowPaymentTransaction,
+  buildNonceAdvanceTransaction,
   buildTransferTransaction,
   chainAddresses,
   completeTransferTransaction,
@@ -314,5 +316,90 @@ describe("transfer transactions", () => {
         oracle,
       ),
     ).rejects.toThrow();
+  });
+});
+
+describe("escrow payments", () => {
+  it("can no longer land once the payment nonce is advanced", async () => {
+    const [oracle, buyer, escrow, paymentNonce] = await Promise.all([
+      generateKeyPairSigner(),
+      generateKeyPairSigner(),
+      generateKeyPairSigner(),
+      generateKeyPairSigner(),
+    ]);
+    const svm = new LiteSVM();
+    svm.airdrop(oracle.address, lamports(1_000_000_000n));
+    svm.airdrop(buyer.address, lamports(5_000_000_000n));
+    const rent = svm.minimumBalanceForRentExemption(NONCE_ACCOUNT_SIZE);
+    const created = pipe(
+      createTransactionMessage({ version: 0 }),
+      (m) => setTransactionMessageFeePayerSigner(oracle, m),
+      (m) =>
+        setTransactionMessageLifetimeUsingBlockhash(
+          { blockhash: svm.latestBlockhash(), lastValidBlockHeight: 1_000n },
+          m,
+        ),
+      (m) =>
+        appendTransactionMessageInstructions(
+          [escrow, paymentNonce].flatMap((nonceAccount) =>
+            createNonceAccountInstructions({
+              payer: oracle,
+              nonceAccount,
+              authority: oracle.address,
+              lamports: rent,
+            }),
+          ),
+          m,
+        ),
+    );
+    expect(
+      svm.sendTransaction(await signTransactionMessageWithSigners(created)),
+    ).not.toBeInstanceOf(FailedTransactionMetadata);
+    const nonceOf = () => {
+      const account = svm.getAccount(paymentNonce.address);
+      if (!account.exists) throw new Error("nonce account missing");
+      return readNonceAccount(account.data).nonce;
+    };
+    const payment = (nonce: string) =>
+      buildEscrowPaymentTransaction({
+        oracle: oracle.address,
+        buyer: buyer.address,
+        escrowAccount: escrow.address,
+        paymentNonceAccount: paymentNonce.address,
+        nonce,
+        priceLamports: 2_000_000_000n,
+      });
+    const signedPayment = async (wire: string) =>
+      completeTransferTransaction(
+        wire,
+        {
+          [buyer.address]: await transferSignature(
+            wire,
+            await walletSign(wire, buyer),
+            buyer.address,
+          ),
+        },
+        oracle,
+      );
+    const lost = await signedPayment(payment(nonceOf()));
+
+    svm.expireBlockhash();
+    const advance = await completeTransferTransaction(
+      buildNonceAdvanceTransaction({
+        oracle: oracle.address,
+        nonceAccount: paymentNonce.address,
+        nonce: nonceOf(),
+      }),
+      {},
+      oracle,
+    );
+    expect(svm.sendTransaction(advance)).not.toBeInstanceOf(FailedTransactionMetadata);
+    expect(svm.sendTransaction(lost)).toBeInstanceOf(FailedTransactionMetadata);
+    expect(svm.getBalance(escrow.address)).toBe(rent);
+
+    // A payment signed with the new nonce lands once.
+    const again = await signedPayment(payment(nonceOf()));
+    expect(svm.sendTransaction(again)).not.toBeInstanceOf(FailedTransactionMetadata);
+    expect(svm.getBalance(escrow.address)).toBe(rent + 2_000_000_000n);
   });
 });

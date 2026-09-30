@@ -117,8 +117,11 @@ price) is escrowed without a program change. When the buyer accepts, the oracle 
 transfer's durable nonce account, which also holds the escrow, and a second nonce account for the
 payment. Both parties sign the transfer, which pays the seller from the escrow account (a nonce
 withdrawal the oracle signs) together with `transfer_asset`; the buyer then signs the payment of
-the price into escrow (`POST /transfers/:id/payment`). A refund returns the price and advances the
-escrow nonce, so the signed transfer can no longer run. Deadlines:
+the price into escrow (`POST /transfers/:id/payment`). A signed payment stays valid until the
+payment nonce advances, so the worker gives up on one it cannot confirm only after advancing that
+nonce; it then records the payment if the escrow holds the price, or asks the buyer to sign a new
+one. A refund returns the price and advances the escrow nonce, so the signed transfer can no
+longer run. Deadlines:
 
 - The seller films the item and the sealed package with the session's code
   (`POST /transfers/:id/shipment-session`) and ships within 3 days of payment, or the buyer is

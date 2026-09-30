@@ -286,6 +286,18 @@ export function buildEscrowRefundTransaction(input: {
   });
 }
 
+/**
+ * Advances a nonce account's nonce and nothing else, unsigned; the oracle signs it alone. Any
+ * transaction signed with the previous nonce can then no longer land.
+ */
+export function buildNonceAdvanceTransaction(input: {
+  oracle: Address;
+  nonceAccount: Address;
+  nonce: string;
+}): string {
+  return nonceTransaction({ ...input, instructions: [] });
+}
+
 export type TransferSignatureProblem =
   | "invalid_transaction"
   | "transaction_changed"

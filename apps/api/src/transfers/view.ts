@@ -7,6 +7,7 @@ import {
   TRANSFER_STATUSES,
 } from "@worthybound/shared";
 import { z } from "zod";
+import { MAX_CHAIN_ATTEMPTS } from "../chain/sync.js";
 
 const isoOrNull = (date: Date | null) => date?.toISOString() ?? null;
 
@@ -41,8 +42,12 @@ export interface TransferJobs {
 const chainJobSchema = z
   .object({ status: z.enum(CHAIN_TRANSACTION_STATUSES), signature: z.string().nullable() })
   .nullable();
+/** A job that failed but is retried is still being sent. */
 const chainJob = (job: TransferJob | null) =>
-  job && { status: job.status, signature: job.signature };
+  job && {
+    status: job.status === "FAILED" && job.attempts < MAX_CHAIN_ATTEMPTS ? "PENDING" : job.status,
+    signature: job.signature,
+  };
 
 /** A shipped transfer's escrow (ADR 0014), for both parties. */
 const escrowSchema = z.object({
