@@ -1835,7 +1835,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
             where: { id: check.id },
             data: { ownerCode: "ABCDEF" },
           }),
-        ).rejects.toThrow(/remote check code cannot be changed/);
+        ).rejects.toThrow(/remote or receipt check code cannot be changed/);
       });
 
       it("does not count the shots toward the evidence limit", async () => {

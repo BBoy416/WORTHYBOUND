@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getAddressEncoder } from "@solana/addresses";
 import {
+  buildEscrowPaymentTransaction,
   buildTransferTransaction,
   chainAddresses,
   type ChainRecordState,
@@ -142,7 +143,29 @@ class FakeOracle implements WorthyBoundOracle {
       nonce: new TestWallet().address,
     });
     this.#prepared.set(transaction, { ...input, status: input.statusAfter, seq: input.statusSeq });
-    return { transaction, nonceAccount };
+    const paymentNonceAccount =
+      input.escrow && input.priceLamports > 0n ? new TestWallet().address : null;
+    return { transaction, nonceAccount, paymentNonceAccount };
+  }
+
+  async prepareEscrowPayment(input: Parameters<WorthyBoundOracle["prepareEscrowPayment"]>[0]) {
+    this.#maybeFail();
+    return buildEscrowPaymentTransaction({
+      ...input,
+      oracle: this.oracleAddress,
+      buyer: input.buyer as Address,
+      escrowAccount: input.escrowAccount as Address,
+      paymentNonceAccount: input.paymentNonceAccount as Address,
+      nonce: new TestWallet().address,
+    });
+  }
+
+  async refundEscrow(input: Parameters<WorthyBoundOracle["refundEscrow"]>[0]) {
+    this.#maybeFail();
+    const held = this.balances.get(input.escrowAccount) ?? 10_000_000_000n;
+    if (held < input.priceLamports) return null;
+    this.balances.set(input.escrowAccount, held - input.priceLamports);
+    return this.#sign();
   }
 
   async getBalance(address: string) {

@@ -17,6 +17,8 @@ export {
 export { createConnection, sendInstructions, type SolanaConnection } from "./rpc.js";
 export { toChainAssetStatus, toChainVerificationLevel } from "./status.js";
 export {
+  buildEscrowPaymentTransaction,
+  buildEscrowRefundTransaction,
   buildTransferTransaction,
   completeTransferTransaction,
   createNonceAccountInstructions,
@@ -24,6 +26,7 @@ export {
   readNonceAccount,
   systemTransferInstruction,
   TransferSignatureError,
+  withdrawNonceInstruction,
   type TransferSignatureProblem,
   transferSignature,
 } from "./transfer.js";

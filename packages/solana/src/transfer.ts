@@ -112,6 +112,34 @@ export function systemTransferInstruction(input: {
   };
 }
 
+/**
+ * System program WithdrawNonceAccount: `lamports` from a nonce account to `to`, signed by the
+ * nonce authority. The nonce account keeps at least its rent-exempt balance.
+ */
+export function withdrawNonceInstruction(input: {
+  nonceAccount: Address;
+  to: Address;
+  authority: TransactionSigner;
+  lamports: bigint;
+}): Instruction {
+  const authority: AccountSignerMeta = {
+    address: input.authority.address,
+    role: AccountRole.READONLY_SIGNER,
+    signer: input.authority,
+  };
+  return {
+    programAddress: SYSTEM_PROGRAM,
+    accounts: [
+      { address: input.nonceAccount, role: AccountRole.WRITABLE },
+      { address: input.to, role: AccountRole.WRITABLE },
+      { address: RECENT_BLOCKHASHES_SYSVAR, role: AccountRole.READONLY },
+      { address: RENT_SYSVAR, role: AccountRole.READONLY },
+      authority,
+    ],
+    data: concat(u32(5), u64(input.lamports)),
+  };
+}
+
 /** Authority and current value of an initialized nonce account. */
 export function readNonceAccount(data: Uint8Array): { authority: Address; nonce: Nonce } {
   // Versions::Current (1), State::Initialized (1), authority, durable nonce, fee calculator.
@@ -126,11 +154,37 @@ export function readNonceAccount(data: Uint8Array): { authority: Address; nonce:
   };
 }
 
+/** An unsigned legacy transaction with a durable nonce whose authority is the oracle. */
+function nonceTransaction(input: {
+  oracle: Address;
+  nonceAccount: Address;
+  nonce: string;
+  instructions: Instruction[];
+}): string {
+  const message = pipe(
+    createTransactionMessage({ version: "legacy" }),
+    (m) => setTransactionMessageFeePayer(input.oracle, m),
+    (m) =>
+      setTransactionMessageLifetimeUsingDurableNonce(
+        {
+          nonce: input.nonce as Nonce,
+          nonceAccountAddress: input.nonceAccount,
+          nonceAuthorityAddress: input.oracle,
+        },
+        m,
+      ),
+    (m) => appendTransactionMessageInstructions(input.instructions, m),
+  );
+  const bytes = getTransactionEncoder().encode(compileTransaction(message));
+  return Buffer.from(bytes).toString("base64");
+}
+
 /**
  * The `transfer_asset` transaction, unsigned, as base64 wire bytes. It uses a durable nonce
  * instead of a recent blockhash, so seller and buyer can sign it hours apart; the oracle pays the
  * fees, advances the nonce and signs last (ADR 0002). With a price, the buyer's payment to the
- * seller is in the same transaction, so both happen or neither does (ADR 0014).
+ * seller is in the same transaction, so both happen or neither does (ADR 0014). In escrow, the
+ * nonce account holds the buyer's payment and the transaction pays the seller from it.
  */
 export async function buildTransferTransaction(input: {
   wbId: string;
@@ -143,6 +197,8 @@ export async function buildTransferTransaction(input: {
   nonce: string;
   /** Paid by the buyer to the seller; none when 0 or omitted. */
   priceLamports?: bigint;
+  /** The price is paid from the escrow held in the nonce account, not by the buyer. */
+  escrow?: boolean;
 }): Promise<string> {
   const { record, coreAsset } = await chainAddresses(input.wbId);
   const buyer = createNoopSigner(input.buyer);
@@ -157,31 +213,77 @@ export async function buildTransferTransaction(input: {
     statusAfter: toChainAssetStatus(input.statusAfter),
     statusSeq: input.statusSeq,
   });
-  const message = pipe(
-    createTransactionMessage({ version: "legacy" }),
-    (m) => setTransactionMessageFeePayer(input.oracle, m),
-    (m) =>
-      setTransactionMessageLifetimeUsingDurableNonce(
-        {
-          nonce: input.nonce as Nonce,
-          nonceAccountAddress: input.nonceAccount,
-          nonceAuthorityAddress: input.oracle,
-        },
-        m,
-      ),
-    (m) =>
-      appendTransactionMessageInstructions(
-        price > 0n
-          ? [
-              systemTransferInstruction({ from: buyer, to: input.seller, lamports: price }),
-              instruction,
-            ]
-          : [instruction],
-        m,
-      ),
-  );
-  const bytes = getTransactionEncoder().encode(compileTransaction(message));
-  return Buffer.from(bytes).toString("base64");
+  const payment =
+    price === 0n
+      ? []
+      : input.escrow
+        ? [
+            withdrawNonceInstruction({
+              nonceAccount: input.nonceAccount,
+              to: input.seller,
+              authority: createNoopSigner(input.oracle),
+              lamports: price,
+            }),
+          ]
+        : [systemTransferInstruction({ from: buyer, to: input.seller, lamports: price })];
+  return nonceTransaction({ ...input, instructions: [...payment, instruction] });
+}
+
+/**
+ * The buyer's payment into escrow (ADR 0014), unsigned: the price from the buyer to the escrow
+ * nonce account, with the durable nonce of a separate payment nonce account, so it stays valid
+ * until the buyer signs and cannot land twice.
+ */
+export function buildEscrowPaymentTransaction(input: {
+  oracle: Address;
+  buyer: Address;
+  escrowAccount: Address;
+  paymentNonceAccount: Address;
+  nonce: string;
+  priceLamports: bigint;
+}): string {
+  if (input.priceLamports <= 0n) throw new Error("an escrow payment needs a price");
+  return nonceTransaction({
+    oracle: input.oracle,
+    nonceAccount: input.paymentNonceAccount,
+    nonce: input.nonce,
+    instructions: [
+      systemTransferInstruction({
+        from: createNoopSigner(input.buyer),
+        to: input.escrowAccount,
+        lamports: input.priceLamports,
+      }),
+    ],
+  });
+}
+
+/**
+ * The refund of an escrow to the buyer, unsigned; the oracle signs it alone. It uses the escrow
+ * account's own nonce, so advancing it invalidates the prepared transfer.
+ */
+export function buildEscrowRefundTransaction(input: {
+  oracle: Address;
+  buyer: Address;
+  escrowAccount: Address;
+  nonce: string;
+  priceLamports: bigint;
+}): string {
+  return nonceTransaction({
+    oracle: input.oracle,
+    nonceAccount: input.escrowAccount,
+    nonce: input.nonce,
+    instructions:
+      input.priceLamports > 0n
+        ? [
+            withdrawNonceInstruction({
+              nonceAccount: input.escrowAccount,
+              to: input.buyer,
+              authority: createNoopSigner(input.oracle),
+              lamports: input.priceLamports,
+            }),
+          ]
+        : [],
+  });
 }
 
 export type TransferSignatureProblem =
