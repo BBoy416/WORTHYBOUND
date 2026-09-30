@@ -1,6 +1,7 @@
 import type {
   AssetCategory,
   AutomatedCheckResult,
+  CaptureShot,
   CheckProblem,
   EvidenceType,
   ItemCondition,
@@ -9,7 +10,7 @@ import type {
 } from "@worthybound/shared";
 
 /** Version of the evidence checks, prompt and decision rule; stored with every result. */
-export const CHECK_VERSION = "evidence-check-v2";
+export const CHECK_VERSION = "evidence-check-v3";
 /** Version of the verifier application report prompt; stored with every report. */
 export const REPORT_VERSION = "verifier-report-v1";
 
@@ -27,6 +28,14 @@ export interface EvidenceCheckInput {
     type: EvidenceType;
     description: string | null;
   };
+  /** Set for a photo taken in a capture session (ADR 0013). */
+  capture: {
+    shot: CaptureShot;
+    /** What the shot should show. */
+    instruction: string;
+    /** The session's code, for the shot of the item next to the code; otherwise null. */
+    code: string | null;
+  } | null;
   /** The file to examine, prepared by the caller (images without metadata). */
   file: { mimeType: CheckFileMimeType; data: Uint8Array; filename: string };
   /** What a PDF says about itself; null for images. Can be forged or missing. */

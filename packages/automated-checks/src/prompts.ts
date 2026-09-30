@@ -19,11 +19,15 @@ Report problems only from this list, and only when the file shows them:
 - STOCK_OR_ONLINE_IMAGE: looks like a marketing, catalogue or stock image rather than the owner's own photo (studio background, watermark, overlaid text).
 - DOCUMENT_MISMATCH: a receipt, certificate or record names a different brand, model or item, or has an implausible date.
 - DOCUMENT_TAMPERING: a document shows alteration (mismatched fonts or alignment, totals that do not add up, pasted areas).
+- CAPTURE_CODE_MISSING: a capture photo that must show a code written on paper does not show it, or it cannot be read.
+- CAPTURE_CODE_MISMATCH: a capture photo shows a written code that is clearly different from the expected code.
 
 verdict: CONSISTENT when the file plausibly is genuine evidence of the described item and you found no problem; PROBLEMS_FOUND when you found at least one problem; CANNOT_TELL otherwise.
 confidence: your confidence in the verdict, from 0 to 1.
 documentNumber: for a receipt, invoice, certificate or report, the document's own number (receipt, invoice or certificate number) exactly as printed; null for photos, or when none is visible. Never the item's serial number.
 summary: two or three factual sentences for an administrator explaining what you saw. Do not repeat serial numbers, names, addresses or other personal data visible in the file.
+
+When capture is given, the owner took the photo with WorthyBound's camera during a timed session: capture.instruction says what the photo should show, and capture.code, when not null, is the code the owner was asked to write on paper and photograph next to the item. Report ITEM_NOT_VISIBLE when the photo does not show what the instruction asks for. Report the code problems only for capture photos with a code; handwriting varies, so similar-looking characters (such as 5 and S) are not a mismatch.
 
 For PDFs, pdfMetadata is what the file says about itself: it can be forged or missing, so it is never proof alone. A document modified long after it was issued, saved again several times, or made with software unusual for its issuer (e.g. an image editor for a shop receipt) is a reason to look for alteration.
 
@@ -41,6 +45,7 @@ export function evidencePrompt(input: EvidenceCheckInput): string {
       declaredType: input.evidence.type,
       ownerDescription: input.evidence.description,
     },
+    ...(input.capture ? { capture: input.capture } : {}),
     ...(input.pdfMetadata ? { pdfMetadata: input.pdfMetadata } : {}),
   };
   return `Check the attached file.\n\nJSON data:\n${JSON.stringify(data, null, 2)}`;

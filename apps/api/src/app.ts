@@ -26,6 +26,7 @@ import { evidenceRoutes } from "./evidence/routes.js";
 import { metadataRoutes } from "./passport/metadata.js";
 import { passportRoutes } from "./passport/routes.js";
 import { templateRoutes } from "./templates/routes.js";
+import { captureRoutes } from "./capture/routes.js";
 import { completeTransfer } from "./transfers/service.js";
 import { transferRoutes } from "./transfers/routes.js";
 import { verificationRoutes } from "./verification/routes.js";
@@ -98,7 +99,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       });
     }
     const status = (error as { statusCode?: number }).statusCode ?? 500;
-    if (status === 429) {
+    if (status === 429 && !(error instanceof ApiError)) {
       return reply
         .code(429)
         .send({ error: { code: "rate_limited", message: "Too many requests, try again later" } });
@@ -182,6 +183,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await app.register(verificationRoutes, ctx);
   await app.register(checkRoutes, ctx);
   await app.register(transferRoutes, ctx);
+  await app.register(captureRoutes, ctx);
   if (config.WEB_DIST_DIR) await registerWebApp(app, config.WEB_DIST_DIR);
   if (options.register) await options.register(app, ctx);
   return app;

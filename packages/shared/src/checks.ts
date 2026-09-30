@@ -17,6 +17,8 @@ export const CHECK_PROBLEMS = [
   "REUSED_FILE",
   "SIMILAR_PHOTO",
   "REUSED_DOCUMENT",
+  "CAPTURE_CODE_MISSING",
+  "CAPTURE_CODE_MISMATCH",
 ] as const;
 export type CheckProblem = (typeof CHECK_PROBLEMS)[number];
 
@@ -38,6 +40,7 @@ export const FAILING_CHECK_PROBLEMS: readonly CheckProblem[] = [
   "REUSED_FILE",
   "SIMILAR_PHOTO",
   "REUSED_DOCUMENT",
+  "CAPTURE_CODE_MISMATCH",
 ];
 
 /** What the owner is told for each problem. */
@@ -54,6 +57,8 @@ export const CHECK_PROBLEM_MESSAGES: Record<CheckProblem, string> = {
   REUSED_FILE: "This file is already attached to another asset",
   SIMILAR_PHOTO: "A near-identical photo is attached to another asset",
   REUSED_DOCUMENT: "A document with the same number is attached to another asset",
+  CAPTURE_CODE_MISSING: "The capture code is not visible or not readable",
+  CAPTURE_CODE_MISMATCH: "The code in the photo is not this session's code",
 };
 
 /** File types sent to the AI check; videos and HEIC photos are not checked yet. */

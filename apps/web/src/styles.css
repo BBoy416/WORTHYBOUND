@@ -647,3 +647,26 @@ legend {
     flex-direction: column;
   }
 }
+
+.capture-code {
+  color: var(--gold-hi);
+  font-size: 1.6rem;
+  letter-spacing: 0.2em;
+}
+
+.capture-shots li.done {
+  color: var(--muted);
+}
+
+.camera {
+  display: grid;
+  gap: 0.6rem;
+  max-width: 480px;
+}
+
+.camera video {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #000;
+}

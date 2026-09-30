@@ -193,6 +193,32 @@ describe("evidenceUploadSchema", () => {
     ).toBe(true);
   });
 
+  it("accepts capture shots only as photos with both fields and no client time", () => {
+    const shot = {
+      ...valid,
+      type: "PHOTO",
+      mimeType: "image/jpeg",
+      captureSessionId: "0199a000-0000-7000-8000-000000000c01",
+      captureShot: "DIAL",
+    };
+    expect(issues(evidenceUploadSchema, shot)).toEqual([]);
+    expect(issues(evidenceUploadSchema, { ...shot, captureShot: "SELFIE" })).toEqual([
+      "invalid_value:captureShot",
+    ]);
+    expect(issues(evidenceUploadSchema, { ...shot, captureShot: undefined })).toEqual([
+      "custom:captureShot",
+    ]);
+    expect(issues(evidenceUploadSchema, { ...shot, type: "RECEIPT" })).toEqual([
+      "custom:captureShot",
+    ]);
+    expect(issues(evidenceUploadSchema, { ...shot, mimeType: "image/heic" })).toEqual([
+      "custom:captureShot",
+    ]);
+    expect(issues(evidenceUploadSchema, { ...shot, capturedAt: "2026-01-01T10:00:00Z" })).toEqual([
+      "custom:captureShot",
+    ]);
+  });
+
   it("allows only JPEG, PNG and WebP photos to be public", () => {
     const photo = { ...valid, type: "PHOTO", mimeType: "image/jpeg", visibility: "PUBLIC" };
     expect(issues(evidenceUploadSchema, photo)).toEqual([]);

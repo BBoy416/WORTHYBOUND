@@ -26,6 +26,28 @@ const CHECK_LABELS: Record<NonNullable<OwnerEvidence["automatedCheck"]>["status"
 };
 
 /**
+ * Hashes a file in the browser, asks the API for an upload with `fields`, sends the file straight
+ * to storage and completes the upload.
+ */
+export async function uploadEvidence(
+  requestPath: string,
+  file: Blob,
+  fields: Record<string, unknown>,
+  onStep: (step: "hashing" | "uploading" | "checking") => void = () => {},
+): Promise<void> {
+  onStep("hashing");
+  const sha256 = await sha256Hex(file);
+  onStep("uploading");
+  const { uploadId, upload } = await post<{ uploadId: string; upload: PresignedUpload }>(
+    requestPath,
+    { ...fields, sha256, mimeType: file.type, sizeBytes: file.size },
+  );
+  await putFile(upload, file);
+  onStep("checking");
+  await post(`/evidence/uploads/${uploadId}/complete`);
+}
+
+/**
  * Picks files, hashes each in the browser, asks the API for an upload, sends the file straight to
  * storage and completes the upload. `requestPath` is the owner's or the verifier's upload endpoint.
  */
@@ -71,24 +93,17 @@ export function UploadForm({
       try {
         for (const file of files) {
           const of = files.length > 1 ? ` ${done + 1} of ${files.length}` : "";
-          setStep(`Hashing${of}…`);
-          const sha256 = await sha256Hex(file);
-          setStep(`Uploading${of}…`);
-          const { uploadId, upload } = await post<{ uploadId: string; upload: PresignedUpload }>(
+          await uploadEvidence(
             requestPath,
+            file,
             {
               type,
-              sha256,
-              mimeType: file.type,
-              sizeBytes: file.size,
               originalFilename: file.name,
               ...(publicAllowed ? { visibility } : {}),
               ...(description.trim() ? { description: description.trim() } : {}),
             },
+            (s) => setStep(`${s.charAt(0).toUpperCase()}${s.slice(1)}${of}…`),
           );
-          await putFile(upload, file);
-          setStep(`Checking${of}…`);
-          await post(`/evidence/uploads/${uploadId}/complete`);
           done++;
         }
         setFiles([]);
@@ -182,6 +197,9 @@ export function EvidenceList({
                 <strong>{humanize(e.type)}</strong> <Badge value={e.visibility} />{" "}
                 <Badge value={e.reviewStatus} />
                 {e.source === "VERIFIER" && <Badge value="VERIFIER" label="From verifier" />}
+                {e.captureShot && (
+                  <Badge value="CAPTURED" label={`Guided capture: ${humanize(e.captureShot)}`} />
+                )}
                 {e.automatedCheck && (
                   <>
                     {" "}

@@ -22,11 +22,10 @@ apps/
   api/                REST API (Fastify): wallet sign-in, assets, evidence, verifiers, templates,
                       verification requests, attestations, passports, tokenization, token
                       metadata and the chain sync worker; serves the web app in production
-  web/                web app (Vite + React): wallet sign-in, assets, evidence, tokenization,
-                      transfers,
-                      verification requests, verifier applications and attestations, admin
-                      (verifier review, templates, reviewer roles, AI checks) and public
-                      passports
+  web/                web app (Vite + React): wallet sign-in, assets, evidence, guided capture,
+                      tokenization, transfers, verification requests, verifier applications
+                      and attestations, admin (verifier review, templates, reviewer roles,
+                      AI checks) and public passports
 packages/
   database/           Prisma schema, migrations and client (PostgreSQL)
   shared/             domain enums, asset IDs, lifecycle rules, public passport and verifier

@@ -2020,6 +2020,88 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
     });
   });
 
+  describe("capture sessions", () => {
+    const session = async (fields: Partial<Prisma.CaptureSessionUncheckedCreateInput> = {}) => {
+      const a = await asset();
+      return db.prisma.captureSession.create({
+        data: {
+          assetId: a.id,
+          ownerId: a.ownerId,
+          code: "H4RT9Z",
+          shots: ["DIAL", "CODE"],
+          expiresAt: new Date(Date.now() + 15 * 60_000),
+          ...fields,
+        },
+      });
+    };
+    const shot = (s: { id: string; assetId: string; ownerId: string }, captureShot: string) =>
+      db.prisma.evidence.create({
+        data: {
+          assetId: s.assetId,
+          uploaderId: s.ownerId,
+          type: "PHOTO",
+          storageKey: `evidence/${randomUUID()}`,
+          sha256: randomHex64(),
+          mimeType: "image/jpeg",
+          sizeBytes: 10,
+          captureSessionId: s.id,
+          captureShot,
+        },
+      });
+
+    it.each([
+      ["a code with ambiguous characters", { code: "H4RT0O" }],
+      ["no shots", { shots: [] }],
+      ["an expiry before its start", { expiresAt: new Date(Date.now() - 60_000) }],
+      ["completion without a time", { status: "COMPLETED" as const }],
+    ])("rejects %s", async (_label, fields) => {
+      await expectDbError(session(fields), CHECK_VIOLATION);
+    });
+
+    it("keeps its code and shots, and a closed session stays closed", async () => {
+      const s = await session();
+      await expectDbError(
+        db.prisma.captureSession.update({ where: { id: s.id }, data: { code: "K7P2QX" } }),
+        "WB002",
+      );
+      await db.prisma.captureSession.update({
+        where: { id: s.id },
+        data: { status: "EXPIRED" },
+      });
+      await expectDbError(
+        db.prisma.captureSession.update({ where: { id: s.id }, data: { status: "OPEN" } }),
+        "WB002",
+      );
+      await expectDbError(db.prisma.captureSession.delete({ where: { id: s.id } }), "WB002");
+    });
+
+    it("takes one photo per shot, only as an owner photo of a session", async () => {
+      const s = await session();
+      const photo = await shot(s, "DIAL");
+      await expect(shot(s, "DIAL")).rejects.toMatchObject({ code: "P2002" });
+      await expectDbError(
+        db.prisma.evidence.update({ where: { id: photo.id }, data: { captureShot: "CODE" } }),
+        "WB002",
+      );
+      await expectDbError(
+        db.prisma.evidence.create({
+          data: {
+            assetId: s.assetId,
+            uploaderId: s.ownerId,
+            type: "RECEIPT",
+            storageKey: `evidence/${randomUUID()}`,
+            sha256: randomHex64(),
+            mimeType: "application/pdf",
+            sizeBytes: 10,
+            captureSessionId: s.id,
+            captureShot: "CODE",
+          },
+        }),
+        CHECK_VIOLATION,
+      );
+    });
+  });
+
   describe("automated checks", () => {
     const evidenceOf = async () => {
       const a = await activeAsset();

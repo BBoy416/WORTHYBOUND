@@ -1,5 +1,7 @@
 import type { Evidence } from "@worthybound/database";
 import {
+  CAPTURE_SHOTS,
+  type CaptureShot,
   EVIDENCE_MIME_TYPES,
   EVIDENCE_TYPES,
   EVIDENCE_VISIBILITIES,
@@ -30,6 +32,8 @@ export const ownerEvidenceSchema = z.object({
   description: z.string().nullable(),
   capturedAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
+  /** The shot this photo is, when taken in a capture session (ADR 0013). */
+  captureShot: z.enum(CAPTURE_SHOTS).nullable(),
   /** Where the public copy is served, while the photo is public. */
   publicPath: z.string().nullable(),
   /** The AI check of an owner upload; null if it was not checked (ADR 0013). */
@@ -56,6 +60,7 @@ export function toOwnerEvidence(
     description: evidence.description,
     capturedAt: evidence.capturedAt?.toISOString() ?? null,
     createdAt: evidence.createdAt.toISOString(),
+    captureShot: evidence.captureShot as CaptureShot | null,
     publicPath: evidence.visibility === "PUBLIC" ? publicEvidencePath(wbId, evidence.id) : null,
     automatedCheck: check,
   };

@@ -1,6 +1,8 @@
 import {
   AUTOMATED_CHECK_RESULTS,
   canBePublic,
+  CAPTURE_SHOTS,
+  PUBLIC_PHOTO_MIME_TYPES,
   EVIDENCE_MAX_BYTES,
   EVIDENCE_MIME_TYPES,
   EVIDENCE_TYPES,
@@ -33,6 +35,9 @@ export const evidenceUploadSchema = z
     originalFilename: fileNameSchema.optional(),
     description: text(1000).optional(),
     capturedAt: dateTimeSchema.optional(),
+    /** A shot of a capture session (ADR 0013); the server records when it arrived. */
+    captureSessionId: uuidSchema.optional(),
+    captureShot: z.enum(CAPTURE_SHOTS).optional(),
   })
   .refine((input) => input.sizeBytes <= EVIDENCE_MAX_BYTES[input.mimeType], {
     message: "file is too large for its type",
@@ -41,7 +46,22 @@ export const evidenceUploadSchema = z
   .refine((input) => input.visibility === "PRIVATE" || canBePublic(input.type, input.mimeType), {
     message: "only JPEG, PNG or WebP photos can be public",
     path: ["visibility"],
-  });
+  })
+  .refine((input) => (input.captureSessionId === undefined) === (input.captureShot === undefined), {
+    message: "a capture shot needs both captureSessionId and captureShot",
+    path: ["captureShot"],
+  })
+  .refine(
+    (input) =>
+      input.captureSessionId === undefined ||
+      (input.type === "PHOTO" &&
+        (PUBLIC_PHOTO_MIME_TYPES as readonly string[]).includes(input.mimeType) &&
+        input.capturedAt === undefined),
+    {
+      message: "capture shots are JPEG, PNG or WebP photos, timed by the server",
+      path: ["captureShot"],
+    },
+  );
 export type EvidenceUploadInput = z.infer<typeof evidenceUploadSchema>;
 
 /**

@@ -116,6 +116,8 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
     /** Declared hash, if different from the real one. */
     sha256?: string;
     originalFilename?: string;
+    captureSessionId?: string;
+    captureShot?: string;
   }
 
   const meta = (file: FileSpec) => ({
@@ -125,6 +127,9 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
     sha256: file.sha256 ?? sha256(file.body),
     ...(file.visibility ? { visibility: file.visibility } : {}),
     ...(file.originalFilename ? { originalFilename: file.originalFilename } : {}),
+    ...(file.captureSessionId
+      ? { captureSessionId: file.captureSessionId, captureShot: file.captureShot }
+      : {}),
   });
 
   const requestUpload = (who: Owner, wbId: string, file: FileSpec) =>
@@ -830,8 +835,8 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         where: { assetId: await assetId(wbId) },
       });
       expect(stored.map((c) => [c.engine, c.model, c.checkVersion])).toEqual([
-        ["fake", "fake-model-1", "evidence-check-v2"],
-        ["fake", "fake-model-1", "evidence-check-v2"],
+        ["fake", "fake-model-1", "evidence-check-v3"],
+        ["fake", "fake-model-1", "evidence-check-v3"],
       ]);
       expect(stored.map((c) => c.sha256).sort()).toEqual([photo.sha256, receipt.sha256].sort());
       const latest = Math.max(...stored.map((c) => c.createdAt.getTime()));
@@ -1104,6 +1109,191 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       const bob = await owner();
       expect((await consent(bob, wbId, true)).statusCode).toBe(404);
       expect((await call(null, "GET", `/assets/${wbId}/automated-checks`)).statusCode).toBe(401);
+    });
+
+    it("tells the check what each capture shot should show, and the code", async () => {
+      const alice = await owner();
+      const wbId = await asset(alice, true);
+      await consent(alice, wbId, true);
+      const session = (await call(alice, "POST", `/assets/${wbId}/capture-sessions`)).json();
+      const shot = (captureShot: string, seed: number) =>
+        texturedPhoto(seed).then((body) =>
+          added(alice, wbId, { body, captureSessionId: session.id, captureShot }),
+        );
+      await shot("DIAL", 21);
+      await shot("CODE", 22);
+      engine.evidenceCalls.length = 0;
+      expect(await run()).toBe(2);
+      expect(engine.evidenceCalls.map((c) => c.capture)).toEqual([
+        { shot: "DIAL", instruction: "The dial, face on", code: null },
+        {
+          shot: "CODE",
+          instruction: "The item next to the code written on paper",
+          code: session.code,
+        },
+      ]);
+    });
+  });
+
+  describe("guided capture", () => {
+    interface Session {
+      id: string;
+      code: string;
+      status: string;
+      shots: {
+        shot: string;
+        instruction: string;
+        evidenceId: string | null;
+        receivedAt: string | null;
+      }[];
+      expiresAt: string;
+      completedAt: string | null;
+    }
+    const start = (who: Owner, wbId: string) =>
+      call(who, "POST", `/assets/${wbId}/capture-sessions`);
+    const sessions = async (who: Owner, wbId: string) =>
+      (await call(who, "GET", `/assets/${wbId}/capture-sessions`)).json<{ items: Session[] }>()
+        .items;
+    let seed = 100;
+    const shot = async (who: Owner, wbId: string, session: Session, captureShot: string) =>
+      upload(who, wbId, {
+        body: await texturedPhoto(seed++),
+        captureSessionId: session.id,
+        captureShot,
+      });
+
+    it("starts a session with a one-time code and the shots for the category", async () => {
+      const alice = await owner();
+      const wbId = await asset(alice);
+      const res = await start(alice, wbId);
+      expect(res.statusCode, res.body).toBe(201);
+      const session = res.json<Session>();
+      expect(session.code).toMatch(/^[A-HJKMNP-Z2-9]{6}$/);
+      expect(session).toMatchObject({ status: "OPEN", completedAt: null });
+      expect(session.shots.map((s) => s.shot)).toEqual([
+        "DIAL",
+        "CASEBACK",
+        "CLASP",
+        "SERIAL",
+        "SIDE",
+        "CODE",
+      ]);
+      expect(new Date(session.expiresAt).getTime() - clock.now().getTime()).toBe(15 * 60_000);
+
+      const again = await start(alice, wbId);
+      expect(again.statusCode).toBe(200);
+      expect(again.json().id).toBe(session.id);
+      expect((await sessions(alice, wbId)).map((s) => s.id)).toEqual([session.id]);
+
+      const bob = await owner();
+      expect((await start(bob, wbId)).statusCode).toBe(404);
+      expect((await call(bob, "GET", `/assets/${wbId}/capture-sessions`)).statusCode).toBe(404);
+      expect((await call(null, "POST", `/assets/${wbId}/capture-sessions`)).statusCode).toBe(401);
+    });
+
+    it("records each shot with the server's time and completes the session with the last one", async () => {
+      const alice = await owner();
+      const wbId = await asset(alice);
+      const session = (await start(alice, wbId)).json<Session>();
+      const requestedAt = clock.now().toISOString();
+
+      const first = await shot(alice, wbId, session, "DIAL");
+      expect(first.res.statusCode, first.res.body).toBe(201);
+      expect(first.res.json()).toMatchObject({ captureShot: "DIAL", capturedAt: requestedAt });
+      const again = await requestUpload(alice, wbId, {
+        body: await texturedPhoto(seed++),
+        captureSessionId: session.id,
+        captureShot: "DIAL",
+      });
+      expect(again.statusCode).toBe(409);
+      expect(again.json().error.code).toBe("capture_shot_taken");
+      const notAsked = await requestUpload(alice, wbId, {
+        body: await texturedPhoto(seed++),
+        captureSessionId: session.id,
+        captureShot: "VIN",
+      });
+      expect(notAsked.statusCode).toBe(422);
+      expect(notAsked.json().error.code).toBe("capture_shot_not_required");
+      const otherWbId = await asset(alice);
+      const wrongAsset = await requestUpload(alice, otherWbId, {
+        body: await texturedPhoto(seed++),
+        captureSessionId: session.id,
+        captureShot: "CLASP",
+      });
+      expect(wrongAsset.statusCode).toBe(404);
+
+      for (const name of ["CASEBACK", "CLASP", "SERIAL", "SIDE"]) {
+        expect((await shot(alice, wbId, session, name)).res.statusCode).toBe(201);
+      }
+      expect((await sessions(alice, wbId))[0]?.status).toBe("OPEN");
+      clock.advance(60_000);
+      expect((await shot(alice, wbId, session, "CODE")).res.statusCode).toBe(201);
+
+      const [done] = await sessions(alice, wbId);
+      expect(done).toMatchObject({ status: "COMPLETED", completedAt: clock.now().toISOString() });
+      expect(done?.shots.every((s) => s.evidenceId && s.receivedAt)).toBe(true);
+      const id = await assetId(wbId);
+      expect(
+        await db.prisma.provenanceEvent.findMany({
+          where: { assetId: id, type: "CAPTURE_COMPLETED" },
+          select: { payload: true },
+        }),
+      ).toEqual([{ payload: { captureSessionId: session.id, shots: 6 } }]);
+      const photos = await db.prisma.evidence.findMany({ where: { captureSessionId: session.id } });
+      expect(photos.map((e) => e.type)).toEqual(Array(6).fill("PHOTO"));
+      expect(new Set(photos.map((e) => e.captureShot)).size).toBe(6);
+
+      // Photos added outside a session are not capture shots.
+      const plain = await added(alice, wbId, { body: await phonePhoto("#445566") });
+      expect(plain).toMatchObject({ captureShot: null });
+      // Completed sessions take no more shots; a new one can be started.
+      const late = await requestUpload(alice, wbId, {
+        body: await texturedPhoto(seed++),
+        captureSessionId: session.id,
+        captureShot: "DIAL",
+      });
+      expect(late.json().error.code).toBe("capture_session_closed");
+      expect((await start(alice, wbId)).statusCode).toBe(201);
+    });
+
+    it("refuses shots that arrive after the code expired", async () => {
+      const alice = await owner();
+      const wbId = await asset(alice);
+      const session = (await start(alice, wbId)).json<Session>();
+      clock.advance(60_000);
+      const body = await texturedPhoto(seed++);
+      const req = await requestUpload(alice, wbId, {
+        body,
+        captureSessionId: session.id,
+        captureShot: "DIAL",
+      });
+      expect(req.statusCode, req.body).toBe(201);
+      const { uploadId, upload: form } = req.json();
+      await sendFile(form, body, "image/jpeg");
+      clock.advance(14 * 60_000 + 1);
+
+      const res = await complete(alice, uploadId);
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error.code).toBe("capture_session_closed");
+      expect(await db.prisma.evidence.count({ where: { captureSessionId: session.id } })).toBe(0);
+      expect((await sessions(alice, wbId))[0]?.status).toBe("EXPIRED");
+      const next = await start(alice, wbId);
+      expect(next.statusCode).toBe(201);
+      expect(next.json().code).not.toBe(session.code);
+    });
+
+    it("limits sessions per item per day", async () => {
+      const alice = await owner();
+      const wbId = await asset(alice);
+      for (let i = 0; i < 3; i++) {
+        expect((await start(alice, wbId)).statusCode).toBe(201);
+        clock.advance(16 * 60_000);
+      }
+      const res = await start(alice, wbId);
+      expect(res.statusCode).toBe(429);
+      expect(res.json().error.code).toBe("capture_limit_reached");
+      clock.advance(24 * 60 * 60_000);
+      expect((await start(alice, wbId)).statusCode).toBe(201);
     });
   });
 });

@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
-import type { Asset, Evidence, EvidenceUpload, Prisma, PrismaClient } from "@worthybound/database";
+import type {
+  Asset,
+  CaptureSession,
+  Evidence,
+  EvidenceUpload,
+  Prisma,
+  PrismaClient,
+} from "@worthybound/database";
 import {
   assertTransition,
   canBePublic,
@@ -19,6 +26,7 @@ import type {
 } from "@worthybound/validation";
 import { writeAudit } from "../audit.js";
 import type { Actor } from "../assets/service.js";
+import { assertShotOpen, completeIfDone } from "../capture/service.js";
 import { enqueueEvidenceChecks } from "../checks/queue.js";
 import { evidenceCheckStates } from "../checks/view.js";
 import type { AutomatedChecks } from "../checks/worker.js";
@@ -63,6 +71,8 @@ const REJECTIONS = {
   evidence_limit_reached: `An asset can have at most ${MAX_EVIDENCE_PER_ASSET} evidence files`,
   asset_unavailable: "Evidence can no longer be added to this asset",
   request_unavailable: "The verification request is no longer assigned to you",
+  capture_session_closed: "The capture session ended before the photo arrived; start a new one",
+  capture_shot_taken: "This shot was already taken in this session",
 } as const;
 type Rejection = keyof typeof REJECTIONS;
 
@@ -72,10 +82,15 @@ class UploadRejected extends Error {
   }
 }
 
+const CONFLICTS: readonly Rejection[] = [
+  "duplicate_evidence",
+  "evidence_limit_reached",
+  "capture_session_closed",
+  "capture_shot_taken",
+];
+
 const rejectionError = (reason: Rejection) =>
-  reason === "duplicate_evidence" || reason === "evidence_limit_reached"
-    ? new ApiError(409, reason, REJECTIONS[reason])
-    : new ApiError(422, reason, REJECTIONS[reason]);
+  new ApiError(CONFLICTS.includes(reason) ? 409 : 422, reason, REJECTIONS[reason]);
 
 /** Discarded drafts are hidden from everyone, including their owner. */
 const isDiscardedDraft = (asset: Asset) => asset.status === "REVOKED" && asset.publishedAt === null;
@@ -274,6 +289,9 @@ export function createEvidenceService({
         select: { id: true },
       });
       if (existing) throw rejectionError("duplicate_evidence");
+      if (input.captureSessionId && input.captureShot) {
+        await assertShotOpen(tx, asset, input.captureSessionId, input.captureShot, at);
+      }
 
       const id = randomUUID();
       const created = await tx.evidenceUpload.create({
@@ -290,6 +308,8 @@ export function createEvidenceService({
           description: input.description ?? null,
           capturedAt: input.capturedAt ?? null,
           verificationRequestId: target.requestId,
+          captureSessionId: input.captureSessionId ?? null,
+          captureShot: input.captureShot ?? null,
           stagingKey: `${STAGING_PREFIX}${id}`,
           expiresAt: new Date(at.getTime() + UPLOAD_EXPIRY_SECONDS * 1000),
           createdAt: at,
@@ -305,6 +325,9 @@ export function createEvidenceService({
           metadata: {
             uploadId: id,
             ...(target.requestId ? { verificationRequestId: target.requestId } : {}),
+            ...(input.captureSessionId
+              ? { captureSessionId: input.captureSessionId, captureShot: input.captureShot }
+              : {}),
             type: input.type,
             mimeType: input.mimeType,
             sizeBytes: input.sizeBytes,
@@ -536,6 +559,21 @@ export function createEvidenceService({
             select: { id: true },
           });
           if (sameAsset) throw new UploadRejected("duplicate_evidence");
+          // A shot counts only if it arrives while its session is open.
+          let session: CaptureSession | null = null;
+          if (upload.captureSessionId) {
+            await tx.$queryRaw`SELECT 1 FROM "capture_sessions" WHERE "id" = ${upload.captureSessionId}::uuid FOR UPDATE`;
+            session = await tx.captureSession.findUniqueOrThrow({
+              where: { id: upload.captureSessionId },
+            });
+            if (session.status !== "OPEN" || session.expiresAt < at) {
+              throw new UploadRejected("capture_session_closed");
+            }
+            const taken = await tx.evidence.count({
+              where: { captureSessionId: session.id, captureShot: upload.captureShot },
+            });
+            if (taken > 0) throw new UploadRejected("capture_shot_taken");
+          }
           const elsewhere = await tx.evidence.findFirst({
             where: { sha256: file.sha256, assetId: { not: asset.id } },
             orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -558,7 +596,10 @@ export function createEvidenceService({
               visibility: upload.visibility,
               originalFilename: upload.originalFilename,
               description: upload.description,
-              capturedAt: upload.capturedAt,
+              // A shot was taken after its session started and before its hash was sent.
+              capturedAt: session ? upload.createdAt : upload.capturedAt,
+              captureSessionId: upload.captureSessionId,
+              captureShot: upload.captureShot,
               duplicateOfId: elsewhere?.id ?? null,
               perceptualHash: fingerprint,
               createdAt: at,
@@ -598,10 +639,14 @@ export function createEvidenceService({
                 ...(upload.verificationRequestId
                   ? { verificationRequestId: upload.verificationRequestId }
                   : {}),
+                ...(session
+                  ? { captureSessionId: session.id, captureShot: upload.captureShot }
+                  : {}),
               },
             },
             actor.fp,
           );
+          if (session) await completeIfDone(tx, session, actor, at);
           if (elsewhere) {
             await writeAudit(
               tx,

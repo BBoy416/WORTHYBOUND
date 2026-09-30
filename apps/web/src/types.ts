@@ -6,6 +6,8 @@ import type {
   AttestationResult,
   AttestationStatus,
   AutomatedCheckResult,
+  CaptureSessionStatus,
+  CaptureShot,
   CategoryPermissionStatus,
   ChainTransactionStatus,
   CheckProblem,
@@ -94,6 +96,8 @@ export interface OwnerEvidence {
   originalFilename: string | null;
   description: string | null;
   createdAt: string;
+  /** The shot this photo is, when taken in a guided capture session. */
+  captureShot: CaptureShot | null;
   publicPath: string | null;
   /** The AI check of an owner upload; null if it was not checked. */
   automatedCheck: {
@@ -101,6 +105,23 @@ export interface OwnerEvidence {
     problems: CheckProblem[];
     checkedAt: string | null;
   } | null;
+}
+
+/** A guided capture session (`/assets/:wbId/capture-sessions`). */
+export interface CaptureSession {
+  id: string;
+  /** Written on paper and photographed next to the item. */
+  code: string;
+  status: CaptureSessionStatus;
+  shots: {
+    shot: CaptureShot;
+    instruction: string;
+    evidenceId: string | null;
+    receivedAt: string | null;
+  }[];
+  expiresAt: string;
+  completedAt: string | null;
+  createdAt: string;
 }
 
 /** `GET /assets/:wbId/automated-checks`. */
