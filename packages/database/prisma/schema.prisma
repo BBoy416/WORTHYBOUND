@@ -432,18 +432,18 @@ model Asset {
 
   owner                  User                  @relation(fields: [ownerId], references: [id], onDelete: Restrict)
   automatedChecksConsent User?                 @relation("AutomatedChecksConsent", fields: [automatedChecksConsentById], references: [id], onDelete: Restrict)
-  statusEvents         AssetStatusEvent[]
-  ownerships           Ownership[]
-  transferRequests     TransferRequest[]
-  evidence             Evidence[]
-  evidenceUploads      EvidenceUpload[]
-  evidenceCommitments  EvidenceCommitment[]
-  verificationRequests VerificationRequest[]
-  attestations         Attestation[]
-  disputes             Dispute[]
-  trustScoreSnapshots  TrustScoreSnapshot[]
-  provenanceEvents     ProvenanceEvent[]
-  automatedChecks      AutomatedCheck[]
+  statusEvents           AssetStatusEvent[]
+  ownerships             Ownership[]
+  transferRequests       TransferRequest[]
+  evidence               Evidence[]
+  evidenceUploads        EvidenceUpload[]
+  evidenceCommitments    EvidenceCommitment[]
+  verificationRequests   VerificationRequest[]
+  attestations           Attestation[]
+  disputes               Dispute[]
+  trustScoreSnapshots    TrustScoreSnapshot[]
+  provenanceEvents       ProvenanceEvent[]
+  automatedChecks        AutomatedCheck[]
 
   @@index([ownerId])
   @@index([serialFingerprint])
@@ -524,6 +524,9 @@ model Evidence {
   publicStorageKey      String?            @unique
   /// Earliest evidence with the same file on another asset; flagged for admin review.
   duplicateOfId         String?            @db.Uuid
+  /// 64-bit difference hash of an image, to find near-identical photos (ADR 0013); null for
+  /// other files and for images too plain to fingerprint.
+  perceptualHash        BigInt?
   sha256                String
   mimeType              String
   sizeBytes             Int
@@ -946,30 +949,33 @@ model TrustScoreSnapshot {
 
 /// Append-only. One check of one evidence file. The newest check of a file supersedes older ones.
 model AutomatedCheck {
-  id           String               @id @default(uuid(7)) @db.Uuid
-  assetId      String               @db.Uuid
-  evidenceId   String               @db.Uuid
-  result       AutomatedCheckResult
+  id                 String               @id @default(uuid(7)) @db.Uuid
+  assetId            String               @db.Uuid
+  evidenceId         String               @db.Uuid
+  result             AutomatedCheckResult
   /// Problem categories (CHECK_PROBLEMS); the only findings owners see.
-  problems     String[]
+  problems           String[]
   /// Detection details, for administrators only.
-  summary      String
+  summary            String
   /// The model's confidence (0-1); null for deterministic checks.
-  confidence   Float?
+  confidence         Float?
   /// e.g. `openai`, or `worthybound` for deterministic checks.
-  engine       String
+  engine             String
   /// Model (as reported by the service) or deterministic rule that produced the result.
-  model        String
-  checkVersion String
+  model              String
+  checkVersion       String
   /// SHA-256 of the file that was examined.
-  sha256       String
-  createdAt    DateTime             @default(now()) @db.Timestamptz(3)
+  sha256             String
+  /// SHA-256 of the document's normalized number, to find the same document on other assets.
+  documentNumberHash String?
+  createdAt          DateTime             @default(now()) @db.Timestamptz(3)
 
   asset    Asset    @relation(fields: [assetId], references: [id], onDelete: Restrict)
   evidence Evidence @relation(fields: [evidenceId], references: [id], onDelete: Restrict)
 
   @@index([assetId])
   @@index([evidenceId, createdAt])
+  @@index([documentNumberHash])
   @@map("automated_checks")
 }
 

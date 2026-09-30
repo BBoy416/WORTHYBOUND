@@ -154,7 +154,14 @@ export function createOpenAIEngine(options: OpenAIEngineOptions): CheckEngine {
         problems: texts(o.problems, "problems"),
         confidence: typeof o.confidence === "number" ? o.confidence : 0,
       });
-      return { ...decided, summary: text(o.summary, "summary"), model: used };
+      const documentNumber =
+        typeof o.documentNumber === "string" ? o.documentNumber.trim().slice(0, 100) : "";
+      return {
+        ...decided,
+        summary: text(o.summary, "summary"),
+        documentNumber: documentNumber || null,
+        model: used,
+      };
     },
 
     async reportOnVerifier(input: VerifierApplicationInput): Promise<VerifierReportOutcome> {

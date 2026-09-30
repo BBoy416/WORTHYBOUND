@@ -1,4 +1,10 @@
-export { decide, MIN_CONFIDENCE, type ModelFinding } from "./decide.js";
+export {
+  decide,
+  MIN_CONFIDENCE,
+  MODEL_PROBLEMS,
+  type ModelFinding,
+  normalizeDocumentNumber,
+} from "./decide.js";
 export { createOpenAIEngine, DEFAULT_OPENAI_MODEL, type OpenAIEngineOptions } from "./openai.js";
-export { MODEL_PROBLEMS } from "./prompts.js";
+export { imageEditorIn, parsePdfDate, readPdfMetadata } from "./pdf.js";
 export * from "./types.js";

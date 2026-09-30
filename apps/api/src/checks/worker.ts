@@ -5,15 +5,20 @@ import {
   type CheckFileMimeType,
   CHECK_VERSION,
   type EvidenceCheckOutcome,
+  imageEditorIn,
+  normalizeDocumentNumber,
+  type PdfMetadata,
+  readPdfMetadata,
   REPORT_VERSION,
   type VerifierApplicationInput,
 } from "@worthybound/automated-checks";
-import type { AutomatedJob, PrismaClient } from "@worthybound/database";
+import type { Asset, AutomatedJob, Evidence, PrismaClient } from "@worthybound/database";
+import type { CheckProblem } from "@worthybound/shared";
 import type { Storage } from "@worthybound/storage";
 import { canonicalJson, sha256Hex } from "@worthybound/trust-engine";
 import type { FastifyBaseLogger } from "fastify";
 import { writeAudit } from "../audit.js";
-import { checkImage, readAll } from "../evidence/inspect.js";
+import { checkImage, perceptualHash, readAll } from "../evidence/inspect.js";
 import { recordTrust } from "../trust/record.js";
 import { checksAllowed, isCheckedEvidence } from "./queue.js";
 
@@ -43,8 +48,49 @@ const retryDelayMs = (attempts: number) => Math.min(30_000 * 2 ** (attempts - 1)
 /** A job that cannot run, e.g. its evidence is no longer eligible. Not retried. */
 class Skipped extends Error {}
 
-/** Deterministic result for a file already attached to another asset (ADR 0010). */
-const REUSED_FILE_CHECK = { engine: "worthybound", model: "exact-duplicate-v1" };
+/** Engine of the checks that compare files and records instead of asking a model. */
+const DETERMINISTIC_ENGINE = "worthybound";
+/** Rules of the deterministic checks, stored as the model of their results. */
+const RULES = {
+  /** Same SHA-256 as a file on another asset (ADR 0010). */
+  exactDuplicate: "exact-duplicate-v1",
+  /** Perceptual hash within SIMILAR_PHOTO_MAX_DISTANCE of an earlier photo on another asset. */
+  similarPhoto: "perceptual-hash-v1",
+  /** A PDF receipt whose metadata names an image editor. */
+  pdfImageEditor: "pdf-metadata-v1",
+} as const;
+
+/** Photos whose perceptual hashes differ in at most this many of 64 bits are near-identical. */
+export const SIMILAR_PHOTO_MAX_DISTANCE = 6;
+
+type Outcome = Omit<EvidenceCheckOutcome, "confidence" | "documentNumber"> & {
+  confidence: number | null;
+  engine: string;
+  documentNumberHash: string | null;
+};
+
+const deterministic = (problem: CheckProblem, summary: string, model: string): Outcome => ({
+  result: "FAILED",
+  problems: [problem],
+  summary,
+  confidence: null,
+  model,
+  engine: DETERMINISTIC_ENGINE,
+  documentNumberHash: null,
+});
+
+/** PDF metadata in one line for administrators. */
+function describePdf(m: PdfMetadata): string {
+  const parts = [
+    m.producer && `producer "${m.producer}"`,
+    m.creator && `creator "${m.creator}"`,
+    m.createdAt && `created ${m.createdAt}`,
+    m.modifiedAt && `modified ${m.modifiedAt}`,
+    m.incrementalUpdates > 0 && `saved again ${m.incrementalUpdates} time(s)`,
+    m.historyAgents.length > 0 && `edit history: ${m.historyAgents.join(", ")}`,
+  ].filter(Boolean);
+  return `PDF metadata: ${parts.length > 0 ? parts.join("; ") : "none"}.`;
+}
 
 /**
  * Runs queued AI checks of owner evidence and reports on verifier applications (ADR 0013).
@@ -56,6 +102,122 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
   const { prisma, storage, engine, now, log } = options;
   let running: Promise<number> | null = null;
   let timer: NodeJS.Timeout | null = null;
+
+  /**
+   * An earlier photo on another asset whose perceptual hash is within the distance. "Earlier"
+   * means created before, ties broken by ID, so of two copies only the later one fails.
+   */
+  async function similarPhoto(evidence: Evidence, fingerprint: bigint) {
+    const [match] = await prisma.$queryRaw<{ id: string; wbId: string; distance: number }[]>`
+      SELECT e."id", a."wbId",
+        bit_count((e."perceptualHash" # ${fingerprint}::bigint)::bit(64))::int AS "distance"
+      FROM "evidence" e JOIN "assets" a ON a."id" = e."assetId"
+      WHERE e."perceptualHash" IS NOT NULL
+        AND e."assetId" <> ${evidence.assetId}::uuid
+        AND (e."createdAt", e."id") < (${evidence.createdAt}, ${evidence.id}::uuid)
+        AND bit_count((e."perceptualHash" # ${fingerprint}::bigint)::bit(64)) <= ${SIMILAR_PHOTO_MAX_DISTANCE}
+      ORDER BY "distance", e."createdAt", e."id"
+      LIMIT 1`;
+    return match ?? null;
+  }
+
+  /**
+   * Deterministic checks first (near-identical photos, PDF receipts from image editors), then
+   * the check engine; its document number is compared with earlier files on other assets.
+   */
+  async function examine(evidence: Evidence & { asset: Asset }): Promise<Outcome> {
+    const stored = await readAll(await storage.read(evidence.storageKey));
+    if (createHash("sha256").update(stored).digest("hex") !== evidence.sha256) {
+      log.warn({ evidenceId: evidence.id }, "stored evidence does not match its hash");
+      throw new Skipped("hash_mismatch");
+    }
+    const image = evidence.mimeType !== "application/pdf";
+    let pdfMetadata: PdfMetadata | null = null;
+    if (image) {
+      // Files uploaded before fingerprinting get one when they are first checked.
+      let fingerprint = evidence.perceptualHash;
+      if (fingerprint === null) {
+        fingerprint = await perceptualHash(stored);
+        if (fingerprint !== null) {
+          await prisma.evidence.update({
+            where: { id: evidence.id },
+            data: { perceptualHash: fingerprint },
+          });
+        }
+      }
+      const similar = fingerprint === null ? null : await similarPhoto(evidence, fingerprint);
+      if (similar) {
+        return deterministic(
+          "SIMILAR_PHOTO",
+          `Near-identical to evidence ${similar.id} on ${similar.wbId} ` +
+            `(${similar.distance} of 64 fingerprint bits differ).`,
+          RULES.similarPhoto,
+        );
+      }
+    } else {
+      pdfMetadata = readPdfMetadata(stored);
+      const editor = imageEditorIn(pdfMetadata);
+      if (editor && evidence.type === "RECEIPT") {
+        return deterministic(
+          "DOCUMENT_TAMPERING",
+          `The receipt's metadata names an image editor (${editor}). ${describePdf(pdfMetadata)}`,
+          RULES.pdfImageEditor,
+        );
+      }
+    }
+
+    const data = image
+      ? await checkImage(stored).catch(() => {
+          throw new Skipped("image_unreadable");
+        })
+      : stored;
+    const { documentNumber, ...found } = await engine.checkEvidence({
+      asset: {
+        category: evidence.asset.category,
+        brand: evidence.asset.brand,
+        model: evidence.asset.model,
+        condition: evidence.asset.condition,
+      },
+      evidence: { type: evidence.type, description: evidence.description },
+      file: {
+        mimeType: (image ? "image/jpeg" : "application/pdf") as CheckFileMimeType,
+        data,
+        filename: image ? `${evidence.id}.jpg` : `${evidence.id}.pdf`,
+      },
+      pdfMetadata,
+    });
+    const number = normalizeDocumentNumber(documentNumber);
+    const outcome: Outcome = {
+      ...found,
+      summary: pdfMetadata ? `${found.summary} ${describePdf(pdfMetadata)}` : found.summary,
+      engine: engine.id,
+      documentNumberHash: number ? sha256Hex(`document-number:${number}`) : null,
+    };
+    if (!outcome.documentNumberHash) return outcome;
+    const reused = await prisma.automatedCheck.findFirst({
+      where: {
+        documentNumberHash: outcome.documentNumberHash,
+        assetId: { not: evidence.assetId },
+        evidence: {
+          OR: [
+            { createdAt: { lt: evidence.createdAt } },
+            { createdAt: evidence.createdAt, id: { lt: evidence.id } },
+          ],
+        },
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: { evidenceId: true, asset: { select: { wbId: true } } },
+    });
+    if (!reused) return outcome;
+    return {
+      ...outcome,
+      result: "FAILED",
+      problems: [...new Set<CheckProblem>([...outcome.problems, "REUSED_DOCUMENT"])],
+      summary:
+        `Same document number as evidence ${reused.evidenceId} on ${reused.asset.wbId}. ` +
+        outcome.summary,
+    };
+  }
 
   async function checkEvidence(job: AutomatedJob): Promise<void> {
     const evidence = await prisma.evidence.findUnique({
@@ -69,44 +231,13 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
     if (!checksAllowed(evidence.asset)) throw new Skipped("no_consent");
     if (evidence.automatedChecks.length > 0) return;
 
-    let outcome: Omit<EvidenceCheckOutcome, "confidence"> & { confidence: number | null };
-    let engineId = engine.id;
-    if (evidence.duplicateOfId) {
-      outcome = {
-        result: "FAILED",
-        problems: ["REUSED_FILE"],
-        summary: `Same SHA-256 as evidence ${evidence.duplicateOfId} on another asset.`,
-        confidence: null,
-        model: REUSED_FILE_CHECK.model,
-      };
-      engineId = REUSED_FILE_CHECK.engine;
-    } else {
-      const stored = await readAll(await storage.read(evidence.storageKey));
-      if (createHash("sha256").update(stored).digest("hex") !== evidence.sha256) {
-        log.warn({ evidenceId: evidence.id }, "stored evidence does not match its hash");
-        throw new Skipped("hash_mismatch");
-      }
-      const image = evidence.mimeType !== "application/pdf";
-      const data = image
-        ? await checkImage(stored).catch(() => {
-            throw new Skipped("image_unreadable");
-          })
-        : stored;
-      outcome = await engine.checkEvidence({
-        asset: {
-          category: evidence.asset.category,
-          brand: evidence.asset.brand,
-          model: evidence.asset.model,
-          condition: evidence.asset.condition,
-        },
-        evidence: { type: evidence.type, description: evidence.description },
-        file: {
-          mimeType: (image ? "image/jpeg" : "application/pdf") as CheckFileMimeType,
-          data,
-          filename: image ? `${evidence.id}.jpg` : `${evidence.id}.pdf`,
-        },
-      });
-    }
+    const outcome = evidence.duplicateOfId
+      ? deterministic(
+          "REUSED_FILE",
+          `Same SHA-256 as evidence ${evidence.duplicateOfId} on another asset.`,
+          RULES.exactDuplicate,
+        )
+      : await examine(evidence);
 
     const at = now();
     await prisma.$transaction(async (tx) => {
@@ -119,10 +250,11 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
           problems: outcome.problems,
           summary: outcome.summary,
           confidence: outcome.confidence,
-          engine: engineId,
+          engine: outcome.engine,
           model: outcome.model,
           checkVersion: CHECK_VERSION,
           sha256: evidence.sha256,
+          documentNumberHash: outcome.documentNumberHash,
           createdAt: at,
         },
       });
