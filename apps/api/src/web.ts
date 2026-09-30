@@ -47,7 +47,8 @@ export async function registerWebApp(app: FastifyInstance, dir: string): Promise
   app.get<{ Params: { file: string } }>("/static/:file", (request, reply) =>
     sendFile("static", request.params.file, "public, max-age=31536000, immutable", reply),
   );
-  app.get("/favicon.svg", (_request, reply) =>
-    sendFile("", "favicon.svg", "public, max-age=86400", reply),
-  );
+  // Unhashed files from apps/web/public, at fixed paths that browsers and link previews request.
+  for (const file of ["favicon.png", "apple-touch-icon.png", "og-image.png"]) {
+    app.get(`/${file}`, (_request, reply) => sendFile("", file, "public, max-age=86400", reply));
+  }
 }
