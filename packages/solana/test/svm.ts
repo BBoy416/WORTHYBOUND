@@ -5,7 +5,10 @@ import {
   createTransactionMessage,
   generateKeyPairSigner,
   getAddressEncoder,
+  getTransactionDecoder,
+  getTransactionEncoder,
   lamports,
+  partiallySignTransaction,
   pipe,
   setTransactionMessageFeePayerSigner,
   setTransactionMessageLifetimeUsingBlockhash,
@@ -13,6 +16,7 @@ import {
   type Address,
   type Instruction,
   type KeyPairSigner,
+  type Transaction,
 } from "@solana/kit";
 import { FailedTransactionMetadata, LiteSVM } from "litesvm";
 import {
@@ -143,4 +147,11 @@ export function coreAssetOwner(svm: LiteSVM, asset: Address): Address {
   const account = svm.getAccount(asset);
   if (!account.exists) throw new Error("core asset missing");
   return decodeAddress(account.data.slice(1, 33));
+}
+
+/** Signs a base64 wire transaction as a wallet does and returns it as base64. */
+export async function walletSign(transaction: string, signer: KeyPairSigner): Promise<string> {
+  const decoded = getTransactionDecoder().decode(Buffer.from(transaction, "base64"));
+  const signed = await partiallySignTransaction([signer.keyPair], decoded as Transaction);
+  return Buffer.from(getTransactionEncoder().encode(signed)).toString("base64");
 }

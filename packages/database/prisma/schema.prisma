@@ -494,6 +494,19 @@ model TransferRequest {
   toUserId        String?        @db.Uuid
   toWalletAddress String
   status          TransferStatus @default(PENDING)
+  /// The asset's status when the transfer started; restored when it ends without a transfer,
+  /// and the status after it completes.
+  statusBefore    AssetStatus?
+  /// Why the transfer ended without completing, e.g. `rejected`, `asset_reported_stolen`.
+  closedReason    String?
+  /// Unsigned `transfer_asset` transaction (base64 wire bytes) with a durable nonce, prepared
+  /// when the recipient accepts. Seller and buyer sign it; the oracle signs last and sends it.
+  transaction     String?
+  nonceAccount    String?
+  /// Status sequence number the transaction records on-chain.
+  statusSeq       Int?
+  sellerSignature String?
+  buyerSignature  String?
   expiresAt       DateTime       @db.Timestamptz(3)
   acceptedAt      DateTime?      @db.Timestamptz(3)
   completedAt     DateTime?      @db.Timestamptz(3)

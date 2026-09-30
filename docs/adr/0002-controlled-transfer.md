@@ -25,6 +25,24 @@ WorthyBound asset tokens are **not freely transferable**.
 6. Wallet recovery and administrative transfers require multisig approval, are recorded publicly
    on-chain and are described in the terms of service.
 
+## Implementation (API)
+
+- `POST /transfers` starts a transfer of a tokenized asset (`ACTIVE`, `VERIFIED` or
+  `REVERIFICATION_REQUIRED`) to a wallet that has signed in and has a verified identity. The asset
+  becomes `TRANSFER_PENDING`; one transfer can be open per asset. Transfers expire after
+  `expiresInHours` (default 72) unless both parties have signed.
+- `POST /transfers/:id/accept` (recipient) prepares the `transfer_asset` transaction on a durable
+  nonce account the oracle creates, so the parties can sign at different times. The seller and
+  buyer sign it with their wallets (`POST /transfers/:id/signature`); the API checks each
+  signature against the prepared transaction. Once both have signed, the chain worker adds the
+  oracle's signature and sends it.
+- On confirmation the buyer becomes the owner, a new custody period starts, the asset returns to
+  its status before the transfer and the seller's open verification requests are cancelled.
+- Rejection, cancellation, expiry, or a new status (`REPORTED_STOLEN`, `REPORTED_LOST`,
+  `DISPUTED`, `REVOKED`) close the
+  transfer. Except for that last case, the asset returns to its previous status. Neither party can
+  cancel while the signed transaction is being sent, unless the chain worker gave up.
+
 ## Consequences
 
 - Tokens do not trade on external marketplaces until they integrate with the WorthyBound transfer

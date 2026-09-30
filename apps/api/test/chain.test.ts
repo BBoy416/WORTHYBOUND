@@ -1,7 +1,14 @@
-import { randomUUID } from "node:crypto";
+import { generateKeyPairSync, randomUUID } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getAddressEncoder } from "@solana/addresses";
 import {
+  buildTransferTransaction,
   chainAddresses,
   type ChainRecordState,
+  completeTransferTransaction,
+  loadKeypairSigner,
   StaleChainUpdateError,
   type WorthyBoundOracle,
 } from "@worthybound/solana";
@@ -26,15 +33,29 @@ type Signature = Awaited<ReturnType<WorthyBoundOracle["updateStatus"]>>;
 type Call =
   | { kind: "register"; wbId: string; owner: string; uri: string; status: string; seq: bigint }
   | { kind: "status"; wbId: string; status: string; seq: bigint }
-  | { kind: "trust"; wbId: string; score: number; level: string; seq: bigint };
+  | { kind: "trust"; wbId: string; score: number; level: string; seq: bigint }
+  | { kind: "prepare"; wbId: string; seller: string; buyer: string; status: string; seq: bigint }
+  | { kind: "transfer"; wbId: string; buyer: string };
+
+type Signer = Awaited<ReturnType<typeof loadKeypairSigner>>;
 
 /** In-memory stand-in for the program: keeps records and rejects stale sequence numbers. */
 class FakeOracle implements WorthyBoundOracle {
-  readonly oracleAddress = "Orac1e1111111111111111111111111111111111111" as Address;
   readonly records = new Map<string, ChainRecordState & { status: string; score?: number }>();
   readonly calls: Call[] = [];
+  /** Prepared transfers by transaction, to apply when sent. */
+  readonly #prepared = new Map<
+    string,
+    { wbId: string; seller: string; buyer: string; status: string; seq: bigint }
+  >();
   failures = 0;
   #n = 0;
+
+  constructor(readonly signer: Signer) {}
+
+  get oracleAddress() {
+    return this.signer.address;
+  }
 
   #sign(): Signature {
     this.#n += 1;
@@ -89,6 +110,78 @@ class FakeOracle implements WorthyBoundOracle {
     Object.assign(record, { score: input.score, trustSeq: input.trustSeq });
     return this.#sign();
   }
+
+  async prepareTransfer(input: Parameters<WorthyBoundOracle["prepareTransfer"]>[0]) {
+    this.#maybeFail();
+    this.calls.push({
+      kind: "prepare",
+      wbId: input.wbId,
+      seller: input.seller,
+      buyer: input.buyer,
+      status: input.statusAfter,
+      seq: input.statusSeq,
+    });
+    const nonceAccount = new TestWallet().address as Address;
+    const transaction = await buildTransferTransaction({
+      ...input,
+      oracle: this.oracleAddress,
+      seller: input.seller as Address,
+      buyer: input.buyer as Address,
+      nonceAccount,
+      nonce: new TestWallet().address,
+    });
+    this.#prepared.set(transaction, { ...input, status: input.statusAfter, seq: input.statusSeq });
+    return { transaction, nonceAccount };
+  }
+
+  async sendTransfer(input: Parameters<WorthyBoundOracle["sendTransfer"]>[0]) {
+    this.#maybeFail();
+    // Throws unless seller and buyer signed; the oracle signs last.
+    await completeTransferTransaction(input.transaction, input.signatures, this.signer);
+    const prepared = this.#prepared.get(input.transaction);
+    const record = prepared && this.records.get(prepared.wbId);
+    if (!prepared || !record) throw new Error("AccountNotInitialized");
+    if (record.status !== "TRANSFER_PENDING") throw new Error("NotTransferPending");
+    if (record.owner !== prepared.seller) throw new Error("NotOwner");
+    if (prepared.seq <= record.statusSeq) throw new Error("StaleUpdate");
+    this.calls.push({ kind: "transfer", wbId: prepared.wbId, buyer: prepared.buyer });
+    Object.assign(record, {
+      owner: prepared.buyer as Address,
+      status: prepared.status,
+      statusSeq: prepared.seq,
+    });
+    return this.#sign();
+  }
+}
+
+/** A fresh oracle key, loaded the way the server loads its keypair file. */
+async function oracleSigner(): Promise<Signer> {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const secret = Buffer.from(privateKey.export({ format: "jwk" }).d as string, "base64url");
+  const pub = Buffer.from(publicKey.export({ format: "jwk" }).x as string, "base64url");
+  const dir = await mkdtemp(join(tmpdir(), "wb-oracle-"));
+  try {
+    const path = join(dir, "oracle.json");
+    await writeFile(path, JSON.stringify([...secret, ...pub]));
+    return await loadKeypairSigner(path);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/** Signs a base64 wire transaction with the wallet, as a browser wallet does. */
+function walletSign(wallet: TestWallet, transaction: string): string {
+  const bytes = Buffer.from(transaction, "base64");
+  const signatures = bytes[0] as number;
+  const message = bytes.subarray(1 + 64 * signatures);
+  const key = Buffer.from(getAddressEncoder().encode(wallet.address as Address));
+  // Legacy message: 3 header bytes, the number of account keys, then the keys; signers first.
+  const index = [...Array(signatures).keys()].find((i) =>
+    message.subarray(4 + 32 * i, 36 + 32 * i).equals(key),
+  );
+  if (index === undefined) throw new Error("wallet is not a signer");
+  wallet.sign(message).copy(bytes, 1 + 64 * index);
+  return bytes.toString("base64");
 }
 
 describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
@@ -101,7 +194,7 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
 
   beforeAll(async () => {
     db = await createTestDatabase();
-    oracle = new FakeOracle();
+    oracle = new FakeOracle(await oracleSigner());
     clock = testClock();
     app = await testApp(db.prisma, { oracle, now: clock.now });
     offline = await testApp(db.prisma);
@@ -400,6 +493,294 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
       expect((await call(alice, "POST", `/assets/${bobWbId}/tokenize`)).statusCode).toBe(202);
       await app.chainSync?.runOnce();
       expect((await assetRow(bobWbId)).tokenizationStatus).toBe("TOKENIZED");
+    });
+  });
+
+  describe("transfers", () => {
+    interface TransferView {
+      id: string;
+      role: string;
+      status: string;
+      closedReason: string | null;
+      transaction: string | null;
+      signedBySeller: boolean;
+      signedByBuyer: boolean;
+      awaitingYourSignature: boolean;
+      chain: { status: string; signature: string | null } | null;
+    }
+
+    const start = async (from: Owner, wbId: string, to: Owner, expect201 = true) => {
+      const res = await call(from, "POST", "/transfers", {
+        assetId: wbId,
+        toWalletAddress: to.wallet.address,
+      });
+      if (expect201) expect(res.statusCode, res.body).toBe(201);
+      return res;
+    };
+    const act = async (who: Owner, id: string, action: string, payload?: object) => {
+      const res = await call(who, "POST", `/transfers/${id}/${action}`, payload);
+      return { status: res.statusCode, body: res.json(), transfer: res.json<TransferView>() };
+    };
+    const sign = (who: Owner, t: TransferView) =>
+      act(who, t.id, "signature", {
+        signedTransaction: walletSign(who.wallet, t.transaction as string),
+      });
+    const statusReasons = async (wbId: string) =>
+      (
+        await db.prisma.assetStatusEvent.findMany({
+          where: { asset: { wbId } },
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        })
+      ).map((e) => [e.toStatus, e.reason]);
+
+    it("hands a tokenized asset to a buyer with a verified identity once both have signed", async () => {
+      const alice = await owner();
+      const bob = await owner();
+      const wbId = await tokenized(alice);
+
+      const started = (await start(alice, wbId, bob)).json<TransferView>();
+      expect(started).toMatchObject({ role: "SENDER", status: "PENDING", transaction: null });
+      expect((await assetRow(wbId)).status).toBe("TRANSFER_PENDING");
+      await app.chainSync?.runOnce();
+      expect(oracle.records.get(wbId)).toMatchObject({ status: "TRANSFER_PENDING" });
+
+      const incoming = (await call(bob, "GET", "/transfers")).json<{ items: TransferView[] }>();
+      expect(incoming.items).toEqual([
+        expect.objectContaining({ id: started.id, role: "RECIPIENT", status: "PENDING" }),
+      ]);
+
+      const accepted = await act(bob, started.id, "accept");
+      expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
+      expect(accepted.transfer).toMatchObject({ status: "ACCEPTED", awaitingYourSignature: true });
+      expect(accepted.transfer.transaction).toEqual(expect.any(String));
+      const seq = await statusSeq(wbId);
+      expect(oracle.calls).toContainEqual({
+        kind: "prepare",
+        wbId,
+        seller: alice.wallet.address,
+        buyer: bob.wallet.address,
+        status: "ACTIVE",
+        seq: seq + 1n,
+      });
+      // Accepting again changes nothing.
+      expect((await act(bob, started.id, "accept")).transfer.transaction).toBe(
+        accepted.transfer.transaction,
+      );
+
+      const buyerSigned = await sign(bob, accepted.transfer);
+      expect(buyerSigned.status, JSON.stringify(buyerSigned.body)).toBe(200);
+      expect(buyerSigned.transfer).toMatchObject({
+        signedByBuyer: true,
+        signedBySeller: false,
+        awaitingYourSignature: false,
+        chain: null,
+      });
+      const forSeller = (await call(alice, "GET", `/transfers/${started.id}`)).json<TransferView>();
+      expect(forSeller.awaitingYourSignature).toBe(true);
+      const sellerSigned = await sign(alice, forSeller);
+      expect(sellerSigned.transfer.chain).toEqual({ status: "PENDING", signature: null });
+
+      await app.chainSync?.runOnce();
+      const done = (await call(bob, "GET", `/transfers/${started.id}`)).json<TransferView>();
+      expect(done).toMatchObject({ status: "COMPLETED", chain: { status: "CONFIRMED" } });
+      expect(oracle.records.get(wbId)).toMatchObject({
+        owner: bob.wallet.address,
+        status: "ACTIVE",
+        statusSeq: seq + 1n,
+      });
+
+      const asset = await assetRow(wbId);
+      const bobUser = await db.prisma.user.findUniqueOrThrow({
+        where: { walletAddress: bob.wallet.address },
+      });
+      expect(asset).toMatchObject({ ownerId: bobUser.id, status: "ACTIVE" });
+      expect((await statusReasons(wbId)).slice(-2)).toEqual([
+        ["TRANSFER_PENDING", "transfer_requested"],
+        ["ACTIVE", "transfer_completed"],
+      ]);
+      const ownerships = await db.prisma.ownership.findMany({
+        where: { assetId: asset.id },
+        orderBy: { startedAt: "asc" },
+      });
+      expect(ownerships.map((o) => [o.reason, o.endedAt === null])).toEqual([
+        ["REGISTRATION", false],
+        ["TRANSFER", true],
+      ]);
+      expect(ownerships[0]?.endedAt?.getTime()).toBe(ownerships[1]?.startedAt.getTime());
+      expect(
+        await db.prisma.provenanceEvent.count({
+          where: { assetId: asset.id, type: "TRANSFER_COMPLETED" },
+        }),
+      ).toBe(1);
+      expect((await call(alice, "GET", `/assets/${wbId}`)).statusCode).toBe(404);
+      expect((await call(bob, "GET", `/assets/${wbId}`)).statusCode).toBe(200);
+
+      const passport = (await call(null, "GET", `/passport/${wbId}`)).json().passport;
+      expect(passport.custody.transferCount).toBe(1);
+      expect(passport.chainTransactions.map((t: { kind: string }) => t.kind)).toContain(
+        "TRANSFER_ASSET",
+      );
+      expect(JSON.stringify(passport)).not.toContain(bob.wallet.address);
+    });
+
+    it("needs a tokenized asset and a signed-in recipient with a verified identity", async () => {
+      const alice = await owner();
+      const bob = await owner();
+      const unverified = await owner({ kyc: false });
+
+      const notTokenized = await start(alice, await published(alice), bob, false);
+      expect(notTokenized.statusCode).toBe(409);
+      expect(notTokenized.json().error.code).toBe("not_transferable");
+
+      const wbId = await tokenized(alice);
+      const stranger = await call(alice, "POST", "/transfers", {
+        assetId: wbId,
+        toWalletAddress: new TestWallet().address,
+      });
+      expect(stranger.statusCode).toBe(422);
+      expect(stranger.json().error.code).toBe("recipient_not_found");
+      const noKyc = await start(alice, wbId, unverified, false);
+      expect(noKyc.json().error.code).toBe("recipient_identity_not_verified");
+      expect((await start(alice, wbId, alice, false)).json().error.code).toBe("same_owner");
+      expect((await start(bob, wbId, alice, false)).statusCode).toBe(404);
+      const offlineStart = await offline.inject({
+        method: "POST",
+        url: "/transfers",
+        payload: { assetId: wbId, toWalletAddress: bob.wallet.address },
+        cookies: { wb_session: alice.token },
+      });
+      expect(offlineStart.statusCode).toBe(503);
+      expect((await assetRow(wbId)).status).toBe("ACTIVE");
+
+      const { id } = (await start(alice, wbId, bob)).json<TransferView>();
+      expect((await start(alice, wbId, bob, false)).json().error.code).toBe("transfer_open");
+      expect((await call(unverified, "GET", `/transfers/${id}`)).statusCode).toBe(404);
+      expect((await act(alice, id, "accept")).status).toBe(404);
+
+      oracle.failures = 1;
+      const unreachable = await act(bob, id, "accept");
+      expect(unreachable.status).toBe(503);
+      expect(unreachable.body.error.code).toBe("chain_unavailable");
+      expect((await act(bob, id, "accept")).transfer.status).toBe("ACCEPTED");
+    });
+
+    it("accepts only the parties' signatures of the prepared transaction", async () => {
+      const alice = await owner();
+      const bob = await owner();
+      const wbId = await tokenized(alice);
+      const { id } = (await start(alice, wbId, bob)).json<TransferView>();
+      expect(
+        (await act(alice, id, "signature", { signedTransaction: "AQID" })).body.error.code,
+      ).toBe("not_ready_to_sign");
+      const { transfer } = await act(bob, id, "accept");
+
+      const wrongWallet = await act(bob, id, "signature", {
+        signedTransaction: walletSign(alice.wallet, transfer.transaction as string),
+      });
+      expect(wrongWallet.status).toBe(422);
+      expect(wrongWallet.body.error.code).toBe("invalid_signature");
+      const unsigned = await act(bob, id, "signature", {
+        signedTransaction: transfer.transaction as string,
+      });
+      expect(unsigned.body.error.message).toBe("The transaction is not signed by your wallet");
+      const changed = Buffer.from(walletSign(bob.wallet, transfer.transaction as string), "base64");
+      changed.writeUInt8(changed.readUInt8(changed.length - 1) ^ 1, changed.length - 1);
+      const tampered = await act(bob, id, "signature", {
+        signedTransaction: changed.toString("base64"),
+      });
+      expect(tampered.body.error.message).toBe(
+        "The wallet changed the transaction; sign it without changes",
+      );
+      expect((await sign(bob, transfer)).transfer.signedByBuyer).toBe(true);
+    });
+
+    it("returns the asset to its status when the transfer is rejected, cancelled or expires", async () => {
+      const alice = await owner();
+      const bob = await owner();
+      const wbId = await tokenized(alice);
+
+      const first = (await start(alice, wbId, bob)).json<TransferView>();
+      expect((await act(bob, first.id, "cancel")).body.error.code).toBe("forbidden_transition");
+      expect((await act(bob, first.id, "reject")).transfer).toMatchObject({
+        status: "REJECTED",
+        closedReason: "rejected",
+      });
+      expect((await assetRow(wbId)).status).toBe("ACTIVE");
+
+      const second = (await start(alice, wbId, bob)).json<TransferView>();
+      await act(bob, second.id, "accept");
+      expect((await act(alice, second.id, "cancel")).transfer).toMatchObject({
+        status: "CANCELLED",
+        closedReason: "cancelled_by_sender",
+        transaction: null,
+      });
+      expect((await assetRow(wbId)).status).toBe("ACTIVE");
+
+      const third = (await start(alice, wbId, bob)).json<TransferView>();
+      clock.advance(73 * 60 * 60_000);
+      const list = (await call(alice, "GET", "/transfers")).json<{ items: TransferView[] }>();
+      expect(list.items.find((t) => t.id === third.id)).toMatchObject({
+        status: "EXPIRED",
+        closedReason: "expired",
+      });
+      expect((await assetRow(wbId)).status).toBe("ACTIVE");
+      expect((await statusReasons(wbId)).slice(-6).map(([, reason]) => reason)).toEqual([
+        "transfer_requested",
+        "transfer_rejected",
+        "transfer_requested",
+        "transfer_cancelled",
+        "transfer_requested",
+        "transfer_expired",
+      ]);
+
+      await app.chainSync?.runOnce();
+      expect(oracle.records.get(wbId)).toMatchObject({
+        status: "ACTIVE",
+        statusSeq: await statusSeq(wbId),
+      });
+    });
+
+    it("is cancelled when the owner reports the item stolen", async () => {
+      const alice = await owner();
+      const bob = await owner();
+      const wbId = await tokenized(alice);
+      const { id } = (await start(alice, wbId, bob)).json<TransferView>();
+      const res = await call(alice, "POST", `/assets/${wbId}/status`, {
+        toStatus: "REPORTED_STOLEN",
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      expect((await call(bob, "GET", `/transfers/${id}`)).json()).toMatchObject({
+        status: "CANCELLED",
+        closedReason: "asset_reported_stolen",
+      });
+      expect((await assetRow(wbId)).status).toBe("REPORTED_STOLEN");
+    });
+
+    it("cannot be cancelled while the signed transaction is being sent, unless sending gave up", async () => {
+      const alice = await owner();
+      const bob = await owner();
+      const wbId = await tokenized(alice);
+      const { id } = (await start(alice, wbId, bob)).json<TransferView>();
+      await app.chainSync?.runOnce();
+      const { transfer } = await act(bob, id, "accept");
+      await sign(bob, transfer);
+      await sign(alice, transfer);
+      expect((await act(alice, id, "cancel")).body.error.code).toBe("transfer_in_progress");
+
+      oracle.failures = MAX_CHAIN_ATTEMPTS;
+      for (let i = 0; i < MAX_CHAIN_ATTEMPTS; i++) {
+        await app.chainSync?.runOnce();
+        clock.advance(10 * 60_000);
+      }
+      expect((await call(alice, "GET", `/transfers/${id}`)).json()).toMatchObject({
+        status: "ACCEPTED",
+        chain: { status: "FAILED" },
+      });
+      expect((await act(bob, id, "cancel")).transfer).toMatchObject({
+        status: "CANCELLED",
+        closedReason: "cancelled_by_recipient",
+      });
+      expect(oracle.records.get(wbId)?.owner).toBe(alice.wallet.address);
     });
   });
 

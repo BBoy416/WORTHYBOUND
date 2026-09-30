@@ -27,6 +27,7 @@ import type {
 import { type RequestFingerprint, writeAudit } from "../audit.js";
 import { registerJobKey, TOKENIZABLE_STATUSES } from "../chain/sync.js";
 import { ApiError, fromDomainError, notFound } from "../errors.js";
+import { cancelOpenTransfer } from "../transfers/service.js";
 import { recordTrust } from "../trust/record.js";
 import { closeRequestsAsSystem } from "../verification/requests.js";
 import { serialFingerprint } from "./fingerprint.js";
@@ -498,6 +499,9 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
           data: { status: input.toStatus, updatedAt: at },
         });
         await recordStatusChange(tx, asset, input.toStatus, actor, at, input.reason);
+        if (asset.status === "TRANSFER_PENDING") {
+          await cancelOpenTransfer(tx, asset.id, `asset_${input.toStatus.toLowerCase()}`, at);
+        }
         if (REQUEST_CANCELLING_ASSET_STATUSES.includes(input.toStatus)) {
           await closeRequestsAsSystem(
             tx,

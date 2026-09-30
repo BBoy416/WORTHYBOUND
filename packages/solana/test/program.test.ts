@@ -9,9 +9,13 @@ import {
   type Instruction,
   type KeyPairSigner,
 } from "@solana/kit";
+import { FailedTransactionMetadata } from "litesvm";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   AssetStatus,
+  buildTransferTransaction,
+  completeTransferTransaction,
+  createNonceAccountInstructions,
   decodeAssetRecord,
   decodeConfig,
   findAssetRecordPda,
@@ -25,6 +29,9 @@ import {
   getTransferAssetInstructionAsync,
   getUpdateStatusInstructionAsync,
   MPL_CORE_PROGRAM_ADDRESS,
+  NONCE_ACCOUNT_SIZE,
+  readNonceAccount,
+  transferSignature,
   VerificationLevel,
 } from "../src/index.js";
 import {
@@ -35,6 +42,7 @@ import {
   programDataAddress,
   rejectedByPermanentFreeze,
   send,
+  walletSign,
   type Harness,
 } from "./svm.js";
 
@@ -497,6 +505,61 @@ describe.skipIf(!programBuilt)("worthybound program", () => {
     describe("while pending", () => {
       beforeEach(async () => {
         expect((await setStatus(WB, AssetStatus.TransferPending, 2n)).ok).toBe(true);
+      });
+
+      it("completes with a durable nonce transaction signed by the parties at different times", async () => {
+        const nonceAccount = await generateKeyPairSigner();
+        expect(
+          (
+            await send(
+              h.svm,
+              h.oracle,
+              createNonceAccountInstructions({
+                payer: h.oracle,
+                nonceAccount,
+                authority: h.oracle.address,
+                lamports: h.svm.minimumBalanceForRentExemption(NONCE_ACCOUNT_SIZE),
+              }),
+            )
+          ).ok,
+        ).toBe(true);
+        const account = h.svm.getAccount(nonceAccount.address);
+        if (!account.exists) throw new Error("nonce account missing");
+        const transaction = await buildTransferTransaction({
+          wbId: WB,
+          oracle: h.oracle.address,
+          seller: h.owner.address,
+          buyer: h.buyer.address,
+          statusAfter: "VERIFIED",
+          statusSeq: 3n,
+          nonceAccount: nonceAccount.address,
+          nonce: readNonceAccount(account.data).nonce,
+        });
+        const buyerSignature = await transferSignature(
+          transaction,
+          await walletSign(transaction, h.buyer),
+          h.buyer.address,
+        );
+        // Blockhashes move on while the seller has not signed yet.
+        for (let i = 0; i < 3; i++) h.svm.expireBlockhash();
+        const sellerSignature = await transferSignature(
+          transaction,
+          await walletSign(transaction, h.owner),
+          h.owner.address,
+        );
+        const complete = await completeTransferTransaction(
+          transaction,
+          { [h.buyer.address]: buyerSignature, [h.owner.address]: sellerSignature },
+          h.oracle,
+        );
+        const result = h.svm.sendTransaction(complete);
+        expect(result).not.toBeInstanceOf(FailedTransactionMetadata);
+        const data = await record(WB);
+        expect(data.owner).toBe(h.buyer.address);
+        expect(data.status).toBe(AssetStatus.Verified);
+        expect(coreAssetOwner(h.svm, await coreAddress(WB))).toBe(h.buyer.address);
+        // The nonce has advanced, so the same transaction cannot run again.
+        expect(h.svm.sendTransaction(complete)).toBeInstanceOf(FailedTransactionMetadata);
       });
 
       it("needs the current owner as seller", async () => {

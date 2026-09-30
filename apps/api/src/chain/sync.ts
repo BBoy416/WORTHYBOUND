@@ -5,7 +5,12 @@ import type {
   Prisma,
   PrismaClient,
 } from "@worthybound/database";
-import { chainAddresses, StaleChainUpdateError, type WorthyBoundOracle } from "@worthybound/solana";
+import {
+  chainAddresses,
+  StaleChainUpdateError,
+  TransferFailedError,
+  type WorthyBoundOracle,
+} from "@worthybound/solana";
 import type { FastifyBaseLogger } from "fastify";
 
 type Tx = Prisma.TransactionClient;
@@ -21,6 +26,7 @@ const SYNC_KINDS: readonly ChainTransactionKind[] = [
   "REGISTER_ASSET",
   "UPDATE_ASSET_STATUS",
   "COMMIT_TRUST_SCORE",
+  "TRANSFER_ASSET",
 ];
 
 /** Failed jobs are retried with growing delays, then left FAILED for an operator. */
@@ -67,6 +73,8 @@ export interface ChainSyncOptions {
   log: FastifyBaseLogger;
   /** Token metadata URL registered on-chain for an asset. */
   metadataUrl: (wbId: string) => string;
+  /** Records a transfer confirmed on-chain, in the transaction that confirms its job. */
+  completeTransfer: (tx: Tx, transferId: string, signature: string, at: Date) => Promise<void>;
 }
 
 export interface ChainSync {
@@ -87,7 +95,7 @@ type Outcome = { status: "CONFIRMED"; signature: string } | { status: "SUPERSEDE
  * recorded as SUPERSEDED. One worker per database: run a single API instance.
  */
 export function createChainSync(options: ChainSyncOptions): ChainSync {
-  const { prisma, oracle, now, log, metadataUrl } = options;
+  const { prisma, oracle, now, log, metadataUrl, completeTransfer } = options;
   let running: Promise<number> | null = null;
   let timer: NodeJS.Timeout | null = null;
 
@@ -152,6 +160,31 @@ export function createChainSync(options: ChainSyncOptions): ChainSync {
     return { status: "CONFIRMED", signature };
   }
 
+  /**
+   * Sends a transfer both parties signed, with the oracle's signature. A transfer that ended in
+   * the meantime is not sent.
+   */
+  async function transfer(job: ChainTransaction): Promise<Outcome> {
+    const t = await prisma.transferRequest.findUniqueOrThrow({
+      where: { id: job.entityId },
+      include: {
+        fromUser: { select: { walletAddress: true } },
+        toUser: { select: { walletAddress: true } },
+      },
+    });
+    if (t.status !== "ACCEPTED" || !t.transaction || !t.sellerSignature || !t.buyerSignature) {
+      return { status: "SUPERSEDED" };
+    }
+    const signature = await oracle.sendTransfer({
+      transaction: t.transaction,
+      signatures: {
+        [t.fromUser.walletAddress]: t.sellerSignature,
+        [t.toWalletAddress]: t.buyerSignature,
+      },
+    });
+    return { status: "CONFIRMED", signature };
+  }
+
   async function complete(job: ChainTransaction, outcome: Outcome): Promise<void> {
     const at = now();
     await prisma.$transaction(async (tx) => {
@@ -166,6 +199,10 @@ export function createChainSync(options: ChainSyncOptions): ChainSync {
             : {}),
         },
       });
+      if (job.kind === "TRANSFER_ASSET" && outcome.status === "CONFIRMED") {
+        await completeTransfer(tx, job.entityId, outcome.signature, at);
+        return;
+      }
       if (job.kind !== "REGISTER_ASSET" || outcome.status !== "CONFIRMED") return;
       await tx.$queryRaw`SELECT 1 FROM "assets" WHERE "id" = ${job.entityId}::uuid FOR UPDATE`;
       const asset = await tx.asset.update({
@@ -194,7 +231,7 @@ export function createChainSync(options: ChainSyncOptions): ChainSync {
   async function fail(job: ChainTransaction, error: unknown, final: boolean): Promise<void> {
     const attempts = final ? MAX_CHAIN_ATTEMPTS : job.attempts + 1;
     const message =
-      error instanceof NotTokenizableError
+      error instanceof NotTokenizableError || error instanceof TransferFailedError
         ? error.message
         : String((error as Error)?.message ?? error).slice(0, 500);
     log.warn({ jobId: job.id, kind: job.kind, attempts, err: message }, "chain job failed");
@@ -219,43 +256,79 @@ export function createChainSync(options: ChainSyncOptions): ChainSync {
           ? await register(job)
           : job.kind === "UPDATE_ASSET_STATUS"
             ? await updateStatus(job)
-            : await commitTrust(job);
+            : job.kind === "TRANSFER_ASSET"
+              ? await transfer(job)
+              : await commitTrust(job);
       await complete(job, outcome);
     } catch (error) {
-      if (error instanceof StaleChainUpdateError) {
+      if (error instanceof StaleChainUpdateError && job.kind !== "TRANSFER_ASSET") {
         await complete(job, { status: "SUPERSEDED" });
         return;
       }
-      await fail(job, error, error instanceof NotTokenizableError);
+      await fail(
+        job,
+        error,
+        error instanceof NotTokenizableError || error instanceof TransferFailedError,
+      );
     }
   }
 
   async function due(): Promise<ChainTransaction[]> {
+    const unfinished = {
+      OR: [
+        { status: "PENDING" as const },
+        { status: "FAILED" as const, attempts: { lt: MAX_CHAIN_ATTEMPTS } },
+      ],
+    };
     const jobs = await prisma.chainTransaction.findMany({
       where: {
-        entityType: "ASSET",
+        entityType: { in: ["ASSET", "TRANSFER_REQUEST"] },
         kind: { in: [...SYNC_KINDS] },
-        OR: [{ status: "PENDING" }, { status: "FAILED", attempts: { lt: MAX_CHAIN_ATTEMPTS } }],
+        ...unfinished,
       },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       take: 50,
     });
+    const assetJobs = jobs.filter((j) => j.entityType === "ASSET");
     const tokenized = new Set(
       (
         await prisma.asset.findMany({
           where: {
-            id: { in: [...new Set(jobs.map((j) => j.entityId))] },
+            id: { in: [...new Set(assetJobs.map((j) => j.entityId))] },
             tokenizationStatus: "TOKENIZED",
           },
           select: { id: true },
         })
       ).map((a) => a.id),
     );
+    // A transfer waits until the asset's earlier status updates (TRANSFER_PENDING) are on-chain.
+    const transfers = await prisma.transferRequest.findMany({
+      where: {
+        id: { in: jobs.filter((j) => j.entityType === "TRANSFER_REQUEST").map((j) => j.entityId) },
+      },
+      select: { id: true, assetId: true },
+    });
+    const waiting = new Set(
+      (
+        await prisma.chainTransaction.findMany({
+          where: {
+            entityType: "ASSET",
+            entityId: { in: transfers.map((t) => t.assetId) },
+            kind: { in: ["REGISTER_ASSET", "UPDATE_ASSET_STATUS"] },
+            ...unfinished,
+          },
+          select: { entityId: true },
+        })
+      ).map((j) => j.entityId),
+    );
+    const ready = new Set(transfers.filter((t) => !waiting.has(t.assetId)).map((t) => t.id));
     const at = now().getTime();
     return jobs.filter(
       (j) =>
-        // Status and score updates wait until the asset's registration is confirmed.
-        (j.kind === "REGISTER_ASSET" || tokenized.has(j.entityId)) &&
+        (j.entityType === "TRANSFER_REQUEST"
+          ? ready.has(j.entityId)
+          : // Status and score updates wait until the asset's registration is confirmed.
+            j.kind === "REGISTER_ASSET" || tokenized.has(j.entityId)) &&
         (j.status === "PENDING" || j.updatedAt.getTime() + retryDelayMs(j.attempts) <= at),
     );
   }
@@ -272,7 +345,10 @@ export function createChainSync(options: ChainSyncOptions): ChainSync {
           attempted.add(job.id);
           await process(job);
         }
-        if (!jobs.some((j) => j.kind === "REGISTER_ASSET")) break;
+        // Registrations and status updates can make other jobs due.
+        if (!jobs.some((j) => j.kind === "REGISTER_ASSET" || j.kind === "UPDATE_ASSET_STATUS")) {
+          break;
+        }
       }
       return attempted.size;
     })().finally(() => {
