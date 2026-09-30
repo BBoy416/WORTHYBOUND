@@ -1,5 +1,31 @@
-import type { PrismaClient } from "@worthybound/database";
+import type { Prisma, PrismaClient } from "@worthybound/database";
 import { type PassportSource, verifierPublicName } from "@worthybound/shared";
+import { CHECK_PROOF_PREFIX } from "../trust/record.js";
+
+/**
+ * Passed automated checks counted in a Trust Score snapshot, unless a failed check deducted
+ * (ADR 0013). Read from the snapshot so the passport states what the score was computed from.
+ */
+async function passedAutomatedChecks(
+  prisma: PrismaClient,
+  snapshot: { factors: Prisma.JsonValue; deductions: Prisma.JsonValue },
+): Promise<PassportSource["automatedChecks"]> {
+  const deductions = snapshot.deductions as { code: string }[];
+  if (deductions.some((d) => d.code === "FAILED_AUTOMATED_CHECKS")) return null;
+  const ids = (snapshot.factors as { proofId?: string }[]).flatMap((f) =>
+    f.proofId?.startsWith(CHECK_PROOF_PREFIX) ? [f.proofId.slice(CHECK_PROOF_PREFIX.length)] : [],
+  );
+  if (ids.length === 0) return null;
+  const checks = await prisma.automatedCheck.findMany({
+    where: { id: { in: ids }, result: "PASSED" },
+    select: { evidenceId: true, createdAt: true },
+  });
+  if (checks.length === 0) return null;
+  return {
+    filesPassed: new Set(checks.map((c) => c.evidenceId)).size,
+    lastPassedAt: new Date(Math.max(...checks.map((c) => c.createdAt.getTime()))),
+  };
+}
 
 /**
  * Reads only the columns the public passport may show. Private columns (serials, storage keys,
@@ -35,7 +61,14 @@ export async function loadPassportSource(
       prisma.trustScoreSnapshot.findFirst({
         where: { assetId: id },
         orderBy: [{ computedAt: "desc" }, { id: "desc" }],
-        select: { score: true, computedAt: true, engineVersion: true, weightsVersion: true },
+        select: {
+          score: true,
+          computedAt: true,
+          engineVersion: true,
+          weightsVersion: true,
+          factors: true,
+          deductions: true,
+        },
       }),
       prisma.ownership.findFirst({
         where: { assetId: id, endedAt: null },
@@ -91,7 +124,13 @@ export async function loadPassportSource(
 
   return {
     asset: publicAsset,
-    trust,
+    trust: trust && {
+      score: trust.score,
+      computedAt: trust.computedAt,
+      engineVersion: trust.engineVersion,
+      weightsVersion: trust.weightsVersion,
+    },
+    automatedChecks: trust ? await passedAutomatedChecks(prisma, trust) : null,
     custody: { currentSince: custody?.startedAt ?? null, transferCount },
     evidence,
     evidenceCommitments: commitments,

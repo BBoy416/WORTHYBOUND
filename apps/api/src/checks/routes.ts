@@ -1,4 +1,8 @@
-import { assetParamsSchema, automatedChecksConsentSchema } from "@worthybound/validation";
+import {
+  assetParamsSchema,
+  automatedCheckListQuerySchema,
+  automatedChecksConsentSchema,
+} from "@worthybound/validation";
 import type { FastifyRequest } from "fastify";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
@@ -7,7 +11,7 @@ import type { AuthContext } from "../auth/guard.js";
 import type { AppContext, RateLimit } from "../context.js";
 import { ApiError, notFound } from "../errors.js";
 import { enqueueEvidenceChecks } from "./queue.js";
-import { adminCheckSchema, toAdminCheck } from "./view.js";
+import { adminCheckInclude, adminCheckSchema, toAdminCheck } from "./view.js";
 
 const errorSchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
 const errors = { 401: errorSchema, 403: errorSchema, 404: errorSchema, 409: errorSchema };
@@ -151,8 +155,39 @@ export const checkRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx) =
       const checks = await prisma.automatedCheck.findMany({
         where: { assetId: asset.id },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        include: adminCheckInclude,
       });
       return { items: checks.map(toAdminCheck) };
+    },
+  );
+
+  /** Checks across all assets, newest first, optionally only one result. */
+  app.get(
+    "/admin/automated-checks",
+    {
+      preHandler: requireRole("ADMIN"),
+      schema: {
+        querystring: automatedCheckListQuerySchema,
+        response: {
+          200: z.object({ items: z.array(adminCheckSchema), nextCursor: z.uuid().nullable() }),
+          ...errors,
+        },
+      },
+    },
+    async (request) => {
+      const { result, limit, cursor } = request.query;
+      const checks = await prisma.automatedCheck.findMany({
+        where: result ? { result } : {},
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: limit + 1,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+        include: adminCheckInclude,
+      });
+      const page = checks.slice(0, limit);
+      return {
+        items: page.map(toAdminCheck),
+        nextCursor: checks.length > limit ? (page.at(-1)?.id ?? null) : null,
+      };
     },
   );
 };

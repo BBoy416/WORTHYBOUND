@@ -24,6 +24,7 @@ const passport = (overrides: Partial<PublicPassport> = {}): PublicPassport => ({
     weightsVersion: "weights-2026.2",
     disclaimer: "Not a guarantee.",
   },
+  automatedChecks: null,
   tokenization: {
     status: "TOKENIZED",
     chainAssetAddress: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
@@ -130,6 +131,23 @@ afterEach(() => {
 });
 
 describe("public passport", () => {
+  it("states that automated checks passed, and when", async () => {
+    mockFetch({
+      "GET /auth/me": unauthenticated,
+      [`GET /passport/${WB}`]: {
+        json: {
+          passport: passport({
+            automatedChecks: { filesPassed: 2, lastPassedAt: "2026-09-29T12:00:00.000Z" },
+          }),
+          url: "",
+        },
+      },
+    });
+    renderAt(`/passport/${WB}`);
+    expect(await screen.findByText("Automated checks passed")).toBeTruthy();
+    expect(screen.getByText(/2 photos and documents/)).toBeTruthy();
+  });
+
   it("shows the item, score, verifier and chain record without signing in", async () => {
     mockFetch({
       "GET /auth/me": unauthenticated,
@@ -668,6 +686,38 @@ describe("admin", () => {
     });
     renderAt(`/admin/verifiers/${VID}`);
     expect((await screen.findByText(/Identity not verified\./)).textContent).toMatch(/KYC/);
+  });
+
+  it("lists failed AI checks with their details and filters by asset", async () => {
+    const check = {
+      id: "c1",
+      evidenceId: "e1",
+      result: "FAILED",
+      problems: ["SCREEN_OR_PRINT"],
+      summary: "Moire pattern across the dial.",
+      confidence: 0.85,
+      engine: "openai",
+      model: "gpt-6.1-sol",
+      checkVersion: "evidence-check-v1",
+      sha256: "a".repeat(64),
+      createdAt: "2026-09-29T10:00:00.000Z",
+      wbId: WB,
+      evidence: { type: "PHOTO", mimeType: "image/jpeg", reviewStatus: "PENDING" },
+    };
+    const calls = mockFetch({
+      "GET /auth/me": { json: me(["USER", "ADMIN"]) },
+      "GET /admin/automated-checks?limit=100&result=FAILED": {
+        json: { items: [check], nextCursor: null },
+      },
+      [`GET /admin/assets/${WB}/automated-checks`]: { json: { items: [check] } },
+    });
+    renderAt("/admin/checks");
+    expect(await screen.findByText("Moire pattern across the dial.")).toBeTruthy();
+    expect(screen.getByText(/confidence 85%/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: WB }));
+    await waitFor(() =>
+      expect(calls.map((c) => c.url)).toContain(`/admin/assets/${WB}/automated-checks`),
+    );
   });
 
   it("shows the advisory AI report and requests a new one", async () => {

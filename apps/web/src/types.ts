@@ -271,6 +271,23 @@ export interface ReviewVerifier extends VerifierProfile {
   history: (StatusChange<VerifierStatus> & { actorId: string | null })[];
 }
 
+/** Administrator view of an AI check, with the detection details (`GET /admin/automated-checks`). */
+export interface AdminCheck {
+  id: string;
+  evidenceId: string;
+  result: AutomatedCheckResult;
+  problems: CheckProblem[];
+  summary: string;
+  confidence: number | null;
+  engine: string;
+  model: string;
+  checkVersion: string;
+  sha256: string;
+  createdAt: string;
+  wbId: string;
+  evidence: { type: EvidenceType; mimeType: string; reviewStatus: ReviewStatus };
+}
+
 /** Reviewer view (`GET /review/verifiers/:verifierId/ai-reports`); advisory only. */
 export interface VerifierReports {
   available: boolean;

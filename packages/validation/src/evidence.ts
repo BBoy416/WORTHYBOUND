@@ -1,4 +1,5 @@
 import {
+  AUTOMATED_CHECK_RESULTS,
   canBePublic,
   EVIDENCE_MAX_BYTES,
   EVIDENCE_MIME_TYPES,
@@ -73,6 +74,14 @@ export const automatedChecksConsentSchema = z.strictObject({
   enabled: z.boolean(),
 });
 export type AutomatedChecksConsentRequest = z.infer<typeof automatedChecksConsentSchema>;
+
+/** Automated checks across assets, newest first. `cursor` is the last check ID of the previous page. */
+export const automatedCheckListQuerySchema = z.strictObject({
+  result: z.enum(AUTOMATED_CHECK_RESULTS).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  cursor: uuidSchema.optional(),
+});
+export type AutomatedCheckListQuery = z.infer<typeof automatedCheckListQuerySchema>;
 
 export const evidenceParamsSchema = z.strictObject({
   wbId: wbIdSchema,

@@ -152,6 +152,11 @@ function source(overrides: Partial<PassportSource> = {}): PassportSource {
       engineVersion: "1.1.0",
       weightsVersion: "weights-2026.2",
     },
+    automatedChecks: {
+      filesPassed: 2,
+      lastPassedAt: d("2026-04-01T00:00:00Z"),
+      summary: `${SECRET}-check-details`,
+    } as PassportSource["automatedChecks"],
     custody: { currentSince: d("2025-12-01T00:00:00Z"), transferCount: 0 },
     evidence: [privateEvidence, publicPhoto, rejectedPublic],
     evidenceCommitments: [
@@ -260,6 +265,14 @@ describe("toPublicPassport", () => {
       disclaimer: TRUST_SCORE_DISCLAIMER,
     });
     expect(toPublicPassport(source({ trust: null }))?.trust).toBeNull();
+  });
+
+  it("shows only that automated checks passed, and when", () => {
+    expect(toPublicPassport(source())?.automatedChecks).toEqual({
+      filesPassed: 2,
+      lastPassedAt: "2026-04-01T00:00:00.000Z",
+    });
+    expect(toPublicPassport(source({ automatedChecks: null }))?.automatedChecks).toBeNull();
   });
 
   it("returns null for assets that are not published", () => {

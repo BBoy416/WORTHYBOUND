@@ -18,6 +18,9 @@ import { requirementsOf } from "../templates/view.js";
 
 type Tx = Prisma.TransactionClient;
 
+/** Proof IDs of passed automated checks: the prefix followed by the check's ID. */
+export const CHECK_PROOF_PREFIX = "check:";
+
 /**
  * What each evidence type proves. Evidence never proves an inspection or authentication on its
  * own; only attestations do. `OTHER` does not count.
@@ -180,7 +183,7 @@ export async function recordTrust(tx: Tx, assetId: string, at: Date): Promise<Tr
     const check = e.automatedChecks[0];
     if (check?.result === "PASSED") {
       proofs.push({
-        id: `check:${check.id}`,
+        id: `${CHECK_PROOF_PREFIX}${check.id}`,
         type,
         source: "AUTOMATED",
         sourceId: "automated-checks",

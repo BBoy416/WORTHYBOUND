@@ -13,6 +13,7 @@ import {
   attestationSubmissionSchema,
   authNonceRequestSchema,
   authVerifyRequestSchema,
+  automatedCheckListQuerySchema,
   automatedChecksConsentSchema,
   categoryPermissionChangeSchema,
   EVIDENCE_MAX_BYTES,
@@ -227,6 +228,17 @@ describe("evidence request schemas", () => {
     expect(issues(automatedChecksConsentSchema, { enabled: false, at: "now" })).toEqual([
       "unrecognized_keys",
     ]);
+  });
+
+  it("filters the admin list of AI checks by result", () => {
+    expect(automatedCheckListQuerySchema.parse({ result: "FAILED" })).toEqual({
+      result: "FAILED",
+      limit: 20,
+    });
+    expect(issues(automatedCheckListQuerySchema, { result: "UNKNOWN" })).toEqual([
+      "invalid_value:result",
+    ]);
+    expect(issues(automatedCheckListQuerySchema, { limit: "500" })).toEqual(["too_big:limit"]);
   });
 
   it("validates evidence and upload IDs", () => {

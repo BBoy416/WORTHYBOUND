@@ -1,6 +1,6 @@
 # ADR 0003: Weighted Trust Score
 
-- Status: Accepted; amendment proposed in ADR 0013
+- Status: Accepted; amended by ADR 0013
 - Date: 2026-09-28
 
 ## Context
@@ -22,9 +22,11 @@ Rules:
 - Each source class has a ceiling (owner-submitted proofs contribute at most 30 points).
 - Tier caps: self-documented only ≤ 35 (≤ 45 with KYC); no verifier inspection ≤ 60; no
   authentication plus provenance ≤ 80; high-risk categories need two independent verifiers to
-  exceed 90.
+  exceed 90. Once automated checks have passed and none failed, the first two are 65 instead
+  (ADR 0013).
 - Deductions: open disputes, contradicted claims, revoked attestations, suspended verifiers,
-  missing required evidence, broken custody, stale verification.
+  missing required evidence, failed automated checks (ADR 0013), broken custody, stale
+  verification.
 - Status caps: `DISPUTED` 40, `REPORTED_LOST` 25, `REPORTED_STOLEN` 10, `REVOKED` 0.
 - The result lists every factor, deduction, cap and excluded proof, plus engine version, weights
   version, an inputs hash and the evaluation timestamp, so any score can be reproduced.

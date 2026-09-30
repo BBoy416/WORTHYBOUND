@@ -753,6 +753,8 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
     const run = () =>
       (app.automatedChecks as NonNullable<FastifyInstance["automatedChecks"]>).runOnce();
     const passing = engine.evidence;
+    const passportChecks = async (wbId: string) =>
+      (await call(null, "GET", `/passport/${wbId}`)).json().passport.automatedChecks;
 
     it("checks owner uploads only after the owner consents, without their metadata", async () => {
       const alice = await owner();
@@ -817,6 +819,11 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         ["fake", "fake-model-1", "evidence-check-v1"],
       ]);
       expect(stored.map((c) => c.sha256).sort()).toEqual([photo.sha256, receipt.sha256].sort());
+      const latest = Math.max(...stored.map((c) => c.createdAt.getTime()));
+      expect(await passportChecks(wbId)).toEqual({
+        filesPassed: 2,
+        lastPassedAt: new Date(latest).toISOString(),
+      });
 
       // Later uploads are queued straight away; checked files are not checked again.
       const next = await upload(alice, wbId, { body: await phonePhoto("#203040") });
@@ -854,6 +861,9 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         expect.objectContaining({ code: "FAILED_AUTOMATED_CHECKS", count: 1 }),
       );
       expect(score.capsApplied.map((c) => c.code)).not.toContain("AUTOMATED_CHECKS_PASSED");
+      const passport = await call(null, "GET", `/passport/${wbId}`);
+      expect(passport.json().passport.automatedChecks).toBeNull();
+      expect(passport.body).not.toContain("DETAIL-FOR-ADMINS");
 
       const url = `/admin/assets/${wbId}/automated-checks`;
       expect((await call(alice, "GET", url)).statusCode).toBe(403);
@@ -868,8 +878,24 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
           summary: expect.stringContaining("DETAIL-FOR-ADMINS"),
           confidence: 0.85,
           engine: "fake",
+          wbId,
+          evidence: { type: "PHOTO", mimeType: "image/jpeg", reviewStatus: "PENDING" },
         }),
       ]);
+      const failed = await call(admin, "GET", "/admin/automated-checks?result=FAILED&limit=100");
+      expect(failed.statusCode, failed.body).toBe(200);
+      expect(failed.json().items.every((c: { result: string }) => c.result === "FAILED")).toBe(
+        true,
+      );
+      expect(failed.json().items.map((c: { wbId: string }) => c.wbId)).toContain(wbId);
+      const first = await call(admin, "GET", "/admin/automated-checks?limit=1");
+      const second = await call(
+        admin,
+        "GET",
+        `/admin/automated-checks?limit=1&cursor=${first.json().nextCursor}`,
+      );
+      expect(second.json().items[0].id).not.toBe(first.json().items[0].id);
+      expect((await call(alice, "GET", "/admin/automated-checks")).statusCode).toBe(403);
       expect(
         await db.prisma.auditLog.count({
           where: { action: "evidence.automated_check", targetId: wbId },
