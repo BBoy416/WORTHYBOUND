@@ -131,6 +131,7 @@ const ownerRoutes = (a: OwnerAsset) => ({
   [`GET /assets/${WB}/trust`]: { json: null },
   [`GET /assets/${WB}/verification-requests`]: { json: { items: [] } },
   [`GET /assets/${WB}/capture-sessions`]: { json: { items: [] } },
+  [`GET /assets/${WB}/remote-checks`]: { json: { items: [] } },
   "GET /templates": { json: { items: [] } },
 });
 
@@ -966,6 +967,7 @@ describe("checks before buying", () => {
   const ID = "0199a000-0000-7000-8000-0000000000c9";
   const check = (overrides: Partial<PurchaseCheck> = {}): PurchaseCheck => ({
     id: ID,
+    kind: "IN_PERSON",
     status: "OPEN",
     asset: {
       wbId: WB,
@@ -982,6 +984,7 @@ describe("checks before buying", () => {
       code: "K7P2QX",
       codeExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
       message: `WorthyBound: I confirm to a buyer that I own ${WB}.\nCode: K7P2QX`,
+      codeCheck: null,
     },
     item: {
       shots: [
@@ -989,6 +992,7 @@ describe("checks before buying", () => {
         { shot: "SIDE", instruction: "The side", receivedAt: null },
       ],
       comparing: false,
+      videoAvailable: false,
       result: null,
       reason: null,
       checkedAt: null,
@@ -1033,6 +1037,7 @@ describe("checks before buying", () => {
       code: null,
       codeExpiresAt: null,
       message: null,
+      codeCheck: null,
     };
     const shots = (taken: string[]) =>
       check().item.shots.map((s) => ({
@@ -1110,6 +1115,233 @@ describe("checks before buying", () => {
     expect(sent?.body).toEqual({
       code: "K7P2QX",
       signature: expect.stringMatching(/^[1-9A-Za-z]+$/),
+    });
+  });
+
+  describe("remotely", () => {
+    const remote = (overrides: Partial<PurchaseCheck> = {}): PurchaseCheck =>
+      check({
+        kind: "REMOTE",
+        owner: {
+          confirmed: false,
+          confirmedAt: null,
+          code: "K7P2QX",
+          codeExpiresAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+          message: null,
+          codeCheck: null,
+        },
+        item: {
+          ...check().item,
+          shots: [
+            { shot: "DIAL", instruction: "The dial, face on", receivedAt: null },
+            {
+              shot: "VIDEO",
+              instruction: "A short video turning the item around",
+              receivedAt: null,
+            },
+          ],
+        },
+        expiresAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+        ...overrides,
+      });
+
+    const request = (session: CaptureSession | null = null, filmed = false) => ({
+      id: ID,
+      code: "K7P2QX",
+      expiresAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+      filmed,
+      session,
+      createdAt: "2026-09-30T10:00:00.000Z",
+    });
+    const filming = (taken: string[] = []): CaptureSession => ({
+      id: "0199a000-0000-7000-8000-000000000c02",
+      code: "K7P2QX",
+      status: taken.length === 2 ? "COMPLETED" : "OPEN",
+      shots: (["DIAL", "VIDEO"] as CaptureShot[]).map((shot) => ({
+        shot,
+        instruction:
+          shot === "DIAL" ? "The dial, face on" : "A short video turning the item around",
+        evidenceId: taken.includes(shot)
+          ? `0199a000-0000-7000-8000-00000000e0${shot.length}`
+          : null,
+        receivedAt: taken.includes(shot) ? "2026-09-30T10:01:00.000Z" : null,
+      })),
+      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      completedAt: taken.length === 2 ? "2026-09-30T10:02:00.000Z" : null,
+      createdAt: "2026-09-30T10:00:00.000Z",
+    });
+
+    /** A camera, and a recorder that delivers an 8-byte MP4 when stopped. */
+    const recording = (mp4 = true) => {
+      vi.stubGlobal("navigator", {
+        ...navigator,
+        mediaDevices: {
+          getUserMedia: vi.fn(async () => ({ getTracks: () => [{ stop: vi.fn() }] })),
+        },
+      });
+      vi.spyOn(HTMLVideoElement.prototype, "videoWidth", "get").mockReturnValue(640);
+      vi.spyOn(HTMLVideoElement.prototype, "videoHeight", "get").mockReturnValue(480);
+      vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+        drawImage: vi.fn(),
+      } as never);
+      vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback) =>
+        callback(new Blob([new Uint8Array([0xff, 0xd8, 0xff])], { type: "image/jpeg" })),
+      );
+      const options: MediaRecorderOptions[] = [];
+      class FakeRecorder {
+        static isTypeSupported = (type: string) => mp4 && type.startsWith("video/mp4");
+        ondataavailable: ((event: { data: Blob }) => void) | null = null;
+        onstop: (() => void) | null = null;
+        constructor(_stream: unknown, init: MediaRecorderOptions) {
+          options.push(init);
+        }
+        start() {}
+        stop() {
+          this.ondataavailable?.({ data: new Blob([new Uint8Array(8)], { type: "video/mp4" }) });
+          this.onstop?.();
+        }
+      }
+      vi.stubGlobal("MediaRecorder", FakeRecorder);
+      return options;
+    };
+
+    it("requests a remote check from the passport", async () => {
+      mockFetch({
+        "GET /auth/me": { json: me() },
+        [`GET /passport/${WB}`]: { json: { passport: passport(), url: "" } },
+        [`POST /assets/${WB}/remote-checks`]: { status: 201, json: remote() },
+        [`GET /purchase-checks/${ID}`]: { json: remote() },
+      });
+      renderAt(`/passport/${WB}`);
+      fireEvent.click(await screen.findByText("Request a remote check"));
+      expect(await screen.findByText("K7P2QX")).toBeTruthy();
+      expect(window.location.pathname).toBe(`/checks/${ID}`);
+      expect(screen.getByText(/Open until/)).toBeTruthy();
+      expect(screen.queryByText(/Take photo/)).toBeNull();
+    });
+
+    it("shows the buyer the seller's progress, then the code check, video and result", async () => {
+      let current = remote({
+        item: {
+          ...remote().item,
+          shots: remote().item.shots.map((s, i) => ({
+            ...s,
+            receivedAt: i === 0 ? "2026-09-30T10:01:00.000Z" : null,
+          })),
+        },
+      });
+      mockFetch({
+        "GET /auth/me": { json: me() },
+        [`GET /purchase-checks/${ID}`]: () => ({ json: current }),
+        [`POST /purchase-checks/${ID}/video`]: {
+          json: { url: "https://r2.example/bucket/remote-check-videos/v", expiresAt: "" },
+        },
+      });
+      const view = renderAt(`/checks/${ID}`);
+      expect(await screen.findByText(/The seller is filming: 1 of 2/)).toBeTruthy();
+      expect(screen.queryByText("Watch the seller's video")).toBeNull();
+      view.unmount();
+
+      current = remote({
+        status: "COMPLETED",
+        owner: {
+          ...remote().owner,
+          confirmed: true,
+          confirmedAt: "2026-09-30T10:02:00.000Z",
+          codeExpiresAt: null,
+          codeCheck: "SHOWN",
+        },
+        item: { ...remote().item, videoAvailable: true, result: "MATCH" },
+      });
+      renderAt(`/checks/${ID}`);
+      expect(await screen.findByText("Confirmed current owner")).toBeTruthy();
+      expect(screen.getByText(/shows your code next to the item/)).toBeTruthy();
+      expect(screen.getByText("The filmed item matches the recorded item.")).toBeTruthy();
+      fireEvent.click(screen.getByText("Watch the seller's video"));
+      await waitFor(() =>
+        expect(document.querySelector("video.check-video")?.getAttribute("src")).toBe(
+          "https://r2.example/bucket/remote-check-videos/v",
+        ),
+      );
+    });
+
+    it("warns the buyer when the seller's photo shows another code", async () => {
+      mockFetch({
+        "GET /auth/me": { json: me() },
+        [`GET /purchase-checks/${ID}`]: {
+          json: remote({
+            owner: { ...remote().owner, confirmed: true, codeCheck: "MISMATCH" },
+          }),
+        },
+      });
+      renderAt(`/checks/${ID}`);
+      expect(await screen.findByText(/shows a different code/)).toBeTruthy();
+    });
+
+    it("lets the owner film the item for a buyer: photos, then a video", async () => {
+      const options = recording();
+      let state = request();
+      let uploads = 0;
+      const calls = mockFetch({
+        ...ownerRoutes(asset()),
+        [`GET /assets/${WB}/remote-checks`]: () => ({ json: { items: [state] } }),
+        [`POST /assets/${WB}/remote-checks/${ID}/capture-session`]: () => (
+          (state = request(filming())),
+          { status: 201, json: filming() }
+        ),
+        [`POST /assets/${WB}/evidence/uploads`]: {
+          status: 201,
+          json: {
+            uploadId: "up1",
+            upload: { url: "https://r2.example/bucket/staging/up1", method: "PUT", headers: {} },
+            expiresAt: "",
+          },
+        },
+        "PUT https://r2.example/bucket/staging/up1": { json: undefined },
+        "POST /evidence/uploads/up1/complete": () => {
+          uploads++;
+          state =
+            uploads === 1 ? request(filming(["DIAL"])) : request(filming(["DIAL", "VIDEO"]), true);
+          return { status: 201, json: evidence() };
+        },
+      });
+      renderAt(`/assets/${WB}`);
+      expect(await screen.findByText("Remote checks from buyers")).toBeTruthy();
+      fireEvent.click(screen.getByText("Film for this buyer"));
+      const enabled = async (text: string) => {
+        const button = (await screen.findByText(text)) as HTMLButtonElement;
+        await waitFor(() => expect(button.disabled).toBe(false));
+        return button;
+      };
+      fireEvent.click(await enabled("Take photo: Dial"));
+      fireEvent.click(await enabled("Start recording"));
+      fireEvent.click(await screen.findByText(/Stop and upload \(0:00 \/ 1:00\)/));
+      expect(await screen.findByText(/Filmed. The buyer can watch/)).toBeTruthy();
+
+      expect(options[0]).toMatchObject({ mimeType: "video/mp4;codecs=avc1" });
+      const [photo, video] = calls.filter((c) => c.url === `/assets/${WB}/evidence/uploads`);
+      expect(photo?.body).toMatchObject({ type: "PHOTO", captureShot: "DIAL" });
+      expect(video?.body).toMatchObject({
+        type: "VIDEO",
+        mimeType: "video/mp4",
+        sizeBytes: 8,
+        originalFilename: "video.mp4",
+        captureSessionId: filming().id,
+        captureShot: "VIDEO",
+      });
+    });
+
+    it("explains when the browser cannot record MP4 video", async () => {
+      recording(false);
+      mockFetch({
+        ...ownerRoutes(asset()),
+        [`GET /assets/${WB}/remote-checks`]: {
+          json: { items: [request(filming(["DIAL"]))] },
+        },
+      });
+      renderAt(`/assets/${WB}`);
+      expect(await screen.findByText(/cannot record MP4 video/)).toBeTruthy();
+      expect((screen.getByText("Start recording") as HTMLButtonElement).disabled).toBe(true);
     });
   });
 });

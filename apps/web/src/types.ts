@@ -18,7 +18,9 @@ import type {
   ItemCondition,
   ItemMatchResult,
   ProofSource,
+  PurchaseCheckKind,
   PurchaseCheckStatus,
+  RemoteCodeResult,
   ReviewStatus,
   Role,
   TemplateVersionStatus,
@@ -129,6 +131,7 @@ export interface CaptureSession {
 /** A buyer's check before buying (`/purchase-checks/:id`); never names the seller. */
 export interface PurchaseCheck {
   id: string;
+  kind: PurchaseCheckKind;
   status: PurchaseCheckStatus;
   asset: {
     wbId: string;
@@ -142,20 +145,35 @@ export interface PurchaseCheck {
   owner: {
     confirmed: boolean;
     confirmedAt: string | null;
-    /** For the seller to sign, while valid and not yet signed. */
+    /** For the seller to sign, while valid and not yet signed; remotely, the code to film. */
     code: string | null;
     codeExpiresAt: string | null;
     message: string | null;
+    /** Remotely, once filmed: what the AI check found in the seller's code photo. */
+    codeCheck: RemoteCodeResult | null;
   };
   item: {
     shots: { shot: CaptureShot; instruction: string; receivedAt: string | null }[];
     comparing: boolean;
+    /** The seller's video for a remote check can be watched. */
+    videoAvailable: boolean;
     result: ItemMatchResult | null;
     reason: string | null;
     checkedAt: string | null;
     recordedPhotos: { path: string }[];
   };
   expiresAt: string;
+  createdAt: string;
+}
+
+/** A buyer's open remote check, for the owner (`/assets/:wbId/remote-checks`); never names them. */
+export interface RemoteCheckRequest {
+  id: string;
+  /** Written on paper and kept in view while filming. */
+  code: string;
+  expiresAt: string;
+  filmed: boolean;
+  session: CaptureSession | null;
   createdAt: string;
 }
 

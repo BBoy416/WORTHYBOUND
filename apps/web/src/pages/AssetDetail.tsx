@@ -16,7 +16,7 @@ import {
 import { formatDate, formatDateTime, humanize } from "../format.js";
 import { Link } from "../router.js";
 import { useSession } from "../session.js";
-import { ConfirmOwnership } from "./PurchaseCheck.js";
+import { ConfirmOwnership, RemoteCheckRequests } from "./PurchaseCheck.js";
 import { StartTransfer } from "./Transfers.js";
 import type {
   AutomatedChecksAvailability,
@@ -128,9 +128,12 @@ export function AssetDetailPage({ wbId }: { wbId: string }) {
       <GuidedCapture base={base} asset={a} onChange={reloadAll} />
 
       {a.publishedAt !== null && a.status !== "REVOKED" && (
-        <Card title="Confirm ownership to a buyer">
-          <ConfirmOwnership asset={a} />
-        </Card>
+        <>
+          <RemoteCheckRequests base={base} onChange={reloadAll} />
+          <Card title="Confirm ownership to a buyer">
+            <ConfirmOwnership asset={a} />
+          </Card>
+        </>
       )}
 
       <Card title="Evidence vault">

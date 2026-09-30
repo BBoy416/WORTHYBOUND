@@ -664,11 +664,17 @@ legend {
   max-width: 480px;
 }
 
-.camera video {
+.camera video,
+.check-video {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #000;
+}
+
+.check-video {
+  max-width: 480px;
+  margin-bottom: 12px;
 }
 
 .compare {

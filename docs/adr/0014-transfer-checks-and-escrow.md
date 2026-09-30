@@ -66,7 +66,9 @@ what the AI check found in the code photo (`owner.codeCheck`: the code shown, mi
 different, the photo failed or was unclear, or the check is pending or unavailable), and the
 session's photos without the code shot are compared with the recorded photos as in person.
 Sessions filmed for a remote check are never recorded photos for other checks. The shots are
-evidence of the asset like any capture session. Checks are audited.
+evidence of the asset like any capture session. The web app records the video from the live
+camera (`MediaRecorder`) as MP4 without sound, for at most 60 seconds; browsers that cannot
+record MP4 are asked to use another. Checks are audited.
 
 **In-person transfer.** When the checks pass, the buyer pays and the program transfers the token
 in the same transaction (ADR 0002 steps 2-3). No escrow wait is needed; the buyer checked the item.
