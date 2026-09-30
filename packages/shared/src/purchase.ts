@@ -39,11 +39,26 @@ export const remoteCheckShots = (category: AssetCategory): CaptureShot[] => [
 /** Why an item check is inconclusive without comparing photos. */
 export const ITEM_MATCH_REASONS = {
   NO_REFERENCE_PHOTOS: "The item has no recorded photos to compare with",
-  NO_CONSENT: "The owner has not agreed to AI checks of the item's photos",
+  ASSET_REVOKED: "The item's passport was revoked",
   CHECKS_UNAVAILABLE: "Photo comparison is not available right now",
   CHECK_FAILED: "The photos could not be compared",
 } as const;
 export type ItemMatchReason = keyof typeof ITEM_MATCH_REASONS;
+
+/**
+ * What the AI check found in the seller's code photo for a remote check: the check's code, a
+ * missing or different code, a photo that failed for another reason, or no clear answer.
+ */
+export const REMOTE_CODE_RESULTS = [
+  "SHOWN",
+  "MISSING",
+  "MISMATCH",
+  "FAILED",
+  "UNCLEAR",
+  "PENDING",
+  "UNAVAILABLE",
+] as const;
+export type RemoteCodeResult = (typeof REMOTE_CODE_RESULTS)[number];
 
 /**
  * The text the seller signs with the owner's wallet to confirm, to a buyer in front of them,

@@ -346,7 +346,6 @@ model User {
   provenanceEvents          ProvenanceEvent[]
   auditLogs                 AuditLog[]
   idempotencyKeys           IdempotencyKey[]
-  automatedChecksConsents   Asset[]                           @relation("AutomatedChecksConsent")
   verifierReportsRequested  VerifierApplicationReport[]
   automatedJobsRequested    AutomatedJob[]
 
@@ -428,15 +427,10 @@ model Asset {
   verificationLevel           VerificationLevel  @default(UNVERIFIED)
   /// Set once when the owner publishes the passport. Identity fields are locked from then on.
   publishedAt                 DateTime?          @db.Timestamptz(3)
-  /// Who agreed to send this asset's private evidence to the AI check service, and when. Checks
-  /// run only while this is the current owner (ADR 0013).
-  automatedChecksConsentById  String?            @db.Uuid
-  automatedChecksConsentAt    DateTime?          @db.Timestamptz(3)
   createdAt                   DateTime           @default(now()) @db.Timestamptz(3)
   updatedAt                   DateTime           @updatedAt @db.Timestamptz(3)
 
   owner                  User                  @relation(fields: [ownerId], references: [id], onDelete: Restrict)
-  automatedChecksConsent User?                 @relation("AutomatedChecksConsent", fields: [automatedChecksConsentById], references: [id], onDelete: Restrict)
   statusEvents           AssetStatusEvent[]
   ownerships             Ownership[]
   transferRequests       TransferRequest[]

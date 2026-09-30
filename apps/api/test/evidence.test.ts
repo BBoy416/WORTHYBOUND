@@ -4,8 +4,9 @@ import type { Storage } from "@worthybound/storage";
 import type { FastifyInstance } from "fastify";
 import sharp from "sharp";
 import { CheckEngineError } from "@worthybound/automated-checks";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { grantAdmin } from "../src/cli/admin-grant.js";
+import { readAll } from "../src/evidence/inspect.js";
 import {
   type Clock,
   createTestDatabase,
@@ -57,6 +58,32 @@ const mediaFile = (brand: "mp42" | "qt  ") =>
     Buffer.from([0, 0, 0, 0]),
     Buffer.from(`${brand}isom`),
     randomBytes(64),
+  ]);
+
+const box = (type: string, ...contents: Buffer[]) => {
+  const body = Buffer.concat(contents);
+  const header = Buffer.alloc(8);
+  header.writeUInt32BE(8 + body.length);
+  header.write(type, 4, "latin1");
+  return Buffer.concat([header, body]);
+};
+
+/** A small MP4 whose user data holds a GPS location, as phones record it. */
+const videoWithLocation = () =>
+  Buffer.concat([
+    box("ftyp", Buffer.from("mp42\0\0\0\0mp42isom")),
+    box(
+      "moov",
+      box("mvhd", Buffer.alloc(100)),
+      box(
+        "trak",
+        box("tkhd", Buffer.alloc(84)),
+        box("udta", box("©xyz", Buffer.from("+46.2044+006.1432/"))),
+      ),
+      box("udta", box("©xyz", Buffer.from("+46.2044+006.1432/"))),
+      box("meta", Buffer.from("com.apple.quicktime.location.ISO6709")),
+    ),
+    box("mdat", randomBytes(256)),
   ]);
 
 interface Owner {
@@ -761,8 +788,6 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
           .json<{ items: { id: string; automatedCheck: Check }[] }>()
           .items.map((e) => [e.id, e.automatedCheck]),
       );
-    const consent = (who: Owner, wbId: string, enabled: boolean) =>
-      call(who, "PUT", `/assets/${wbId}/automated-checks`, { enabled });
     const trust = async (who: Owner, wbId: string) =>
       (await call(who, "GET", `/assets/${wbId}/trust`)).json<{
         score: number;
@@ -772,11 +797,15 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       }>();
     const run = () =>
       (app.automatedChecks as NonNullable<FastifyInstance["automatedChecks"]>).runOnce();
+    // Uploads in other tests queue checks too; each test counts only its own.
+    beforeEach(async () => {
+      while ((await run()) > 0);
+    });
     const passing = engine.evidence;
     const passportChecks = async (wbId: string) =>
       (await call(null, "GET", `/passport/${wbId}`)).json().passport.automatedChecks;
 
-    it("checks owner uploads only after the owner consents, without their metadata", async () => {
+    it("checks every owner upload, without its metadata", async () => {
       const alice = await owner();
       const wbId = await asset(alice, true);
       const photo = await added(alice, wbId, { body: await phonePhoto("#102030") });
@@ -790,27 +819,17 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         type: "OTHER",
         mimeType: "application/pdf",
       });
-      expect(await run()).toBe(0);
+      const pending = { status: "PENDING", problems: [], checkedAt: null };
       expect(await evidenceChecks(alice, wbId)).toEqual({
-        [photo.id]: null,
-        [receipt.id]: null,
+        [photo.id]: pending,
+        [receipt.id]: pending,
         [other.id]: null,
       });
       expect((await call(alice, "GET", `/assets/${wbId}/automated-checks`)).json()).toEqual({
         available: true,
-        enabled: false,
-        enabledAt: null,
       });
       const before = await trust(alice, wbId);
 
-      const enabled = await consent(alice, wbId, true);
-      expect(enabled.statusCode, enabled.body).toBe(200);
-      expect(enabled.json()).toMatchObject({ available: true, enabled: true });
-      expect((await evidenceChecks(alice, wbId))[photo.id]).toEqual({
-        status: "PENDING",
-        problems: [],
-        checkedAt: null,
-      });
       engine.evidenceCalls.length = 0;
       expect(await run()).toBe(2);
 
@@ -851,14 +870,12 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       engine.evidenceCalls.length = 0;
       expect(await run()).toBe(1);
       expect(engine.evidenceCalls).toHaveLength(1);
-      expect(await consent(alice, wbId, true)).toMatchObject({ statusCode: 200 });
       expect(await run()).toBe(0);
     });
 
     it("tells the owner the problem, keeps the details for admins and lowers the score", async () => {
       const alice = await owner();
       const wbId = await asset(alice, true);
-      await consent(alice, wbId, true);
       engine.evidence = async () => ({
         result: "FAILED",
         problems: ["SCREEN_OR_PRINT"],
@@ -928,9 +945,9 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       const alice = await owner();
       const body = await phonePhoto("#405060");
       await added(alice, await asset(alice, true), { body });
+      await run();
       const wbId = await asset(alice, true);
       const copy = await added(alice, wbId, { body });
-      await consent(alice, wbId, true);
       engine.evidenceCalls.length = 0;
       await run();
       expect(engine.evidenceCalls).toHaveLength(0);
@@ -944,6 +961,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       const alice = await owner();
       const original = await texturedPhoto(1);
       await added(alice, await asset(alice, true), { body: original });
+      await run();
       clock.advance(1_000);
       const wbId = await asset(alice, true);
       const copy = await added(alice, wbId, {
@@ -958,7 +976,6 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       expect(fingerprints.find((e) => e.id === plain.id)?.perceptualHash).toBeNull();
       expect(fingerprints.filter((e) => e.perceptualHash !== null)).toHaveLength(2);
 
-      await consent(alice, wbId, true);
       engine.evidenceCalls.length = 0;
       await run();
       expect(engine.evidenceCalls).toHaveLength(2);
@@ -993,7 +1010,6 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         type: "CERTIFICATE",
         mimeType: "application/pdf",
       });
-      await consent(alice, wbId, true);
       engine.evidenceCalls.length = 0;
       await run();
       expect(engine.evidenceCalls.map((c) => c.evidence.type)).toEqual(["CERTIFICATE"]);
@@ -1033,7 +1049,6 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
           type: "RECEIPT",
           mimeType: "application/pdf",
         });
-        await consent(alice, first, true);
         await run();
         clock.advance(1_000);
         const reused = await added(alice, second, {
@@ -1041,7 +1056,6 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
           type: "RECEIPT",
           mimeType: "application/pdf",
         });
-        await consent(alice, second, true);
         await run();
         expect((await evidenceChecks(alice, first))[kept.id]).toMatchObject({
           status: "PASSED",
@@ -1065,7 +1079,6 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
     it("retries outages later and gives up on errors that will not go away", async () => {
       const alice = await owner();
       const wbId = await asset(alice, true);
-      await consent(alice, wbId, true);
       const photo = await added(alice, wbId, { body: await phonePhoto("#506070") });
       engine.evidence = async () => {
         throw new CheckEngineError("service returned 503", true);
@@ -1090,31 +1103,27 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       expect(job).toMatchObject({ status: "FAILED", attempts: 2 });
     });
 
-    it("stops checking when consent is withdrawn and does not check verifier uploads", async () => {
+    it("does not check files of revoked assets and shows only the owner that checks run", async () => {
       const alice = await owner();
       const wbId = await asset(alice, true);
-      await consent(alice, wbId, true);
       const photo = await added(alice, wbId, { body: await phonePhoto("#607080") });
-      const off = await consent(alice, wbId, false);
-      expect(off.json()).toEqual({ available: true, enabled: false, enabledAt: null });
-      expect(await run()).toBe(0);
-      expect((await evidenceChecks(alice, wbId))[photo.id]).toBeNull();
-      expect(
-        (await db.prisma.auditLog.findMany({ where: { targetId: wbId } }))
-          .map((a) => a.action)
-          .filter((a) => a.startsWith("asset.automated_checks"))
-          .sort(),
-      ).toEqual(["asset.automated_checks_disabled", "asset.automated_checks_enabled"]);
+      await db.prisma.asset.update({ where: { wbId }, data: { status: "REVOKED" } });
+      engine.evidenceCalls.length = 0;
+      expect(await run()).toBe(1);
+      expect(engine.evidenceCalls).toHaveLength(0);
+      expect(await db.prisma.automatedCheck.count({ where: { evidenceId: photo.id } })).toBe(0);
 
       const bob = await owner();
-      expect((await consent(bob, wbId, true)).statusCode).toBe(404);
+      expect((await call(bob, "GET", `/assets/${wbId}/automated-checks`)).statusCode).toBe(404);
       expect((await call(null, "GET", `/assets/${wbId}/automated-checks`)).statusCode).toBe(401);
+      expect((await call(alice, "PUT", `/assets/${wbId}/automated-checks`, {})).statusCode).toBe(
+        404,
+      );
     });
 
     it("tells the check what each capture shot should show, and the code", async () => {
       const alice = await owner();
       const wbId = await asset(alice, true);
-      await consent(alice, wbId, true);
       const session = (await call(alice, "POST", `/assets/${wbId}/capture-sessions`)).json();
       const shot = (captureShot: string, seed: number) =>
         texturedPhoto(seed).then((body) =>
@@ -1364,10 +1373,9 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       }
       return res?.json<Check>() as Check;
     };
-    /** A published asset with a completed capture session, optionally with AI checks on. */
-    const recordedAsset = async (who: Owner, consent: boolean) => {
+    /** A published asset with a completed capture session. */
+    const recordedAsset = async (who: Owner) => {
       const wbId = await asset(who, true);
-      if (consent) await call(who, "PUT", `/assets/${wbId}/automated-checks`, { enabled: true });
       const session = (await call(who, "POST", `/assets/${wbId}/capture-sessions`)).json<{
         id: string;
         shots: { shot: string }[];
@@ -1384,8 +1392,11 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       }
       return { wbId, ids };
     };
-    const run = () =>
-      (app.automatedChecks as NonNullable<FastifyInstance["automatedChecks"]>).runOnce();
+    /** Runs every due job, including the checks of uploads made in other tests. */
+    const run = async () => {
+      const checks = app.automatedChecks as NonNullable<FastifyInstance["automatedChecks"]>;
+      while ((await checks.runOnce()) > 0);
+    };
 
     it("confirms the current owner to the buyer without naming them", async () => {
       const alice = await owner();
@@ -1436,6 +1447,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         code: null,
         codeExpiresAt: null,
         message: null,
+        codeCheck: null,
       });
       expect((await confirm(alice, wbId, code)).json().error.code).toBe("invalid_code");
       await expect(
@@ -1472,7 +1484,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
     it("compares the buyer's photos with the recorded ones", async () => {
       const alice = await owner();
       const bob = await owner();
-      const { wbId, ids } = await recordedAsset(alice, true);
+      const { wbId, ids } = await recordedAsset(alice);
       const shown = await call(alice, "POST", `/assets/${wbId}/evidence/${ids[0]}/visibility`, {
         visibility: "PUBLIC",
       });
@@ -1561,22 +1573,22 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       );
     });
 
-    it("is inconclusive without consent, without recorded photos, or when the comparison fails", async () => {
+    it("is inconclusive once revoked, without recorded photos, or when the comparison fails", async () => {
       const bob = await owner();
       const alice = await owner();
       const matchCalls = engine.matchCalls.length;
 
-      const noConsent = await recordedAsset(alice, false);
-      const first = (await startCheck(bob, noConsent.wbId)).json<Check>();
+      const revoked = await recordedAsset(alice);
+      const first = (await startCheck(bob, revoked.wbId)).json<Check>();
       await takeAll(bob, first);
+      await db.prisma.asset.update({ where: { wbId: revoked.wbId }, data: { status: "REVOKED" } });
       await run();
       expect((await getCheck(bob, first.id)).item).toMatchObject({
         result: "INCONCLUSIVE",
-        reason: "The owner has not agreed to AI checks of the item's photos",
+        reason: "The item's passport was revoked",
       });
 
       const bare = await asset(alice, true);
-      await call(alice, "PUT", `/assets/${bare}/automated-checks`, { enabled: true });
       const second = (await startCheck(bob, bare)).json<Check>();
       await takeAll(bob, second);
       await run();
@@ -1586,7 +1598,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       });
       expect(engine.matchCalls).toHaveLength(matchCalls);
 
-      const recorded = await recordedAsset(alice, true);
+      const recorded = await recordedAsset(alice);
       await run();
       const third = (await startCheck(bob, recorded.wbId)).json<Check>();
       await takeAll(bob, third);
@@ -1652,7 +1664,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
             wbId,
             captureShot === "VIDEO"
               ? {
-                  body: mediaFile("mp42"),
+                  body: videoWithLocation(),
                   type: "VIDEO",
                   mimeType: "video/mp4",
                   captureSessionId: sessionId,
@@ -1665,7 +1677,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       it("lets the owner film the item with the buyer's code and compares the photos", async () => {
         const alice = await owner();
         const bob = await owner();
-        const { wbId } = await recordedAsset(alice, true);
+        const { wbId } = await recordedAsset(alice);
         await run();
 
         const res = await startRemote(bob, wbId);
@@ -1675,7 +1687,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         expect(check).toMatchObject({
           kind: "REMOTE",
           status: "OPEN",
-          owner: { confirmed: false, message: null },
+          owner: { confirmed: false, message: null, codeCheck: null },
           item: { videoAvailable: false, result: null },
         });
         const code = check.owner.code as string;
@@ -1728,6 +1740,15 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         expect(progress.item.shots.filter((s) => s.receivedAt)).toHaveLength(6);
         expect(progress.owner.confirmed).toBe(false);
 
+        const garbled = await upload(alice, wbId, {
+          body: mediaFile("mp42"),
+          type: "VIDEO",
+          mimeType: "video/mp4",
+          captureSessionId: session.id,
+          captureShot: "VIDEO",
+        });
+        expect(garbled.res.json().error.code).toBe("video_unreadable");
+
         clock.advance(60_000);
         engine.matchCalls.length = 0;
         const video = await shoot(alice, wbId, session.id, "VIDEO");
@@ -1735,7 +1756,12 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         const filmed = await getCheck(bob, check.id);
         expect(filmed).toMatchObject({
           status: "OPEN",
-          owner: { confirmed: true, confirmedAt: clock.now().toISOString(), code },
+          owner: {
+            confirmed: true,
+            confirmedAt: clock.now().toISOString(),
+            code,
+            codeCheck: "PENDING",
+          },
           item: { comparing: true, videoAvailable: true, result: null },
         });
         expect((await requests(alice, wbId))[0]).toMatchObject({ filmed: true });
@@ -1747,6 +1773,17 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         expect(downloaded.headers.get("content-disposition")).toContain(
           `remote-check-${check.id}.mp4`,
         );
+        // The buyer's copy plays the same media without the location; the original is sealed.
+        const copy = Buffer.from(await downloaded.arrayBuffer());
+        const stored = await db.prisma.evidence.findUniqueOrThrow({
+          where: { id: video.json().id },
+        });
+        const original = await readAll(await storage.read(stored.storageKey));
+        expect(copy.length).toBe(original.length);
+        expect(original.includes("+46.2044")).toBe(true);
+        expect(copy.includes("+46.2044")).toBe(false);
+        expect(copy.includes("com.apple.quicktime")).toBe(false);
+        expect(copy.subarray(-256).equals(original.subarray(-256))).toBe(true);
         expect((await call(alice, "POST", `/purchase-checks/${check.id}/video`)).statusCode).toBe(
           404,
         );
@@ -1777,11 +1814,13 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         expect(row.referenceEvidenceIds.some((id) => filmedSession.some((e) => e.id === id))).toBe(
           false,
         );
-        expect((await getCheck(bob, check.id)).item).toMatchObject({
+        const compared = await getCheck(bob, check.id);
+        expect(compared.item).toMatchObject({
           comparing: false,
           result: "MATCH",
           videoAvailable: true,
         });
+        expect(compared.owner).toMatchObject({ codeCheck: "SHOWN" });
         expect(await requests(alice, wbId)).toEqual([]);
         expect(
           await db.prisma.auditLog.count({
@@ -1797,6 +1836,33 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
             data: { ownerCode: "ABCDEF" },
           }),
         ).rejects.toThrow(/remote check code cannot be changed/);
+      });
+
+      it("does not count the shots toward the evidence limit", async () => {
+        const alice = await owner();
+        const wbId = await asset(alice, true);
+        for (let i = 0; i < 100; i++) {
+          const res = await requestUpload(alice, wbId, {
+            body: pdf(`${i}`),
+            type: "RECEIPT",
+            mimeType: "application/pdf",
+          });
+          expect(res.statusCode).toBe(201);
+        }
+        const check = (await startRemote(await owner(), wbId)).json<Check>();
+        const session = (await film(alice, wbId, check.id)).json<{ id: string }>();
+        const shot = await requestUpload(alice, wbId, {
+          body: await texturedPhoto(seed++),
+          captureSessionId: session.id,
+          captureShot: "DIAL",
+        });
+        expect(shot.statusCode, shot.body).toBe(201);
+        const res = await requestUpload(alice, wbId, {
+          body: pdf(),
+          type: "RECEIPT",
+          mimeType: "application/pdf",
+        });
+        expect(res.json().error.code).toBe("evidence_limit_reached");
       });
 
       it("expires when the owner does not film in time, and is limited per item per day", async () => {

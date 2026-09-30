@@ -17,6 +17,7 @@ import { ApiError } from "../errors.js";
 import { createPurchaseCheckService, MAX_CHECK_PHOTO_BYTES } from "./service.js";
 import {
   type CheckRecord,
+  type CodePhotoCheck,
   purchaseCheckSchema,
   type RecordedPhoto,
   remoteRequestSchema,
@@ -57,8 +58,15 @@ export const purchaseCheckRoutes: FastifyPluginAsyncZod<AppContext> = async (app
     fp: fingerprint(config.SESSION_SECRET, request),
   });
   const write = { preHandler: authenticate, config: perUser(rateLimits.write) };
-  const view = ({ check, recorded }: { check: CheckRecord; recorded: RecordedPhoto[] }) =>
-    toPurchaseCheck(check, recorded, now());
+  const view = ({
+    check,
+    recorded,
+    codeCheck,
+  }: {
+    check: CheckRecord;
+    recorded: RecordedPhoto[];
+    codeCheck: CodePhotoCheck;
+  }) => toPurchaseCheck(check, recorded, codeCheck, now());
 
   // Photos are sent as the image itself; only this plugin's routes accept image bodies.
   app.addContentTypeParser(

@@ -27,6 +27,7 @@ import { writeAudit } from "../audit.js";
 import { verifyWalletSignature } from "../auth/siws.js";
 import { captureCode, withEvidence } from "../capture/service.js";
 import type { SessionRecord } from "../capture/view.js";
+import { evidenceCheckStates } from "../checks/view.js";
 import type { AutomatedChecks } from "../checks/worker.js";
 import { decodeBase58 } from "../crypto.js";
 import { ApiError, notFound } from "../errors.js";
@@ -43,6 +44,9 @@ export const MAX_CHECK_PHOTO_BYTES = 10 * 1024 * 1024;
 const PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
 const DOWNLOAD_EXPIRY_SECONDS = 5 * 60;
+/** Where the buyer's copy of a remote check video is stored: the video without its metadata. */
+export const remoteVideoKey = (assetId: string, evidenceId: string) =>
+  `remote-check-videos/${assetId}/${evidenceId}`;
 const VIDEO_EXTENSIONS: Record<string, string> = { "video/mp4": "mp4", "video/quicktime": "mov" };
 
 /** A remote check's latest session, whose shots show the buyer the seller's progress. */
@@ -54,7 +58,7 @@ const latestSession = {
     status: true,
     expiresAt: true,
     completedAt: true,
-    evidence: { select: { captureShot: true, createdAt: true } },
+    evidence: { select: { id: true, captureShot: true, createdAt: true } },
   },
 } satisfies Prisma.CaptureSessionFindManyArgs;
 
@@ -237,7 +241,10 @@ export function createPurchaseCheckService({
     return buyersCheck(tx, id, actor);
   }
 
-  /** The check with the recorded photos it can show, for the view. */
+  /**
+   * The check with the recorded photos it can show and, once the seller filmed a remote check,
+   * the AI check of the code photo, for the view.
+   */
   async function withRecorded(check: CheckRecord) {
     const recorded =
       check.referenceEvidenceIds.length === 0
@@ -246,7 +253,15 @@ export function createPurchaseCheckService({
             where: { id: { in: check.referenceEvidenceIds } },
             select: { id: true, publicStorageKey: true },
           });
-    return { check, recorded };
+    const session = check.captureSessions[0];
+    const code =
+      check.kind === "REMOTE" && session?.status === "COMPLETED"
+        ? session.evidence.find((e) => e.captureShot === CAPTURE_CODE_SHOT)
+        : undefined;
+    const codeCheck = code
+      ? { check: (await evidenceCheckStates(prisma, [code.id])).get(code.id) ?? null }
+      : null;
+    return { check, recorded, codeCheck };
   }
 
   async function removeQuietly(key: string) {
@@ -543,8 +558,8 @@ export function createPurchaseCheckService({
     },
 
     /**
-     * A 5-minute link to the video the seller filmed for the buyer's remote check. The video is
-     * private evidence of the asset, shown only to this buyer.
+     * A 5-minute link to the video the seller filmed for the buyer's remote check, without its
+     * metadata. The video is private evidence of the asset, shown only to this buyer.
      */
     async video(id: string, actor: Actor) {
       const check = await buyersCheck(prisma, id, actor);
@@ -557,7 +572,7 @@ export function createPurchaseCheckService({
       });
       if (!video) throw notFound("Video");
       const link = await storage.presignDownload({
-        key: video.storageKey,
+        key: remoteVideoKey(video.assetId, video.id),
         filename: `remote-check-${id}.${VIDEO_EXTENSIONS[video.mimeType] ?? "mp4"}`,
         contentType: video.mimeType,
         expiresInSeconds: DOWNLOAD_EXPIRY_SECONDS,

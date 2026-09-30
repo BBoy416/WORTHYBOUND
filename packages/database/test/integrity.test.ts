@@ -2163,23 +2163,6 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
       );
     });
 
-    it("records consent with who and when together", async () => {
-      const a = await activeAsset();
-      await expectDbError(
-        db.prisma.asset.update({
-          where: { id: a.id },
-          data: { automatedChecksConsentById: a.ownerId },
-        }),
-        CHECK_VIOLATION,
-      );
-      await expect(
-        db.prisma.asset.update({
-          where: { id: a.id },
-          data: { automatedChecksConsentById: a.ownerId, automatedChecksConsentAt: new Date() },
-        }),
-      ).resolves.toMatchObject({ automatedChecksConsentById: a.ownerId });
-    });
-
     it("allows one pending job per file or application", async () => {
       const { e } = await evidenceOf();
       const job = { kind: "EVIDENCE_CHECK" as const, entityId: e.id };

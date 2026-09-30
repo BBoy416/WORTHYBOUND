@@ -526,22 +526,13 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
     });
   });
 
-  describe("AI checks consent", () => {
-    it("cannot be given without a check engine; withdrawing always works", async () => {
+  describe("AI checks", () => {
+    it("are shown as unavailable without a check engine and cannot be turned on or off", async () => {
       const alice = await owner();
       const wbId = await published(alice);
       const url = `/assets/${wbId}/automated-checks`;
-      expect((await call(alice, "GET", url)).json()).toEqual({
-        available: false,
-        enabled: false,
-        enabledAt: null,
-      });
-      const on = await call(alice, "PUT", url, { enabled: true });
-      expect(on.statusCode).toBe(503);
-      expect(on.json().error.code).toBe("ai_checks_unavailable");
-      expect((await call(alice, "PUT", url, { enabled: false })).statusCode).toBe(200);
-      expect((await call(alice, "PUT", url, { enabled: "yes" })).statusCode).toBe(400);
-      expect((await assetRow(wbId)).automatedChecksConsentById).toBeNull();
+      expect((await call(alice, "GET", url)).json()).toEqual({ available: false });
+      expect((await call(alice, "PUT", url, { enabled: true })).statusCode).toBe(404);
     });
   });
 

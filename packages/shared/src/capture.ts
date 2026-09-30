@@ -33,6 +33,8 @@ export type CaptureShot = (typeof CAPTURE_SHOTS)[number];
 export const CAPTURE_CODE_SHOT = "CODE" satisfies CaptureShot;
 /** A video of the item with the code in view; asked only by remote checks (ADR 0014). */
 export const CAPTURE_VIDEO_SHOT = "VIDEO" satisfies CaptureShot;
+/** Largest video accepted for the video shot, a short clip. */
+export const CAPTURE_VIDEO_MAX_BYTES = 100 * 1024 * 1024;
 
 /** Shots required in a capture session, per category; the code shot comes last. */
 export const CAPTURE_SHOTS_BY_CATEGORY: Record<AssetCategory, readonly CaptureShot[]> = {

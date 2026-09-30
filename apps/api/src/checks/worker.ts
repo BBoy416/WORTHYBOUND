@@ -247,7 +247,7 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
       },
     });
     if (!evidence || !isCheckedEvidence(evidence)) throw new Skipped("evidence_not_checkable");
-    if (!checksAllowed(evidence.asset)) throw new Skipped("no_consent");
+    if (!checksAllowed(evidence.asset)) throw new Skipped("asset_revoked");
     if (evidence.automatedChecks.length > 0) return;
 
     const outcome = evidence.duplicateOfId
@@ -375,8 +375,7 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
 
   /**
    * Compares a buyer's photos, or for a remote check the photos the seller took in the check's
-   * capture session, with the item's recorded photos. Recorded photos are private evidence, so
-   * they are sent only with the current owner's consent to AI checks.
+   * capture session, with the item's recorded photos.
    */
   async function matchItem(job: AutomatedJob): Promise<void> {
     const check = await prisma.purchaseCheck.findUnique({
@@ -385,7 +384,7 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
     });
     if (!check?.photosCompletedAt) throw new Skipped("purchase_check_not_ready");
     if (check.status !== "OPEN") return;
-    const finish = (reason: "NO_CONSENT" | "NO_REFERENCE_PHOTOS") =>
+    const finish = (reason: "ASSET_REVOKED" | "NO_REFERENCE_PHOTOS") =>
       prisma.$transaction(async (tx) => {
         await recordInconclusive(tx, check.id, reason, now());
         await tx.automatedJob.update({
@@ -393,7 +392,7 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
           data: { status: "COMPLETED", attempts: { increment: 1 }, updatedAt: now() },
         });
       });
-    if (!checksAllowed(check.asset)) return finish("NO_CONSENT");
+    if (!checksAllowed(check.asset)) return finish("ASSET_REVOKED");
 
     const reference: { id: string; label: string; data: Buffer }[] = [];
     for (const e of await referencePhotos(prisma, check.assetId)) {

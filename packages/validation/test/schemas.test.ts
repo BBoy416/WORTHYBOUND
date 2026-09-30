@@ -14,7 +14,6 @@ import {
   authNonceRequestSchema,
   authVerifyRequestSchema,
   automatedCheckListQuerySchema,
-  automatedChecksConsentSchema,
   categoryPermissionChangeSchema,
   EVIDENCE_MAX_BYTES,
   evidenceParamsSchema,
@@ -228,6 +227,9 @@ describe("evidenceUploadSchema", () => {
     expect(issues(evidenceUploadSchema, { ...shot, captureShot: "VIDEO" })).toEqual([
       "custom:captureShot",
     ]);
+    expect(issues(evidenceUploadSchema, { ...video, sizeBytes: 100 * 1024 * 1024 + 1 })).toEqual([
+      "custom:sizeBytes",
+    ]);
   });
 
   it("allows only JPEG, PNG and WebP photos to be public", () => {
@@ -255,16 +257,6 @@ describe("evidence request schemas", () => {
   it("accepts only a visibility change", () => {
     expect(issues(evidenceVisibilitySchema, { visibility: "PUBLIC" })).toEqual([]);
     expect(issues(evidenceVisibilitySchema, { visibility: "PUBLIC", sha256: SHA })).toEqual([
-      "unrecognized_keys",
-    ]);
-  });
-
-  it("accepts only a yes or no for AI checks", () => {
-    expect(issues(automatedChecksConsentSchema, { enabled: true })).toEqual([]);
-    expect(issues(automatedChecksConsentSchema, { enabled: "true" })).toEqual([
-      "invalid_type:enabled",
-    ]);
-    expect(issues(automatedChecksConsentSchema, { enabled: false, at: "now" })).toEqual([
       "unrecognized_keys",
     ]);
   });

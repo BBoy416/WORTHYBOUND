@@ -87,6 +87,46 @@ export async function checkImage(bytes: Buffer): Promise<Buffer> {
     .toBuffer();
 }
 
+/** MP4 and QuickTime boxes that hold metadata: user data (GPS, device), metadata items, XMP. */
+const VIDEO_METADATA_BOXES = new Set(["udta", "meta", "uuid"]);
+/** Boxes whose contents are boxes, searched for metadata. Media data is never searched. */
+const VIDEO_CONTAINER_BOXES = new Set(["moov", "trak", "mdia", "minf", "stbl", "edts", "dinf"]);
+
+/**
+ * A copy of an MP4 or QuickTime video without its metadata boxes. Each one is turned into a
+ * `free` box of the same size, so the media offsets stay valid and the video plays unchanged.
+ * Throws if the file is not a well-formed sequence of boxes.
+ */
+export function videoWithoutMetadata(bytes: Buffer): Buffer {
+  const copy = Buffer.from(bytes);
+  const walk = (start: number, end: number) => {
+    let at = start;
+    while (at < end) {
+      if (end - at < 8) throw new Error("truncated box");
+      let size = copy.readUInt32BE(at);
+      let header = 8;
+      if (size === 1) {
+        if (end - at < 16) throw new Error("truncated box");
+        size = Number(copy.readBigUInt64BE(at + 8));
+        header = 16;
+      } else if (size === 0) {
+        size = end - at;
+      }
+      if (size < header || size > end - at) throw new Error("invalid box size");
+      const type = copy.toString("latin1", at + 4, at + 8);
+      if (VIDEO_METADATA_BOXES.has(type)) {
+        copy.write("free", at + 4, "latin1");
+        copy.fill(0, at + header, at + size);
+      } else if (VIDEO_CONTAINER_BOXES.has(type)) {
+        walk(at + header, at + size);
+      }
+      at += size;
+    }
+  };
+  walk(0, copy.length);
+  return copy;
+}
+
 export async function readAll(stream: Readable): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of stream) chunks.push(chunk as Buffer);

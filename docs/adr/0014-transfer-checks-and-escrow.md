@@ -36,9 +36,9 @@ text `WorthyBound: I confirm to a buyer that I own <WB ID>.\nCode: <code>`); the
 final and names neither wallet nor person. The buyer photographs the item with the live camera,
 one photo per capture shot of the category without the code shot; photos are stored without
 metadata and shown only to the buyer. The recorded photos are the verifiers' photos and the owner's
-latest completed capture session (at most 8), compared by the AI check engine only with the
-owner's consent to AI checks (ADR 0013); otherwise, without recorded photos, or when the
-comparison fails, the result is `INCONCLUSIVE` with the reason. The buyer sees recorded photos
+latest completed capture session (at most 8), compared by the AI check engine (ADR 0013); when
+the passport is revoked, without recorded photos, or when the comparison fails, the result is
+`INCONCLUSIVE` with the reason. The buyer sees recorded photos
 that are public on the passport; private ones are compared but never shown. The model's summary
 is stored for reviewers, not shown to the buyer. Checks are audited.
 
@@ -55,13 +55,18 @@ their asset page, without the buyer (`GET /assets/:wbId/remote-checks`), and fil
 capture session started from the request
 (`POST /assets/:wbId/remote-checks/:checkId/capture-session`): the session uses the check's code,
 ends with the check at the latest, and asks for the category's capture shots, including the code
-shot, then a `VIDEO` shot turning the item around with the code in view (MP4 or QuickTime). These
-sessions are not counted in the owner's capture limits. The owner's account filming the item shows
+shot, then a `VIDEO` shot turning the item around with the code in view (MP4 or QuickTime, at
+most 100 MiB). These sessions are not counted in the owner's capture limits, and their shots are
+not counted in the limit of evidence files per asset. The owner's account filming the item shows
 the buyer "confirmed current owner"; no wallet signature is asked. When the session completes, the
-buyer can watch the video through a 5-minute link (`POST /purchase-checks/:checkId/video`), and
-the session's photos without the code shot are compared with the recorded photos as in person,
-under the same consent rule. Sessions filmed for a remote check are never recorded photos for
-other checks. The shots are evidence of the asset like any capture session. Checks are audited.
+buyer can watch the video through a 5-minute link (`POST /purchase-checks/:checkId/video`) to a
+copy without its metadata boxes (`udta`, `meta`, `uuid`, turned into `free` boxes of the same
+size, so the video plays unchanged); the original stays sealed as evidence. The buyer also sees
+what the AI check found in the code photo (`owner.codeCheck`: the code shown, missing or
+different, the photo failed or was unclear, or the check is pending or unavailable), and the
+session's photos without the code shot are compared with the recorded photos as in person.
+Sessions filmed for a remote check are never recorded photos for other checks. The shots are
+evidence of the asset like any capture session. Checks are audited.
 
 **In-person transfer.** When the checks pass, the buyer pays and the program transfers the token
 in the same transaction (ADR 0002 steps 2-3). No escrow wait is needed; the buyer checked the item.

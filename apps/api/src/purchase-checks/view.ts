@@ -18,23 +18,41 @@ import {
   PURCHASE_CHECK_KINDS,
   PURCHASE_CHECK_STATUSES,
   publicEvidencePath,
+  REMOTE_CODE_RESULTS,
+  type RemoteCodeResult,
   VERIFICATION_LEVELS,
 } from "@worthybound/shared";
 import { z } from "zod";
 import { captureSessionSchema, type SessionRecord, toCaptureSession } from "../capture/view.js";
+import type { EvidenceCheckView } from "../checks/view.js";
 
 export type CheckRecord = PurchaseCheck & {
   asset: Asset;
   photos: Pick<PurchaseCheckPhoto, "shot" | "createdAt">[];
   /** A remote check's latest capture session, if the seller started one. */
   captureSessions: (Pick<CaptureSession, "ownerId" | "status" | "expiresAt" | "completedAt"> & {
-    evidence: Pick<Evidence, "captureShot" | "createdAt">[];
+    evidence: Pick<Evidence, "id" | "captureShot" | "createdAt">[];
   })[];
 };
 
 export type RemoteRequestRecord = PurchaseCheck & { captureSessions: SessionRecord[] };
 
 export type RecordedPhoto = Pick<Evidence, "id" | "publicStorageKey">;
+
+/**
+ * The AI check of a filmed remote check's code photo; `check` is null when none was queued.
+ * Null for in-person checks and until the seller films.
+ */
+export type CodePhotoCheck = { check: EvidenceCheckView | null } | null;
+
+function codeResult({ check }: NonNullable<CodePhotoCheck>): RemoteCodeResult {
+  if (!check) return "UNAVAILABLE";
+  if (check.status === "PENDING" || check.status === "UNAVAILABLE") return check.status;
+  if (check.problems.includes("CAPTURE_CODE_MISMATCH")) return "MISMATCH";
+  if (check.problems.includes("CAPTURE_CODE_MISSING")) return "MISSING";
+  if (check.status === "FAILED") return "FAILED";
+  return check.status === "PASSED" ? "SHOWN" : "UNCLEAR";
+}
 
 /** Asset statuses in which the item cannot be transferred. */
 const BLOCKED = ["REPORTED_LOST", "REPORTED_STOLEN", "DISPUTED", "REVOKED"] as const;
@@ -70,6 +88,8 @@ export const purchaseCheckSchema = z.object({
     codeExpiresAt: z.iso.datetime().nullable(),
     /** What the seller's wallet shows when signing; null for remote checks. */
     message: z.string().nullable(),
+    /** Remotely, once filmed: what the AI check found in the seller's code photo. */
+    codeCheck: z.enum(REMOTE_CODE_RESULTS).nullable(),
   }),
   item: z.object({
     shots: z.array(
@@ -100,6 +120,7 @@ const iso = (date: Date | null) => date?.toISOString() ?? null;
 export function toPurchaseCheck(
   check: CheckRecord,
   recorded: RecordedPhoto[],
+  codeCheck: CodePhotoCheck,
   at: Date,
 ): PurchaseCheckView {
   const { asset } = check;
@@ -146,6 +167,7 @@ export function toPurchaseCheck(
       code: codeValid || remote ? check.ownerCode : null,
       codeExpiresAt: codeValid ? iso(check.ownerCodeExpiresAt) : null,
       message: codeValid && !remote ? ownerConfirmationMessage(asset.wbId, check.ownerCode) : null,
+      codeCheck: codeCheck ? codeResult(codeCheck) : null,
     },
     item: {
       shots: (check.shots as CaptureShot[]).map((shot) => ({

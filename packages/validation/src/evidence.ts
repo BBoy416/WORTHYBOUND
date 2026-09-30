@@ -2,6 +2,7 @@ import {
   AUTOMATED_CHECK_RESULTS,
   canBePublic,
   CAPTURE_SHOTS,
+  CAPTURE_VIDEO_MAX_BYTES,
   CAPTURE_VIDEO_SHOT,
   PUBLIC_PHOTO_MIME_TYPES,
   EVIDENCE_MAX_BYTES,
@@ -66,6 +67,11 @@ export const evidenceUploadSchema = z
         "video shot, timed by the server",
       path: ["captureShot"],
     },
+  )
+  .refine(
+    (input) =>
+      input.captureShot !== CAPTURE_VIDEO_SHOT || input.sizeBytes <= CAPTURE_VIDEO_MAX_BYTES,
+    { message: "the video shot is at most 100 MiB", path: ["sizeBytes"] },
   );
 export type EvidenceUploadInput = z.infer<typeof evidenceUploadSchema>;
 
@@ -93,12 +99,6 @@ export const evidenceVisibilitySchema = z.strictObject({
   visibility: z.enum(EVIDENCE_VISIBILITIES),
 });
 export type EvidenceVisibilityRequest = z.infer<typeof evidenceVisibilitySchema>;
-
-/** The owner's consent to AI checks of their uploads for one asset (ADR 0013). */
-export const automatedChecksConsentSchema = z.strictObject({
-  enabled: z.boolean(),
-});
-export type AutomatedChecksConsentRequest = z.infer<typeof automatedChecksConsentSchema>;
 
 /** Automated checks across assets, newest first. `cursor` is the last check ID of the previous page. */
 export const automatedCheckListQuerySchema = z.strictObject({

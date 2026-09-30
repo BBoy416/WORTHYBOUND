@@ -8,15 +8,13 @@ type Tx = Prisma.TransactionClient;
 export const isCheckedEvidence = (e: Pick<Evidence, "source" | "type" | "mimeType">) =>
   e.source === "OWNER" && isCheckable(e.type, e.mimeType);
 
-/** Checks run only with the current owner's consent (ADR 0013), and not on revoked assets. */
-export const checksAllowed = (
-  asset: Pick<Asset, "ownerId" | "status" | "automatedChecksConsentById">,
-) => asset.status !== "REVOKED" && asset.automatedChecksConsentById === asset.ownerId;
+/** Checks run on every asset except revoked ones (ADR 0013). */
+export const checksAllowed = (asset: Pick<Asset, "status">) => asset.status !== "REVOKED";
 
 /**
  * Queues a check of each of the asset's owner files that has no result of the current check
- * version and no pending check, if the owner consented. Returns how many were queued. Run in the
- * transaction that locked the asset.
+ * version and no pending check. Returns how many were queued. Run in the transaction that locked
+ * the asset.
  */
 export async function enqueueEvidenceChecks(
   tx: Tx,

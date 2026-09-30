@@ -428,9 +428,8 @@ describe("owner asset page", () => {
     expect(container.querySelector(".thumb.file")?.textContent).toBe("PDF");
   });
 
-  it("shows AI check results and turns the checks on with the owner's consent", async () => {
-    let enabled = false;
-    const calls = mockFetch({
+  it("shows AI check results and that the checks are on", async () => {
+    mockFetch({
       ...ownerRoutes(asset()),
       [`GET /assets/${WB}/evidence`]: {
         json: {
@@ -445,33 +444,24 @@ describe("owner asset page", () => {
           ],
         },
       },
-      [`GET /assets/${WB}/automated-checks`]: () => ({
-        json: { available: true, enabled, enabledAt: enabled ? "2026-09-30T10:00:00.000Z" : null },
-      }),
-      [`PUT /assets/${WB}/automated-checks`]: () => (
-        (enabled = true),
-        { json: { available: true, enabled: true, enabledAt: "2026-09-30T10:00:00.000Z" } }
-      ),
+      [`GET /assets/${WB}/automated-checks`]: { json: { available: true } },
     });
     renderAt(`/assets/${WB}`);
     await screen.findByText("AI check failed");
     expect(screen.getByText("This looks like a photo of a screen or a print")).toBeTruthy();
-    fireEvent.click(await screen.findByText("Turn on AI checks"));
     await screen.findByText("AI checks on");
-    expect(calls.find((c) => c.method === "PUT")?.body).toEqual({ enabled: true });
+    expect(screen.queryByText("Turn off")).toBeNull();
   });
 
   it("hides the AI checks when they are not available", async () => {
     mockFetch({
       ...ownerRoutes(asset()),
       [`GET /assets/${WB}/evidence`]: { json: { items: [evidence()] } },
-      [`GET /assets/${WB}/automated-checks`]: {
-        json: { available: false, enabled: false, enabledAt: null },
-      },
+      [`GET /assets/${WB}/automated-checks`]: { json: { available: false } },
     });
     renderAt(`/assets/${WB}`);
     await screen.findByText("front.jpg", { exact: false });
-    expect(screen.queryByText("Turn on AI checks")).toBeNull();
+    expect(screen.queryByText("AI checks on")).toBeNull();
   });
 });
 

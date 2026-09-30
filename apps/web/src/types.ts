@@ -160,10 +160,8 @@ export interface PurchaseCheck {
 }
 
 /** `GET /assets/:wbId/automated-checks`. */
-export interface AutomatedChecksConsent {
+export interface AutomatedChecksAvailability {
   available: boolean;
-  enabled: boolean;
-  enabledAt: string | null;
 }
 
 export interface TemplateSummary {

@@ -10,6 +10,7 @@ import type {
 import {
   assertTransition,
   canBePublic,
+  CAPTURE_VIDEO_SHOT,
   EVIDENCE_REVIEW_LIFECYCLE,
   hasPreview,
   MAX_EVIDENCE_PER_ASSET,
@@ -31,10 +32,17 @@ import { enqueueEvidenceChecks } from "../checks/queue.js";
 import { evidenceCheckStates } from "../checks/view.js";
 import type { AutomatedChecks } from "../checks/worker.js";
 import { ApiError, fromDomainError, notFound } from "../errors.js";
-import { remoteCheckFilmed } from "../purchase-checks/service.js";
+import { remoteCheckFilmed, remoteVideoKey } from "../purchase-checks/service.js";
 import { recordTrust } from "../trust/record.js";
 import { findAssignedRequest, lockAssignedRequest } from "../verification/requests.js";
-import { inspectFile, perceptualHash, previewImage, publicPhotoCopy, readAll } from "./inspect.js";
+import {
+  inspectFile,
+  perceptualHash,
+  previewImage,
+  publicPhotoCopy,
+  readAll,
+  videoWithoutMetadata,
+} from "./inspect.js";
 
 type Tx = Prisma.TransactionClient;
 
@@ -68,6 +76,7 @@ const REJECTIONS = {
   file_type_mismatch: "The file's contents do not match its declared file type",
   hash_mismatch: "The file's SHA-256 hash does not match the declared hash",
   image_unreadable: "The photo could not be processed",
+  video_unreadable: "The video could not be processed",
   duplicate_evidence: "This file is already attached to this asset",
   evidence_limit_reached: `An asset can have at most ${MAX_EVIDENCE_PER_ASSET} evidence files`,
   asset_unavailable: "Evidence can no longer be added to this asset",
@@ -95,6 +104,22 @@ const rejectionError = (reason: Rejection) =>
 
 /** Discarded drafts are hidden from everyone, including their owner. */
 const isDiscardedDraft = (asset: Asset) => asset.status === "REVOKED" && asset.publishedAt === null;
+
+/** Files counted toward MAX_EVIDENCE_PER_ASSET; shots filmed for remote checks are not. */
+const counted = (assetId: string) => ({
+  assetId,
+  OR: [{ captureSessionId: null }, { captureSession: { purchaseCheckId: null } }],
+});
+
+/** Whether a shot belongs to a session filmed for a remote check (ADR 0014). */
+async function forRemoteCheck(tx: Tx, captureSessionId: string | null | undefined) {
+  if (!captureSessionId) return false;
+  const session = await tx.captureSession.findUnique({
+    where: { id: captureSessionId },
+    select: { purchaseCheckId: true },
+  });
+  return session?.purchaseCheckId != null;
+}
 
 export function createEvidenceService({
   prisma,
@@ -276,14 +301,16 @@ export function createEvidenceService({
       if (asset.status === "REVOKED") {
         throw new ApiError(409, "asset_revoked", "Evidence cannot be added to a revoked asset");
       }
-      const [stored, pending] = await Promise.all([
-        tx.evidence.count({ where: { assetId: asset.id } }),
-        tx.evidenceUpload.count({
-          where: { assetId: asset.id, status: "PENDING", expiresAt: { gt: at } },
-        }),
-      ]);
-      if (stored + pending >= MAX_EVIDENCE_PER_ASSET) {
-        throw rejectionError("evidence_limit_reached");
+      if (!(await forRemoteCheck(tx, input.captureSessionId))) {
+        const [stored, pending] = await Promise.all([
+          tx.evidence.count({ where: counted(asset.id) }),
+          tx.evidenceUpload.count({
+            where: { ...counted(asset.id), status: "PENDING", expiresAt: { gt: at } },
+          }),
+        ]);
+        if (stored + pending >= MAX_EVIDENCE_PER_ASSET) {
+          throw rejectionError("evidence_limit_reached");
+        }
       }
       const existing = await tx.evidence.findUnique({
         where: { assetId_sha256: { assetId: asset.id, sha256: input.sha256 } },
@@ -503,6 +530,10 @@ export function createEvidenceService({
       const storageKey = `evidence/${upload.assetId}/${evidenceId}`;
       const wantsPublic = upload.visibility === "PUBLIC";
       const publicKey = wantsPublic ? `public/${upload.assetId}/${evidenceId}` : null;
+      const videoKey =
+        upload.captureShot === CAPTURE_VIDEO_SHOT
+          ? remoteVideoKey(upload.assetId, evidenceId)
+          : null;
       try {
         await storage.copy(upload.stagingKey, storageKey, staged.etag ?? undefined);
       } catch (error) {
@@ -514,7 +545,10 @@ export function createEvidenceService({
 
       try {
         const image = upload.mimeType.startsWith("image/");
-        const file = await inspectFile(await storage.read(storageKey), wantsPublic || image);
+        const file = await inspectFile(
+          await storage.read(storageKey),
+          wantsPublic || image || videoKey !== null,
+        );
         if (file.sizeBytes !== upload.sizeBytes) throw new UploadRejected("size_mismatch");
         if (file.detectedMimeType !== upload.mimeType) {
           throw new UploadRejected("file_type_mismatch");
@@ -529,6 +563,15 @@ export function createEvidenceService({
             throw new UploadRejected("image_unreadable");
           });
           await storage.put(publicKey, copy, upload.mimeType);
+        }
+        if (videoKey) {
+          let copy: Buffer;
+          try {
+            copy = videoWithoutMetadata(file.bytes as Buffer);
+          } catch {
+            throw new UploadRejected("video_unreadable");
+          }
+          await storage.put(videoKey, copy, upload.mimeType);
         }
 
         const at = now();
@@ -551,7 +594,8 @@ export function createEvidenceService({
           }
           if (asset.status === "REVOKED") throw new UploadRejected("asset_unavailable");
           if (
-            (await tx.evidence.count({ where: { assetId: asset.id } })) >= MAX_EVIDENCE_PER_ASSET
+            !(await forRemoteCheck(tx, upload.captureSessionId)) &&
+            (await tx.evidence.count({ where: counted(asset.id) })) >= MAX_EVIDENCE_PER_ASSET
           ) {
             throw new UploadRejected("evidence_limit_reached");
           }
@@ -683,13 +727,13 @@ export function createEvidenceService({
           return { evidence, wbId: asset.wbId, queued, matchQueued };
         });
         if (!result) {
-          await removeQuietly(storageKey, publicKey);
+          await removeQuietly(storageKey, publicKey, videoKey);
           return completedResult(upload.id);
         }
         if (result.queued > 0 || result.matchQueued) checks?.kick();
         return { evidence: result.evidence, wbId: result.wbId, replayed: false };
       } catch (error) {
-        await removeQuietly(storageKey, publicKey);
+        await removeQuietly(storageKey, publicKey, videoKey);
         if (error instanceof UploadRejected) throw await fail(upload, error.reason, actor);
         throw error;
       }
