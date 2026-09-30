@@ -1,7 +1,7 @@
 import type { PublicPassport } from "@worthybound/shared";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OwnerAsset, OwnerEvidence } from "../src/types.js";
+import type { OwnerAsset, OwnerEvidence, Transfer } from "../src/types.js";
 import { me, mockFetch, renderAt, unauthenticated } from "./helpers.js";
 
 const WB = "WB-7F93A281";
@@ -840,6 +840,181 @@ describe("admin", () => {
       role: "VERIFIER_REVIEWER",
     });
     expect(calls.some((c) => c.method === "DELETE")).toBe(true);
+  });
+});
+
+describe("transfers", () => {
+  const ME = me().user.walletAddress;
+  const BUYER = "7Np41oeYqPefeNQEHSv1UDhYrehxin3NStELsSKCT4K2";
+  const transfer = (overrides: Partial<Transfer> = {}): Transfer => ({
+    id: "0199a000-0000-7000-8000-0000000000t1",
+    role: "RECIPIENT",
+    status: "PENDING",
+    closedReason: null,
+    asset: { wbId: WB, category: "LUXURY_WATCH", brand: "Rolex", model: "Submariner" },
+    fromWalletAddress: BUYER,
+    toWalletAddress: ME,
+    transaction: null,
+    signedBySeller: false,
+    signedByBuyer: false,
+    awaitingYourSignature: false,
+    chain: null,
+    expiresAt: "2026-10-03T10:00:00.000Z",
+    acceptedAt: null,
+    completedAt: null,
+    cancelledAt: null,
+    createdAt: "2026-09-30T10:00:00.000Z",
+    ...overrides,
+  });
+  const unregister: (() => void)[] = [];
+  /** Registers a Wallet Standard wallet with one account, as Phantom does. */
+  const standardWallet = (address: string) => {
+    const signTransaction = vi.fn(async (..._inputs: unknown[]) => [
+      { signedTransaction: new Uint8Array([9, 9]) },
+    ]);
+    const wallet = {
+      name: "Test wallet",
+      accounts: [{ address }],
+      features: { "solana:signTransaction": { signTransaction } },
+    };
+    window.dispatchEvent(
+      new CustomEvent("wallet-standard:register-wallet", {
+        detail: (api: { register: (w: unknown) => () => void }) =>
+          unregister.push(api.register(wallet)),
+      }),
+    );
+    return signTransaction;
+  };
+  afterEach(() => unregister.splice(0).forEach((u) => u()));
+
+  it("starts a transfer of a tokenized asset from its page", async () => {
+    let state = asset({ tokenizationStatus: "TOKENIZED" });
+    const calls = mockFetch({
+      ...ownerRoutes(state),
+      [`GET /assets/${WB}`]: () => ({ json: state }),
+      "POST /transfers": () => (
+        (state = asset({ tokenizationStatus: "TOKENIZED", status: "TRANSFER_PENDING" })),
+        { status: 201, json: transfer({ role: "SENDER" }) }
+      ),
+    });
+    renderAt(`/assets/${WB}`);
+    fireEvent.change(await screen.findByLabelText("Transfer to wallet"), {
+      target: { value: ` ${BUYER} ` },
+    });
+    fireEvent.click(screen.getByText("Start transfer"));
+    expect(await screen.findByText(/A transfer of this item is open/)).toBeTruthy();
+    expect(calls.find((c) => c.method === "POST" && c.url === "/transfers")?.body).toEqual({
+      assetId: WB,
+      toWalletAddress: BUYER,
+    });
+  });
+
+  it("offers no transfer before the asset is tokenized", async () => {
+    mockFetch(ownerRoutes(asset()));
+    renderAt(`/assets/${WB}`);
+    await screen.findByText("Tokenize on Solana devnet");
+    expect(screen.queryByText("Start transfer")).toBeNull();
+  });
+
+  it("lets the recipient accept, then signs the prepared transaction with the wallet", async () => {
+    const signTransaction = standardWallet(ME);
+    let state = transfer();
+    const calls = mockFetch({
+      "GET /auth/me": { json: me() },
+      "GET /transfers": () => ({ json: { items: [state] } }),
+      [`POST /transfers/${state.id}/accept`]: () => (
+        (state = transfer({
+          status: "ACCEPTED",
+          transaction: "AQID",
+          awaitingYourSignature: true,
+          signedBySeller: true,
+        })),
+        { json: state }
+      ),
+      [`POST /transfers/${state.id}/signature`]: () => (
+        (state = transfer({
+          status: "ACCEPTED",
+          signedBySeller: true,
+          signedByBuyer: true,
+          chain: { status: "PENDING", signature: null },
+        })),
+        { json: state }
+      ),
+    });
+    renderAt("/transfers");
+    fireEvent.click(await screen.findByText("Accept"));
+    fireEvent.click(await screen.findByText("Sign with wallet"));
+    expect(await screen.findByText("Completing the transfer on Solana…")).toBeTruthy();
+    expect(signTransaction).toHaveBeenCalledWith({
+      account: { address: ME },
+      transaction: new Uint8Array([1, 2, 3]),
+      chain: "solana:devnet",
+    });
+    expect(calls.find((c) => c.url.endsWith("/signature"))?.body).toEqual({
+      signedTransaction: "CQk=",
+    });
+    expect(screen.queryByText("Cancel transfer")).toBeNull();
+  });
+
+  it("asks to switch accounts when the wallet has another account", async () => {
+    const signTransaction = standardWallet(BUYER);
+    mockFetch({
+      "GET /auth/me": { json: me() },
+      "GET /transfers": {
+        json: {
+          items: [
+            transfer({ status: "ACCEPTED", transaction: "AQID", awaitingYourSignature: true }),
+          ],
+        },
+      },
+    });
+    renderAt("/transfers");
+    fireEvent.click(await screen.findByText("Sign with wallet"));
+    expect(await screen.findByText(/Switch your wallet to the account/)).toBeTruthy();
+    expect(signTransaction).not.toHaveBeenCalled();
+  });
+
+  it("lets the seller cancel, and shows completed and closed transfers", async () => {
+    const open = transfer({
+      id: "0199a000-0000-7000-8000-0000000000t2",
+      role: "SENDER",
+      fromWalletAddress: ME,
+      toWalletAddress: BUYER,
+    });
+    const calls = mockFetch({
+      "GET /auth/me": { json: me() },
+      "GET /transfers": {
+        json: {
+          items: [
+            open,
+            transfer({
+              status: "COMPLETED",
+              completedAt: "2026-09-30T12:00:00.000Z",
+              chain: {
+                status: "CONFIRMED",
+                signature: "5VERYLONGSIGNATUREabcdefghijkmnopqrstuvwxyz",
+              },
+            }),
+            transfer({
+              id: "0199a000-0000-7000-8000-0000000000t3",
+              status: "CANCELLED",
+              closedReason: "cancelled_by_sender",
+            }),
+          ],
+        },
+      },
+      [`POST /transfers/${open.id}/cancel`]: { json: { ...open, status: "CANCELLED" } },
+    });
+    vi.stubGlobal("confirm", () => true);
+    renderAt("/transfers");
+    expect(await screen.findByText("Waiting for the buyer to accept.")).toBeTruthy();
+    expect(screen.getByText("5VER…wxyz ↗")).toBeTruthy();
+    expect(screen.getByText("View asset")).toBeTruthy();
+    expect(screen.getByText("Cancelled by the seller.")).toBeTruthy();
+    fireEvent.click(screen.getByText("Cancel transfer"));
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/cancel"))).toBe(true),
+    );
   });
 });
 
