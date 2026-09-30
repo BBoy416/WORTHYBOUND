@@ -1,4 +1,11 @@
-import type { Address, KeyPairSigner, Signature } from "@solana/kit";
+import {
+  generateKeyPairSigner,
+  getBase64EncodedWireTransaction,
+  getSignatureFromTransaction,
+  type Address,
+  type KeyPairSigner,
+  type Signature,
+} from "@solana/kit";
 import type { AssetStatus, VerificationLevel } from "@worthybound/shared";
 import { customProgramErrorCode, StaleChainUpdateError } from "./errors.js";
 import {
@@ -12,6 +19,25 @@ import {
 } from "./generated/index.js";
 import { sendInstructions, type SolanaConnection } from "./rpc.js";
 import { toChainAssetStatus, toChainVerificationLevel } from "./status.js";
+import {
+  buildTransferTransaction,
+  completeTransferTransaction,
+  createNonceAccountInstructions,
+  NONCE_ACCOUNT_SIZE,
+  readNonceAccount,
+} from "./transfer.js";
+
+/** How long `sendTransfer` waits for confirmation before the caller retries. */
+const TRANSFER_CONFIRM_ATTEMPTS = 30;
+const TRANSFER_CONFIRM_INTERVAL_MS = 2_000;
+
+/** A transfer transaction landed but failed; its nonce has moved on, so it cannot be resent. */
+export class TransferFailedError extends Error {
+  constructor(detail: string) {
+    super(`transfer transaction failed: ${detail}`);
+    this.name = "TransferFailedError";
+  }
+}
 
 export interface ChainAddresses {
   record: Address;
@@ -60,6 +86,26 @@ export interface WorthyBoundOracle {
     /** SHA-256 as 64 hex characters. */
     inputsHash: string;
     trustSeq: bigint;
+  }): Promise<Signature>;
+  /**
+   * Creates a durable nonce account for one transfer and returns the unsigned `transfer_asset`
+   * transaction (base64 wire bytes) for seller and buyer to sign.
+   */
+  prepareTransfer(input: {
+    wbId: string;
+    seller: string;
+    buyer: string;
+    statusAfter: AssetStatus;
+    statusSeq: bigint;
+  }): Promise<{ transaction: string; nonceAccount: string }>;
+  /**
+   * Adds the oracle's signature to the prepared transaction and sends it, or returns its
+   * signature if it already landed. Throws TransferFailedError if it landed and failed.
+   */
+  sendTransfer(input: {
+    transaction: string;
+    /** Base58 signatures of seller and buyer, by address. */
+    signatures: Record<string, string>;
   }): Promise<Signature>;
 }
 
@@ -144,6 +190,67 @@ export function createWorthyBoundOracle(
           trustSeq: input.trustSeq,
         }),
       );
+    },
+
+    async prepareTransfer({ wbId, seller, buyer, statusAfter, statusSeq }) {
+      const nonceAccount = await generateKeyPairSigner();
+      const lamports = await connection.rpc
+        .getMinimumBalanceForRentExemption(NONCE_ACCOUNT_SIZE)
+        .send();
+      await sendInstructions(
+        connection,
+        oracle,
+        createNonceAccountInstructions({
+          payer: oracle,
+          nonceAccount,
+          authority: oracle.address,
+          lamports,
+        }),
+      );
+      const account = await connection.rpc
+        .getAccountInfo(nonceAccount.address, { encoding: "base64", commitment: "confirmed" })
+        .send();
+      if (!account.value) throw new Error("nonce account not found after creation");
+      const { nonce } = readNonceAccount(Buffer.from(account.value.data[0], "base64"));
+      const transaction = await buildTransferTransaction({
+        wbId,
+        oracle: oracle.address,
+        seller: seller as Address,
+        buyer: buyer as Address,
+        statusAfter,
+        statusSeq,
+        nonceAccount: nonceAccount.address,
+        nonce,
+      });
+      return { transaction, nonceAccount: nonceAccount.address };
+    },
+
+    async sendTransfer({ transaction, signatures }) {
+      const signed = await completeTransferTransaction(transaction, signatures, oracle);
+      const signature = getSignatureFromTransaction(signed);
+      const landed = async () => {
+        const { value } = await connection.rpc
+          .getSignatureStatuses([signature], { searchTransactionHistory: true })
+          .send();
+        const status = value[0];
+        if (status?.err) throw new TransferFailedError(JSON.stringify(status.err));
+        return status?.confirmationStatus === "confirmed" ||
+          status?.confirmationStatus === "finalized"
+          ? signature
+          : null;
+      };
+      if (await landed()) return signature;
+      await connection.rpc
+        .sendTransaction(getBase64EncodedWireTransaction(signed), {
+          encoding: "base64",
+          preflightCommitment: "confirmed",
+        })
+        .send();
+      for (let i = 0; i < TRANSFER_CONFIRM_ATTEMPTS; i++) {
+        await new Promise((resolve) => setTimeout(resolve, TRANSFER_CONFIRM_INTERVAL_MS));
+        if (await landed()) return signature;
+      }
+      throw new Error("transfer transaction not confirmed yet");
     },
   };
 }

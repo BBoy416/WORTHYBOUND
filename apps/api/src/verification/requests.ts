@@ -13,7 +13,8 @@ export type SystemReason =
   | "category_permission_withdrawn"
   | "asset_unavailable"
   | "template_retired"
-  | "request_expired";
+  | "request_expired"
+  | "ownership_changed";
 
 /**
  * Moves requests to `to` as the SYSTEM actor, recording a status event and an audit entry for

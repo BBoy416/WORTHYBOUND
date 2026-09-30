@@ -8,6 +8,17 @@ export const transferRequestSchema = z.strictObject({
 });
 export type TransferRequestInput = z.infer<typeof transferRequestSchema>;
 
+export const transferParamsSchema = z.strictObject({ transferId: uuidSchema });
+
+/** The whole transaction as the wallet returned it after signing (base64 wire bytes). */
+export const transferSignatureSchema = z.strictObject({
+  signedTransaction: z
+    .string()
+    .max(4096)
+    .regex(/^[A-Za-z0-9+/]+={0,2}$/, "expected base64"),
+});
+export type TransferSignatureInput = z.infer<typeof transferSignatureSchema>;
+
 /** A dispute targets the asset, or one attestation or evidence item on it. */
 export const openDisputeSchema = z
   .strictObject({

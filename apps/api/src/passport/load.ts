@@ -117,7 +117,24 @@ export async function loadPassportSource(
         select: { sequence: true, type: true, occurredAt: true, hash: true, prevHash: true },
       }),
       prisma.chainTransaction.findMany({
-        where: { entityType: "ASSET", entityId: id, status: { in: ["CONFIRMED", "FINALIZED"] } },
+        where: {
+          status: { in: ["CONFIRMED", "FINALIZED"] },
+          OR: [
+            { entityType: "ASSET", entityId: id },
+            {
+              entityType: "TRANSFER_REQUEST",
+              entityId: {
+                in: (
+                  await prisma.transferRequest.findMany({
+                    where: { assetId: id, status: "COMPLETED" },
+                    select: { id: true },
+                  })
+                ).map((t) => t.id),
+              },
+            },
+          ],
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         select: { kind: true, cluster: true, status: true, signature: true, confirmedAt: true },
       }),
     ]);

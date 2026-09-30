@@ -32,7 +32,9 @@ import {
   templateCreateSchema,
   templateRequirementsSchema,
   templateVersionStatusSchema,
+  transferParamsSchema,
   transferRequestSchema,
+  transferSignatureSchema,
   updateDraftAssetSchema,
   verificationRequestSchema,
   verifierApplicationSchema,
@@ -535,6 +537,13 @@ describe("requests, transfers and disputes", () => {
         expiresInHours: 1000,
       }),
     ).toEqual(["too_big:expiresInHours"]);
+    expect(transferSignatureSchema.safeParse({ signedTransaction: "AQID" }).success).toBe(true);
+    expect(issues(transferSignatureSchema, { signedTransaction: "not base64!" })).toEqual([
+      "invalid_format:signedTransaction",
+    ]);
+    expect(issues(transferParamsSchema, { transferId: "1" })).toEqual([
+      "invalid_format:transferId",
+    ]);
   });
 
   it("lets a dispute target an attestation or evidence, not both", () => {

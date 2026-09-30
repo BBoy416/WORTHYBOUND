@@ -26,6 +26,8 @@ import { evidenceRoutes } from "./evidence/routes.js";
 import { metadataRoutes } from "./passport/metadata.js";
 import { passportRoutes } from "./passport/routes.js";
 import { templateRoutes } from "./templates/routes.js";
+import { completeTransfer } from "./transfers/service.js";
+import { transferRoutes } from "./transfers/routes.js";
 import { verificationRoutes } from "./verification/routes.js";
 import { verifierRoutes } from "./verifiers/routes.js";
 import { registerWebApp } from "./web.js";
@@ -40,7 +42,7 @@ export interface BuildAppOptions {
   rateLimits?: Partial<RateLimits>;
   /** Registers extra routes with the same context (used by tests). */
   register?: (app: FastifyInstance, ctx: AppContext) => Promise<void> | void;
-  /** Signs chain transactions; without it, tokenization is unavailable. */
+  /** Signs chain transactions; without it, tokenization and transfers are unavailable. */
   oracle?: WorthyBoundOracle;
   /** Runs AI checks and reports; without it, they are unavailable. */
   checkEngine?: CheckEngine;
@@ -134,6 +136,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         now,
         log: app.log,
         metadataUrl: (wbId) => `${config.apiPublicUrl}/metadata/${wbId}`,
+        completeTransfer,
       })
     : null;
   app.decorate("chainSync", chainSync);
@@ -154,6 +157,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     requireRole: createRequireRole(authenticate),
     rateLimits: { ...DEFAULT_RATE_LIMITS, ...options.rateLimits },
     chainSync,
+    oracle: options.oracle ?? null,
     automatedChecks,
   };
 
@@ -177,6 +181,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await app.register(templateRoutes, ctx);
   await app.register(verificationRoutes, ctx);
   await app.register(checkRoutes, ctx);
+  await app.register(transferRoutes, ctx);
   if (config.WEB_DIST_DIR) await registerWebApp(app, config.WEB_DIST_DIR);
   if (options.register) await options.register(app, ctx);
   return app;

@@ -11,7 +11,18 @@ export {
   createWorthyBoundOracle,
   type ChainAddresses,
   type ChainRecordState,
+  TransferFailedError,
   type WorthyBoundOracle,
 } from "./oracle.js";
 export { createConnection, sendInstructions, type SolanaConnection } from "./rpc.js";
 export { toChainAssetStatus, toChainVerificationLevel } from "./status.js";
+export {
+  buildTransferTransaction,
+  completeTransferTransaction,
+  createNonceAccountInstructions,
+  NONCE_ACCOUNT_SIZE,
+  readNonceAccount,
+  TransferSignatureError,
+  type TransferSignatureProblem,
+  transferSignature,
+} from "./transfer.js";
