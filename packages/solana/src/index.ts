@@ -22,6 +22,7 @@ export {
   createNonceAccountInstructions,
   NONCE_ACCOUNT_SIZE,
   readNonceAccount,
+  systemTransferInstruction,
   TransferSignatureError,
   type TransferSignatureProblem,
   transferSignature,

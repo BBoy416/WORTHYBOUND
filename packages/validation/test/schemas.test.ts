@@ -563,6 +563,16 @@ describe("requests, transfers and disputes", () => {
         expiresInHours: 1000,
       }),
     ).toEqual(["too_big:expiresInHours"]);
+    const base = { assetId: "WB-7F93A281", toWalletAddress: WALLET };
+    expect(transferRequestSchema.parse(base).priceLamports).toBe("0");
+    expect(
+      transferRequestSchema.parse({ ...base, priceLamports: "1500000000" }).priceLamports,
+    ).toBe("1500000000");
+    for (const priceLamports of ["-1", "1.5", "01", "1000000000000000000", ""]) {
+      expect(issues(transferRequestSchema, { ...base, priceLamports }), priceLamports).toEqual([
+        "invalid_format:priceLamports",
+      ]);
+    }
     expect(transferSignatureSchema.safeParse({ signedTransaction: "AQID" }).success).toBe(true);
     expect(issues(transferSignatureSchema, { signedTransaction: "not base64!" })).toEqual([
       "invalid_format:signedTransaction",

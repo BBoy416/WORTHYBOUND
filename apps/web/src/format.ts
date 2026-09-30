@@ -16,3 +16,20 @@ export const explorerUrl = (kind: "address" | "tx", value: string): string =>
 
 export const formatBytes = (bytes: number): string =>
   bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+
+const LAMPORTS_PER_SOL = 1_000_000_000n;
+
+/** `"2500000000"` lamports → `2.5 SOL`, exactly. */
+export const formatSol = (lamports: string): string => {
+  const value = BigInt(lamports);
+  const fraction = (value % LAMPORTS_PER_SOL).toString().padStart(9, "0").replace(/0+$/, "");
+  return `${value / LAMPORTS_PER_SOL}${fraction ? `.${fraction}` : ""} SOL`;
+};
+
+/** `"2.5"` SOL → `"2500000000"` lamports; null unless a number with at most 9 decimals. */
+export const solToLamports = (sol: string): string | null => {
+  const match = /^(\d+)(?:\.(\d{1,9}))?$/.exec(sol.trim());
+  if (!match) return null;
+  const [, whole = "0", fraction = ""] = match;
+  return (BigInt(whole) * LAMPORTS_PER_SOL + BigInt(fraction.padEnd(9, "0"))).toString();
+};

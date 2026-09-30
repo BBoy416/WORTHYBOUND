@@ -977,6 +977,7 @@ describe("transfers", () => {
     asset: { wbId: WB, category: "LUXURY_WATCH", brand: "Rolex", model: "Submariner" },
     fromWalletAddress: BUYER,
     toWalletAddress: ME,
+    priceLamports: "0",
     transaction: null,
     signedBySeller: false,
     signedByBuyer: false,
@@ -1024,12 +1025,39 @@ describe("transfers", () => {
     fireEvent.change(await screen.findByLabelText("Transfer to wallet"), {
       target: { value: ` ${BUYER} ` },
     });
+    const price = screen.getByLabelText("Price in SOL (optional)");
+    fireEvent.change(price, { target: { value: "1.0000000001" } });
+    expect(screen.getByText(/at most 9 decimals/)).toBeTruthy();
+    expect((screen.getByText("Start transfer") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(price, { target: { value: "2.5" } });
     fireEvent.click(screen.getByText("Start transfer"));
     expect(await screen.findByText(/A transfer of this item is open/)).toBeTruthy();
     expect(calls.find((c) => c.method === "POST" && c.url === "/transfers")?.body).toEqual({
       assetId: WB,
       toWalletAddress: BUYER,
+      priceLamports: "2500000000",
     });
+  });
+
+  it("shows the price the buyer pays when signing", async () => {
+    mockFetch({
+      "GET /auth/me": { json: me() },
+      "GET /transfers": {
+        json: {
+          items: [
+            transfer({
+              status: "ACCEPTED",
+              transaction: "AQID",
+              awaitingYourSignature: true,
+              priceLamports: "2500000001",
+            }),
+          ],
+        },
+      },
+    });
+    renderAt("/transfers");
+    expect(await screen.findByText(/Price 2\.500000001 SOL/)).toBeTruthy();
+    expect(screen.getByText(/Your wallet pays 2\.500000001 SOL to the seller/)).toBeTruthy();
   });
 
   it("offers no transfer before the asset is tokenized", async () => {

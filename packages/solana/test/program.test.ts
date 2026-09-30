@@ -562,6 +562,61 @@ describe.skipIf(!programBuilt)("worthybound program", () => {
         expect(h.svm.sendTransaction(complete)).toBeInstanceOf(FailedTransactionMetadata);
       });
 
+      it("pays the seller in the same transaction, or transfers nothing", async () => {
+        const prepared = async (priceLamports: bigint) => {
+          const nonceAccount = await generateKeyPairSigner();
+          await send(
+            h.svm,
+            h.oracle,
+            createNonceAccountInstructions({
+              payer: h.oracle,
+              nonceAccount,
+              authority: h.oracle.address,
+              lamports: h.svm.minimumBalanceForRentExemption(NONCE_ACCOUNT_SIZE),
+            }),
+          );
+          const account = h.svm.getAccount(nonceAccount.address);
+          if (!account.exists) throw new Error("nonce account missing");
+          const transaction = await buildTransferTransaction({
+            wbId: WB,
+            oracle: h.oracle.address,
+            seller: h.owner.address,
+            buyer: h.buyer.address,
+            statusAfter: "ACTIVE",
+            statusSeq: 3n,
+            nonceAccount: nonceAccount.address,
+            nonce: readNonceAccount(account.data).nonce,
+            priceLamports,
+          });
+          const signatures: Record<string, string> = {};
+          for (const party of [h.owner, h.buyer]) {
+            signatures[party.address] = await transferSignature(
+              transaction,
+              await walletSign(transaction, party),
+              party.address,
+            );
+          }
+          return completeTransferTransaction(transaction, signatures, h.oracle);
+        };
+        const balance = (a: string) => h.svm.getBalance(a as never) ?? 0n;
+        const seller = balance(h.owner.address);
+        const buyer = balance(h.buyer.address);
+
+        // The buyer holds 10 SOL: a price of 20 SOL fails the whole transaction.
+        const unaffordable = h.svm.sendTransaction(await prepared(20_000_000_000n));
+        expect(unaffordable).toBeInstanceOf(FailedTransactionMetadata);
+        expect((await record(WB)).owner).toBe(h.owner.address);
+        expect(balance(h.buyer.address)).toBe(buyer);
+
+        h.svm.expireBlockhash();
+        const paid = h.svm.sendTransaction(await prepared(2_500_000_000n));
+        expect(paid).not.toBeInstanceOf(FailedTransactionMetadata);
+        expect((await record(WB)).owner).toBe(h.buyer.address);
+        expect(balance(h.owner.address) - seller).toBe(2_500_000_000n);
+        // The oracle pays the fees, so the buyer pays exactly the price.
+        expect(buyer - balance(h.buyer.address)).toBe(2_500_000_000n);
+      });
+
       it("needs the current owner as seller", async () => {
         const other = await generateKeyPairSigner();
         expect(anchorError(await transfer(WB, { seller: other }))).toBe("NotOwner");

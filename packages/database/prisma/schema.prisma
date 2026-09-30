@@ -496,6 +496,8 @@ model TransferRequest {
   fromUserId      String         @db.Uuid
   toUserId        String?        @db.Uuid
   toWalletAddress String
+  /// Paid by the buyer to the seller in the transfer transaction (ADR 0014); 0 for none.
+  priceLamports   BigInt         @default(0)
   status          TransferStatus @default(PENDING)
   /// The asset's status when the transfer started; restored when it ends without a transfer,
   /// and the status after it completes.

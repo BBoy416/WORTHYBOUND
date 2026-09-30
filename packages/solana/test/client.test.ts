@@ -8,6 +8,7 @@ import {
   getBase58Encoder,
   getProgramDerivedAddress,
   getPublicKeyFromAddress,
+  getCompiledTransactionMessageDecoder,
   getTransactionDecoder,
   getTransactionEncoder,
   lamports,
@@ -190,6 +191,41 @@ describe("transfer transactions", () => {
     const keys = bytes[3] as number;
     const blockhash = bytes.slice(4 + keys * 32, 36 + keys * 32);
     expect(Buffer.from(blockhash).equals(Buffer.from(getBase58Encoder().encode(nonce)))).toBe(true);
+  });
+
+  it("puts the buyer's payment to the seller in the same transaction", async () => {
+    const paid = await buildTransferTransaction({
+      wbId: "WB-7F93A281",
+      oracle: oracle.address,
+      seller: seller.address,
+      buyer: buyer.address,
+      statusAfter: "VERIFIED",
+      statusSeq: 7n,
+      nonceAccount: nonceAccount.address,
+      nonce,
+      priceLamports: 1_500_000_000n,
+    });
+    const compiled = (wire: string) => {
+      const m = getCompiledTransactionMessageDecoder().decode(
+        getTransactionDecoder().decode(Buffer.from(wire, "base64")).messageBytes,
+      );
+      if (!("instructions" in m)) throw new Error("expected a legacy message");
+      return m;
+    };
+    const message = compiled(paid);
+    const keys = message.staticAccounts;
+    // Advance nonce, then the payment, then transfer_asset.
+    expect(message.instructions.map((i) => keys[i.programAddressIndex])).toEqual([
+      "11111111111111111111111111111111",
+      "11111111111111111111111111111111",
+      WORTHYBOUND_PROGRAM_ADDRESS,
+    ]);
+    const payment = message.instructions[1]!;
+    expect(payment.accountIndices?.map((i) => keys[i])).toEqual([buyer.address, seller.address]);
+    const data = Buffer.from(payment.data ?? []);
+    expect([data.readUInt32LE(0), data.readBigUInt64LE(4)]).toEqual([2, 1_500_000_000n]);
+
+    expect(compiled(transaction).instructions).toHaveLength(2);
   });
 
   it("accepts a wallet's signature of exactly the prepared transaction", async () => {

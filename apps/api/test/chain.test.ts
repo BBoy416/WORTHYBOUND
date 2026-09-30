@@ -34,7 +34,15 @@ type Call =
   | { kind: "register"; wbId: string; owner: string; uri: string; status: string; seq: bigint }
   | { kind: "status"; wbId: string; status: string; seq: bigint }
   | { kind: "trust"; wbId: string; score: number; level: string; seq: bigint }
-  | { kind: "prepare"; wbId: string; seller: string; buyer: string; status: string; seq: bigint }
+  | {
+      kind: "prepare";
+      wbId: string;
+      seller: string;
+      buyer: string;
+      status: string;
+      seq: bigint;
+      price: bigint;
+    }
   | { kind: "transfer"; wbId: string; buyer: string };
 
 type Signer = Awaited<ReturnType<typeof loadKeypairSigner>>;
@@ -49,6 +57,8 @@ class FakeOracle implements WorthyBoundOracle {
     { wbId: string; seller: string; buyer: string; status: string; seq: bigint }
   >();
   failures = 0;
+  /** Lamports by wallet; wallets not listed hold 10 SOL. */
+  readonly balances = new Map<string, bigint>();
   #n = 0;
 
   constructor(readonly signer: Signer) {}
@@ -120,6 +130,7 @@ class FakeOracle implements WorthyBoundOracle {
       buyer: input.buyer,
       status: input.statusAfter,
       seq: input.statusSeq,
+      price: input.priceLamports,
     });
     const nonceAccount = new TestWallet().address as Address;
     const transaction = await buildTransferTransaction({
@@ -132,6 +143,11 @@ class FakeOracle implements WorthyBoundOracle {
     });
     this.#prepared.set(transaction, { ...input, status: input.statusAfter, seq: input.statusSeq });
     return { transaction, nonceAccount };
+  }
+
+  async getBalance(address: string) {
+    this.#maybeFail();
+    return this.balances.get(address) ?? 10_000_000_000n;
   }
 
   async sendTransfer(input: Parameters<WorthyBoundOracle["sendTransfer"]>[0]) {
@@ -213,6 +229,7 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
   beforeEach(() => {
     oracle.calls.length = 0;
     oracle.failures = 0;
+    oracle.balances.clear();
   });
 
   interface Owner {
@@ -561,6 +578,7 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
         buyer: bob.wallet.address,
         status: "ACTIVE",
         seq: seq + 1n,
+        price: 0n,
       });
       // Accepting again changes nothing.
       expect((await act(bob, started.id, "accept")).transfer.transaction).toBe(
@@ -621,6 +639,50 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
         "TRANSFER_ASSET",
       );
       expect(JSON.stringify(passport)).not.toContain(bob.wallet.address);
+    });
+
+    it("puts the agreed price in the transaction and checks the buyer can pay before signing", async () => {
+      const alice = await owner();
+      const bob = await owner();
+      const wbId = await tokenized(alice);
+      const res = await call(alice, "POST", "/transfers", {
+        assetId: wbId,
+        toWalletAddress: bob.wallet.address,
+        priceLamports: "2500000000",
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      const started = res.json<TransferView & { priceLamports: string }>();
+      expect(started.priceLamports).toBe("2500000000");
+      const incoming = (await call(bob, "GET", `/transfers/${started.id}`)).json();
+      expect(incoming.priceLamports).toBe("2500000000");
+
+      const { transfer } = await act(bob, started.id, "accept");
+      expect(oracle.calls).toContainEqual(
+        expect.objectContaining({ kind: "prepare", price: 2_500_000_000n }),
+      );
+
+      oracle.balances.set(bob.wallet.address, 2_499_999_999n);
+      const poor = await sign(bob, transfer);
+      expect(poor.status).toBe(422);
+      expect(poor.body.error.code).toBe("insufficient_funds");
+      oracle.failures = 1;
+      expect((await sign(bob, transfer)).body.error.code).toBe("chain_unavailable");
+      oracle.balances.set(bob.wallet.address, 2_500_000_000n);
+      expect((await sign(bob, transfer)).transfer.signedByBuyer).toBe(true);
+      // The seller receives the price and is not asked to hold any.
+      oracle.balances.set(alice.wallet.address, 0n);
+      expect((await sign(alice, transfer)).transfer.signedBySeller).toBe(true);
+
+      const audit = await db.prisma.auditLog.findFirstOrThrow({
+        where: { targetId: started.id, action: "transfer.requested" },
+      });
+      expect(audit.metadata).toMatchObject({ priceLamports: "2500000000" });
+      await expect(
+        db.prisma.transferRequest.update({
+          where: { id: started.id },
+          data: { priceLamports: 1n },
+        }),
+      ).rejects.toThrow(/transfer price cannot change/);
     });
 
     it("needs a tokenized asset and a signed-in recipient with a verified identity", async () => {
