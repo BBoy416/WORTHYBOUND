@@ -95,8 +95,22 @@ It is enabled by `OPENAI_API_KEY` (model: `OPENAI_MODEL`); without it the checks
   Structured Outputs and `store: false`. The model reports findings from a fixed list of problems
   and a confidence; a fixed rule decides the result: `FAILED` only for a problem that suggests a
   fake, `PASSED` only for a consistent file without problems, both at confidence 0.7 or more,
-  otherwise `INCONCLUSIVE`. Exact copies of files on another asset fail deterministically
-  (`REUSED_FILE`) without calling the service. Verifier uploads are never checked.
+  otherwise `INCONCLUSIVE`. Verifier uploads are never checked.
+- **Deterministic checks** (check version `evidence-check-v2`) run first and fail a file
+  without calling the service:
+  - exact copies of a file on another asset (`REUSED_FILE`);
+  - photos near-identical to an earlier photo on another asset (`SIMILAR_PHOTO`): a 64-bit
+    difference hash, computed at upload, within 6 bits. Images too plain to fingerprint are
+    skipped; files uploaded before fingerprinting get one when they are first checked;
+  - PDF receipts whose producer, creator or XMP edit history names an image editor
+    (`DOCUMENT_TAMPERING`).
+
+  For other PDFs, the producer, creator, dates, edit history and number of incremental updates
+  are sent to the model as signals, never proof, and shown to administrators. The model also
+  reads the document's own number; a number already on an earlier file of another asset fails
+  the file (`REUSED_DOCUMENT`). Only a hash of the normalized number is stored. Of two
+  matching files, only the later one fails.
+
 - **Trust Score.** Engine `1.2.0`, weights `weights-2026.3`. Each passed check is an `AUTOMATED`
   proof (source multiplier 1.5, at most 20 points). With a passed check and no failed one, the
   owner-only caps (35, or 45 with KYC) and the no-inspection cap (60) are replaced by 65. Each file whose latest
@@ -110,7 +124,7 @@ It is enabled by `OPENAI_API_KEY` (model: `OPENAI_MODEL`); without it the checks
   Score snapshot, only when no check failed. Administrators see every check with its details on
   the admin page (AI checks).
 - Checks run in a job queue in the API process, like chain sync (ADR 0016), with retries for
-  outages and rate limits. Guided capture and the deterministic checks are still to come.
+  outages and rate limits. Guided capture is still to come.
 
 ## Consequences
 

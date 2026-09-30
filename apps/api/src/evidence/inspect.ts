@@ -92,3 +92,34 @@ export async function readAll(stream: Readable): Promise<Buffer> {
   for await (const chunk of stream) chunks.push(chunk as Buffer);
   return Buffer.concat(chunks);
 }
+
+/** Images whose brightest and darkest fingerprint cells differ less than this are too plain. */
+const MIN_FINGERPRINT_CONTRAST = 12;
+
+/**
+ * A 64-bit difference hash (dHash) of an image: each bit says whether a cell of a 9×8 greyscale
+ * thumbnail is brighter than its right neighbour. Resizing and re-encoding change few bits, so a
+ * small Hamming distance means a near-identical photo (ADR 0013). Null for images too plain to
+ * tell apart, and for files that cannot be read as images.
+ */
+export async function perceptualHash(bytes: Buffer): Promise<bigint | null> {
+  const pixels = await sharp(bytes, { failOn: "error", limitInputPixels: 100_000_000 })
+    .rotate()
+    .greyscale()
+    .resize(9, 8, { fit: "fill" })
+    .raw()
+    .toBuffer()
+    .catch(() => null);
+  if (!pixels || pixels.length !== 72) return null;
+  if (Math.max(...pixels) - Math.min(...pixels) < MIN_FINGERPRINT_CONTRAST) return null;
+  let hash = 0n;
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      const left = pixels[y * 9 + x] as number;
+      const right = pixels[y * 9 + x + 1] as number;
+      hash = (hash << 1n) | (left > right ? 1n : 0n);
+    }
+  }
+  // Stored as a signed PostgreSQL bigint.
+  return BigInt.asIntN(64, hash);
+}

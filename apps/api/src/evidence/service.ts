@@ -25,7 +25,7 @@ import type { AutomatedChecks } from "../checks/worker.js";
 import { ApiError, fromDomainError, notFound } from "../errors.js";
 import { recordTrust } from "../trust/record.js";
 import { findAssignedRequest, lockAssignedRequest } from "../verification/requests.js";
-import { inspectFile, previewImage, publicPhotoCopy, readAll } from "./inspect.js";
+import { inspectFile, perceptualHash, previewImage, publicPhotoCopy, readAll } from "./inspect.js";
 
 type Tx = Prisma.TransactionClient;
 
@@ -489,12 +489,14 @@ export function createEvidenceService({
       await removeQuietly(upload.stagingKey);
 
       try {
-        const file = await inspectFile(await storage.read(storageKey), wantsPublic);
+        const image = upload.mimeType.startsWith("image/");
+        const file = await inspectFile(await storage.read(storageKey), wantsPublic || image);
         if (file.sizeBytes !== upload.sizeBytes) throw new UploadRejected("size_mismatch");
         if (file.detectedMimeType !== upload.mimeType) {
           throw new UploadRejected("file_type_mismatch");
         }
         if (file.sha256 !== upload.sha256) throw new UploadRejected("hash_mismatch");
+        const fingerprint = image ? await perceptualHash(file.bytes as Buffer) : null;
         if (publicKey) {
           const copy = await publicPhotoCopy(
             file.bytes as Buffer,
@@ -558,6 +560,7 @@ export function createEvidenceService({
               description: upload.description,
               capturedAt: upload.capturedAt,
               duplicateOfId: elsewhere?.id ?? null,
+              perceptualHash: fingerprint,
               createdAt: at,
             },
           });

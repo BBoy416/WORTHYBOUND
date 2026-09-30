@@ -171,6 +171,7 @@ export function fakeCheckEngine() {
       problems: [],
       summary: "Consistent with the description.",
       confidence: 0.9,
+      documentNumber: null,
       model: "fake-model-1",
     }),
     report: async (_input: VerifierApplicationInput): Promise<VerifierReportOutcome> => ({

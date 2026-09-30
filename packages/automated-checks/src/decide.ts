@@ -2,8 +2,15 @@ import {
   type AutomatedCheckResult,
   CHECK_PROBLEMS,
   type CheckProblem,
+  DETERMINISTIC_CHECK_PROBLEMS,
   FAILING_CHECK_PROBLEMS,
 } from "@worthybound/shared";
+
+/** Problems the model may report; reuse is found by comparing files and records. */
+export const MODEL_PROBLEMS = CHECK_PROBLEMS.filter(
+  (p): p is Exclude<CheckProblem, (typeof DETERMINISTIC_CHECK_PROBLEMS)[number]> =>
+    !(DETERMINISTIC_CHECK_PROBLEMS as readonly string[]).includes(p),
+);
 
 /** What the model reports about one file, before the decision rule is applied. */
 export interface ModelFinding {
@@ -25,7 +32,7 @@ export function decide(finding: ModelFinding): {
   problems: CheckProblem[];
   confidence: number;
 } {
-  const problems = CHECK_PROBLEMS.filter((p) => finding.problems.includes(p));
+  const problems: CheckProblem[] = MODEL_PROBLEMS.filter((p) => finding.problems.includes(p));
   const confidence = Number.isFinite(finding.confidence)
     ? Math.min(1, Math.max(0, finding.confidence))
     : 0;
@@ -37,4 +44,16 @@ export function decide(finding: ModelFinding): {
     return { result: "PASSED", problems, confidence };
   }
   return { result: "INCONCLUSIVE", problems, confidence };
+}
+
+/**
+ * A document number reduced to letters and digits, so the same number matches however it is
+ * printed; null when too short to identify a document.
+ */
+export function normalizeDocumentNumber(value: string | null): string | null {
+  const normalized = (value ?? "")
+    .normalize("NFKC")
+    .toUpperCase()
+    .replace(/[^\p{L}\p{N}]/gu, "");
+  return normalized.length >= 4 ? normalized.slice(0, 100) : null;
 }

@@ -8,8 +8,8 @@ import type {
   VerifierReportRecommendation,
 } from "@worthybound/shared";
 
-/** Version of the evidence check prompt and decision rule; stored with every result. */
-export const CHECK_VERSION = "evidence-check-v1";
+/** Version of the evidence checks, prompt and decision rule; stored with every result. */
+export const CHECK_VERSION = "evidence-check-v2";
 /** Version of the verifier application report prompt; stored with every report. */
 export const REPORT_VERSION = "verifier-report-v1";
 
@@ -29,6 +29,20 @@ export interface EvidenceCheckInput {
   };
   /** The file to examine, prepared by the caller (images without metadata). */
   file: { mimeType: CheckFileMimeType; data: Uint8Array; filename: string };
+  /** What a PDF says about itself; null for images. Can be forged or missing. */
+  pdfMetadata: PdfMetadata | null;
+}
+
+/** Metadata read from a PDF's document information and XMP (see `readPdfMetadata`). */
+export interface PdfMetadata {
+  producer: string | null;
+  creator: string | null;
+  createdAt: string | null;
+  modifiedAt: string | null;
+  /** Software named in the XMP edit history. */
+  historyAgents: string[];
+  /** Times the file was saved again after it was first written (incremental updates). */
+  incrementalUpdates: number;
 }
 
 export interface EvidenceCheckOutcome {
@@ -37,6 +51,8 @@ export interface EvidenceCheckOutcome {
   /** Detection details, for administrators only. */
   summary: string;
   confidence: number;
+  /** The document's own number (receipt, invoice, certificate) as printed; null if none. */
+  documentNumber: string | null;
   /** Model that produced the result, as reported by the service. */
   model: string;
 }

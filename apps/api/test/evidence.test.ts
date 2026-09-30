@@ -34,6 +34,21 @@ const phonePhoto = (colour = "#336699") =>
 
 const pdf = (text: string = randomUUID()) => Buffer.from(`%PDF-1.7\n% ${text}\n%%EOF\n`);
 
+/** A detailed JPEG (a pattern of waves); plain photos are too simple to fingerprint. */
+const texturedPhoto = (seed: number, size = 256) => {
+  const raw = Buffer.alloc(size * size * 3);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const v =
+        128 + 120 * Math.sin(x / (20 + seed * 9) + seed) * Math.cos(y / (17 + seed * 5) + seed * 2);
+      raw.fill(Math.round(v), (y * size + x) * 3, (y * size + x) * 3 + 3);
+    }
+  }
+  return sharp(raw, { raw: { width: size, height: size, channels: 3 } })
+    .jpeg()
+    .toBuffer();
+};
+
 /** Minimal ISO media file headers, enough for type detection. */
 const mediaFile = (brand: "mp42" | "qt  ") =>
   Buffer.concat([
@@ -815,8 +830,8 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         where: { assetId: await assetId(wbId) },
       });
       expect(stored.map((c) => [c.engine, c.model, c.checkVersion])).toEqual([
-        ["fake", "fake-model-1", "evidence-check-v1"],
-        ["fake", "fake-model-1", "evidence-check-v1"],
+        ["fake", "fake-model-1", "evidence-check-v2"],
+        ["fake", "fake-model-1", "evidence-check-v2"],
       ]);
       expect(stored.map((c) => c.sha256).sort()).toEqual([photo.sha256, receipt.sha256].sort());
       const latest = Math.max(...stored.map((c) => c.createdAt.getTime()));
@@ -844,6 +859,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         problems: ["SCREEN_OR_PRINT"],
         summary: "Moire pattern across the dial: DETAIL-FOR-ADMINS.",
         confidence: 0.85,
+        documentNumber: null,
         model: "fake-model-1",
       });
       try {
@@ -917,6 +933,128 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         status: "FAILED",
         problems: ["REUSED_FILE"],
       });
+    });
+
+    it("fails near-identical photos on another asset without calling the service", async () => {
+      const alice = await owner();
+      const original = await texturedPhoto(1);
+      await added(alice, await asset(alice, true), { body: original });
+      clock.advance(1_000);
+      const wbId = await asset(alice, true);
+      const copy = await added(alice, wbId, {
+        body: await sharp(original).resize(200).jpeg({ quality: 70 }).toBuffer(),
+      });
+      const different = await added(alice, wbId, { body: await texturedPhoto(4) });
+      const plain = await added(alice, wbId, { body: await phonePhoto("#445566") });
+      const fingerprints = await db.prisma.evidence.findMany({
+        where: { id: { in: [copy.id, different.id, plain.id] } },
+        select: { id: true, perceptualHash: true },
+      });
+      expect(fingerprints.find((e) => e.id === plain.id)?.perceptualHash).toBeNull();
+      expect(fingerprints.filter((e) => e.perceptualHash !== null)).toHaveLength(2);
+
+      await consent(alice, wbId, true);
+      engine.evidenceCalls.length = 0;
+      await run();
+      expect(engine.evidenceCalls).toHaveLength(2);
+      const checks = await evidenceChecks(alice, wbId);
+      expect(checks[copy.id]).toMatchObject({ status: "FAILED", problems: ["SIMILAR_PHOTO"] });
+      expect(checks[different.id]).toMatchObject({ status: "PASSED" });
+      expect(checks[plain.id]).toMatchObject({ status: "PASSED" });
+      const stored = await db.prisma.automatedCheck.findFirstOrThrow({
+        where: { evidenceId: copy.id },
+      });
+      expect(stored).toMatchObject({
+        engine: "worthybound",
+        model: "perceptual-hash-v1",
+        confidence: null,
+      });
+    });
+
+    it("fails receipts written by an image editor and sends other PDF metadata along", async () => {
+      const alice = await owner();
+      const wbId = await asset(alice, true);
+      const edited = (text: string) =>
+        Buffer.from(
+          `%PDF-1.4\n% ${text}\n1 0 obj\n<< /Producer (Adobe Photoshop 25.0) >>\nendobj\n%%EOF\n`,
+        );
+      const receipt = await added(alice, wbId, {
+        body: edited(randomUUID()),
+        type: "RECEIPT",
+        mimeType: "application/pdf",
+      });
+      const certificate = await added(alice, wbId, {
+        body: edited(randomUUID()),
+        type: "CERTIFICATE",
+        mimeType: "application/pdf",
+      });
+      await consent(alice, wbId, true);
+      engine.evidenceCalls.length = 0;
+      await run();
+      expect(engine.evidenceCalls.map((c) => c.evidence.type)).toEqual(["CERTIFICATE"]);
+      expect(engine.evidenceCalls[0]?.pdfMetadata).toMatchObject({
+        producer: "Adobe Photoshop 25.0",
+      });
+      const checks = await evidenceChecks(alice, wbId);
+      expect(checks[receipt.id]).toMatchObject({
+        status: "FAILED",
+        problems: ["DOCUMENT_TAMPERING"],
+      });
+      expect(checks[certificate.id]).toMatchObject({ status: "PASSED" });
+      const stored = await db.prisma.automatedCheck.findMany({
+        where: { evidenceId: { in: [receipt.id, certificate.id] } },
+      });
+      expect(stored.find((c) => c.evidenceId === receipt.id)).toMatchObject({
+        engine: "worthybound",
+        model: "pdf-metadata-v1",
+      });
+      expect(stored.find((c) => c.evidenceId === certificate.id)?.summary).toContain(
+        'PDF metadata: producer "Adobe Photoshop 25.0"',
+      );
+    });
+
+    it("fails documents whose number is already on another asset", async () => {
+      const alice = await owner();
+      const first = await asset(alice, true);
+      const second = await asset(alice, true);
+      const printed = ["INV-2024-0042", "inv 2024 0042"];
+      engine.evidence = async () => ({
+        ...(await passing({} as never)),
+        documentNumber: printed.shift() ?? null,
+      });
+      try {
+        const kept = await added(alice, first, {
+          body: pdf(),
+          type: "RECEIPT",
+          mimeType: "application/pdf",
+        });
+        await consent(alice, first, true);
+        await run();
+        clock.advance(1_000);
+        const reused = await added(alice, second, {
+          body: pdf(),
+          type: "RECEIPT",
+          mimeType: "application/pdf",
+        });
+        await consent(alice, second, true);
+        await run();
+        expect((await evidenceChecks(alice, first))[kept.id]).toMatchObject({
+          status: "PASSED",
+        });
+        expect((await evidenceChecks(alice, second))[reused.id]).toMatchObject({
+          status: "FAILED",
+          problems: ["REUSED_DOCUMENT"],
+        });
+        const hashes = await db.prisma.automatedCheck.findMany({
+          where: { evidenceId: { in: [kept.id, reused.id] } },
+          select: { documentNumberHash: true, summary: true },
+        });
+        expect(new Set(hashes.map((h) => h.documentNumberHash)).size).toBe(1);
+        expect(hashes.some((h) => h.summary.includes(first))).toBe(true);
+        expect(JSON.stringify(hashes)).not.toContain("0042");
+      } finally {
+        engine.evidence = passing;
+      }
     });
 
     it("retries outages later and gives up on errors that will not go away", async () => {

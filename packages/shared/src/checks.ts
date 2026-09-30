@@ -15,8 +15,17 @@ export const CHECK_PROBLEMS = [
   "DOCUMENT_MISMATCH",
   "DOCUMENT_TAMPERING",
   "REUSED_FILE",
+  "SIMILAR_PHOTO",
+  "REUSED_DOCUMENT",
 ] as const;
 export type CheckProblem = (typeof CHECK_PROBLEMS)[number];
+
+/** Problems found by comparing files and records, never reported by a model. */
+export const DETERMINISTIC_CHECK_PROBLEMS = [
+  "REUSED_FILE",
+  "SIMILAR_PHOTO",
+  "REUSED_DOCUMENT",
+] as const satisfies readonly CheckProblem[];
 
 /** Problems that suggest a fake rather than a poor file; they fail a check. */
 export const FAILING_CHECK_PROBLEMS: readonly CheckProblem[] = [
@@ -27,6 +36,8 @@ export const FAILING_CHECK_PROBLEMS: readonly CheckProblem[] = [
   "DOCUMENT_MISMATCH",
   "DOCUMENT_TAMPERING",
   "REUSED_FILE",
+  "SIMILAR_PHOTO",
+  "REUSED_DOCUMENT",
 ];
 
 /** What the owner is told for each problem. */
@@ -41,6 +52,8 @@ export const CHECK_PROBLEM_MESSAGES: Record<CheckProblem, string> = {
   DOCUMENT_MISMATCH: "The document does not match the item's details",
   DOCUMENT_TAMPERING: "The document shows signs of alteration",
   REUSED_FILE: "This file is already attached to another asset",
+  SIMILAR_PHOTO: "A near-identical photo is attached to another asset",
+  REUSED_DOCUMENT: "A document with the same number is attached to another asset",
 };
 
 /** File types sent to the AI check; videos and HEIC photos are not checked yet. */
