@@ -15,6 +15,7 @@ import {
 import { formatDate, formatDateTime, humanize } from "../format.js";
 import { Link } from "../router.js";
 import { useSession } from "../session.js";
+import { StartTransfer } from "./Transfers.js";
 import type {
   AutomatedChecksConsent,
   OwnerAsset,
@@ -26,6 +27,7 @@ import type {
 
 const TOKENIZABLE = ["ACTIVE", "VERIFIED", "REVERIFICATION_REQUIRED"];
 const PUBLISHED = ["ACTIVE", "VERIFIED", "REVERIFICATION_REQUIRED"];
+const REPORTABLE = [...PUBLISHED, "TRANSFER_PENDING"];
 
 export function AssetDetailPage({ wbId }: { wbId: string }) {
   const base = `/assets/${encodeURIComponent(wbId)}`;
@@ -254,7 +256,10 @@ function Lifecycle({ asset: a, onChange }: { asset: OwnerAsset; onChange: () => 
           ],
         ]}
       />
-      {PUBLISHED.includes(a.status) && (
+      {a.tokenizationStatus === "TOKENIZED" && REPORTABLE.includes(a.status) && (
+        <StartTransfer asset={a} onChange={onChange} />
+      )}
+      {REPORTABLE.includes(a.status) && (
         <p className="actions">
           <button
             className="ghost small danger"
@@ -270,8 +275,9 @@ function Lifecycle({ asset: a, onChange }: { asset: OwnerAsset; onChange: () => 
             className="ghost small danger"
             disabled={busy}
             onClick={() =>
-              confirm("Report this item stolen? Transfers are blocked until an admin clears it.") &&
-              void act(`${base}/status`, { toStatus: "REPORTED_STOLEN" })
+              confirm(
+                "Report this item stolen? Any open transfer is cancelled, and transfers are blocked until an admin clears it.",
+              ) && void act(`${base}/status`, { toStatus: "REPORTED_STOLEN" })
             }
           >
             Report stolen

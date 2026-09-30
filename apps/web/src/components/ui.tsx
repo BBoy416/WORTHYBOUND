@@ -86,6 +86,7 @@ const TONES: Record<string, string> = {
   OPEN: "wait",
   ASSIGNED: "wait",
   DRAFT: "wait",
+  TRANSFER_PENDING: "wait",
   REPORTED_STOLEN: "bad",
   REPORTED_LOST: "bad",
   DISPUTED: "bad",

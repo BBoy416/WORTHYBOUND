@@ -23,6 +23,7 @@ apps/
                       verification requests, attestations, passports, tokenization, token
                       metadata and the chain sync worker; serves the web app in production
   web/                web app (Vite + React): wallet sign-in, assets, evidence, tokenization,
+                      transfers,
                       verification requests, verifier applications and attestations, admin
                       (verifier review, templates, reviewer roles, AI checks) and public
                       passports

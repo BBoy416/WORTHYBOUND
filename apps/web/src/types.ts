@@ -7,6 +7,7 @@ import type {
   AttestationStatus,
   AutomatedCheckResult,
   CategoryPermissionStatus,
+  ChainTransactionStatus,
   CheckProblem,
   ClaimType,
   EvidenceType,
@@ -18,6 +19,7 @@ import type {
   Role,
   TemplateVersionStatus,
   TokenizationStatus,
+  TransferStatus,
   VerificationLevel,
   VerificationRequestStatus,
   VerifierReportRecommendation,
@@ -306,4 +308,26 @@ export interface VerifierReports {
     reportVersion: string;
     createdAt: string;
   }[];
+}
+
+export interface Transfer {
+  id: string;
+  /** The caller's side of the transfer. */
+  role: "SENDER" | "RECIPIENT";
+  status: TransferStatus;
+  closedReason: string | null;
+  asset: { wbId: string; category: AssetCategory; brand: string | null; model: string | null };
+  fromWalletAddress: string;
+  toWalletAddress: string;
+  /** Unsigned transaction (base64) to sign with the wallet, while accepted. */
+  transaction: string | null;
+  signedBySeller: boolean;
+  signedByBuyer: boolean;
+  awaitingYourSignature: boolean;
+  chain: { status: ChainTransactionStatus; signature: string | null } | null;
+  expiresAt: string;
+  acceptedAt: string | null;
+  completedAt: string | null;
+  cancelledAt: string | null;
+  createdAt: string;
 }

@@ -8,6 +8,7 @@ import { AssetsPage } from "./pages/Assets.js";
 import { HomePage } from "./pages/Home.js";
 import { NewAssetPage } from "./pages/NewAsset.js";
 import { PassportPage } from "./pages/Passport.js";
+import { TransfersPage } from "./pages/Transfers.js";
 import { VerifierQueuePage, VerifierRequestPage } from "./pages/Verifier.js";
 import { VerifierApplyPage } from "./pages/VerifierApply.js";
 import { Link, match, useRouter } from "./router.js";
@@ -24,6 +25,7 @@ function Header() {
       </Link>
       <nav>
         {me && <Link to="/assets">My assets</Link>}
+        {me && <Link to="/transfers">Transfers</Link>}
         {hasRole(me, "VERIFIER") && <Link to="/verifier">Verify</Link>}
         {me && !hasRole(me, "VERIFIER") && <Link to="/verifier/apply">Become a verifier</Link>}
         {(hasRole(me, "ADMIN") || hasRole(me, "VERIFIER_REVIEWER")) && (
@@ -79,6 +81,12 @@ export function Page({ path }: { path: string }) {
     return (
       <SignedIn>
         <AssetDetailPage wbId={m.wbId as string} />
+      </SignedIn>
+    );
+  if (path === "/transfers")
+    return (
+      <SignedIn>
+        <TransfersPage />
       </SignedIn>
     );
   if (path === "/verifier/apply")
