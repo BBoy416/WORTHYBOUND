@@ -25,11 +25,14 @@ export const CAPTURE_SHOTS = [
   "INTERIOR",
   "VIN",
   "CODE",
+  "VIDEO",
 ] as const;
 export type CaptureShot = (typeof CAPTURE_SHOTS)[number];
 
 /** The shot of the item next to the session's code written on paper. */
 export const CAPTURE_CODE_SHOT = "CODE" satisfies CaptureShot;
+/** A video of the item with the code in view; asked only by remote checks (ADR 0014). */
+export const CAPTURE_VIDEO_SHOT = "VIDEO" satisfies CaptureShot;
 
 /** Shots required in a capture session, per category; the code shot comes last. */
 export const CAPTURE_SHOTS_BY_CATEGORY: Record<AssetCategory, readonly CaptureShot[]> = {
@@ -58,4 +61,5 @@ export const CAPTURE_SHOT_INSTRUCTIONS: Record<CaptureShot, string> = {
   INTERIOR: "The interior",
   VIN: "The VIN plate, close enough to read",
   CODE: "The item next to the code written on paper",
+  VIDEO: "A short video turning the item around, with the code on paper in view",
 };

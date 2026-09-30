@@ -195,7 +195,7 @@ describe("evidenceUploadSchema", () => {
     ).toBe(true);
   });
 
-  it("accepts capture shots only as photos with both fields and no client time", () => {
+  it("accepts capture shots only as photos, or the video shot as a video, with both fields and no client time", () => {
     const shot = {
       ...valid,
       type: "PHOTO",
@@ -217,6 +217,15 @@ describe("evidenceUploadSchema", () => {
       "custom:captureShot",
     ]);
     expect(issues(evidenceUploadSchema, { ...shot, capturedAt: "2026-01-01T10:00:00Z" })).toEqual([
+      "custom:captureShot",
+    ]);
+    const video = { ...shot, type: "VIDEO", mimeType: "video/mp4", captureShot: "VIDEO" };
+    expect(issues(evidenceUploadSchema, video)).toEqual([]);
+    expect(issues(evidenceUploadSchema, { ...video, mimeType: "video/quicktime" })).toEqual([]);
+    expect(issues(evidenceUploadSchema, { ...video, captureShot: "DIAL" })).toEqual([
+      "custom:captureShot",
+    ]);
+    expect(issues(evidenceUploadSchema, { ...shot, captureShot: "VIDEO" })).toEqual([
       "custom:captureShot",
     ]);
   });

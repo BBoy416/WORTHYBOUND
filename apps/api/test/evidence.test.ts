@@ -1547,7 +1547,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       expect(row).toMatchObject({
         itemSummary: "The same scratches on the bezel.",
         engine: "fake",
-        checkVersion: "item-match-v1",
+        checkVersion: "item-match-v2",
       });
       expect(row.referenceEvidenceIds).toHaveLength(5);
       await expect(
@@ -1627,6 +1627,201 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       expect(limited.json().error.code).toBe("purchase_check_limit_reached");
       clock.advance(24 * 60 * 60_000);
       expect((await startCheck(bob, wbId)).statusCode).toBe(201);
+    });
+
+    describe("remotely", () => {
+      interface Request {
+        id: string;
+        code: string;
+        expiresAt: string;
+        filmed: boolean;
+        session: { id: string; code: string; shots: { shot: string }[]; expiresAt: string } | null;
+      }
+      const startRemote = (who: Owner, wbId: string) =>
+        call(who, "POST", `/assets/${wbId}/remote-checks`);
+      const requests = async (who: Owner, wbId: string) =>
+        (await call(who, "GET", `/assets/${wbId}/remote-checks`)).json<{ items: Request[] }>()
+          .items;
+      const film = (who: Owner, wbId: string, checkId: string) =>
+        call(who, "POST", `/assets/${wbId}/remote-checks/${checkId}/capture-session`);
+      /** Uploads a shot of the session: the video shot as a video, the others as photos. */
+      const shoot = async (who: Owner, wbId: string, sessionId: string, captureShot: string) =>
+        (
+          await upload(
+            who,
+            wbId,
+            captureShot === "VIDEO"
+              ? {
+                  body: mediaFile("mp42"),
+                  type: "VIDEO",
+                  mimeType: "video/mp4",
+                  captureSessionId: sessionId,
+                  captureShot,
+                }
+              : { body: await texturedPhoto(seed++), captureSessionId: sessionId, captureShot },
+          )
+        ).res;
+
+      it("lets the owner film the item with the buyer's code and compares the photos", async () => {
+        const alice = await owner();
+        const bob = await owner();
+        const { wbId } = await recordedAsset(alice, true);
+        await run();
+
+        const res = await startRemote(bob, wbId);
+        expect(res.statusCode, res.body).toBe(201);
+        expect(res.body).not.toContain(alice.wallet.address);
+        const check = res.json<Check & { kind: string; expiresAt: string }>();
+        expect(check).toMatchObject({
+          kind: "REMOTE",
+          status: "OPEN",
+          owner: { confirmed: false, message: null },
+          item: { videoAvailable: false, result: null },
+        });
+        const code = check.owner.code as string;
+        expect(code).toMatch(/^[A-HJKMNP-Z2-9]{6}$/);
+        expect(new Date(check.expiresAt).getTime() - clock.now().getTime()).toBe(24 * 3_600_000);
+        expect(check.owner.codeExpiresAt).toBe(check.expiresAt);
+        const shots = ["DIAL", "CASEBACK", "CLASP", "SERIAL", "SIDE", "CODE", "VIDEO"];
+        expect(check.item.shots.map((s) => s.shot)).toEqual(shots);
+        expect((await startRemote(bob, wbId)).json().id).toBe(check.id);
+        expect((await startRemote(alice, wbId)).json().error.code).toBe("own_asset");
+
+        // The buyer does not take photos, and the code is not signed.
+        const photo = await sendPhoto(bob, check.id, "DIAL", await texturedPhoto(seed++));
+        expect(photo.json().error.code).toBe("purchase_check_kind");
+        const renew = await call(bob, "POST", `/purchase-checks/${check.id}/owner-code`);
+        expect(renew.json().error.code).toBe("purchase_check_kind");
+        expect((await confirm(alice, wbId, code)).json().error.code).toBe("invalid_code");
+        expect((await call(bob, "POST", `/purchase-checks/${check.id}/video`)).statusCode).toBe(
+          404,
+        );
+
+        // The owner sees the request without the buyer, and films the item with the code.
+        const [request] = await requests(alice, wbId);
+        expect(request).toMatchObject({ id: check.id, code, filmed: false, session: null });
+        expect(JSON.stringify(request)).not.toContain(bob.wallet.address);
+        expect((await call(bob, "GET", `/assets/${wbId}/remote-checks`)).statusCode).toBe(404);
+        expect((await film(bob, wbId, check.id)).statusCode).toBe(404);
+        const started = await film(alice, wbId, check.id);
+        expect(started.statusCode, started.body).toBe(201);
+        const session = started.json<NonNullable<Request["session"]>>();
+        expect(session.code).toBe(code);
+        expect(session.shots.map((s) => s.shot)).toEqual(shots);
+        expect(new Date(session.expiresAt).getTime() - clock.now().getTime()).toBe(15 * 60_000);
+        expect((await film(alice, wbId, check.id)).json().id).toBe(session.id);
+        // The owner's own sessions are separate.
+        const own = await call(alice, "POST", `/assets/${wbId}/capture-sessions`);
+        expect(own.statusCode).toBe(201);
+        expect(own.json().id).not.toBe(session.id);
+
+        const wrongType = await requestUpload(alice, wbId, {
+          body: await texturedPhoto(seed++),
+          captureSessionId: session.id,
+          captureShot: "VIDEO",
+        });
+        expect(wrongType.statusCode).toBe(400);
+        for (const shot of shots.slice(0, -1)) {
+          expect((await shoot(alice, wbId, session.id, shot)).statusCode).toBe(201);
+        }
+        const progress = await getCheck(bob, check.id);
+        expect(progress.item.shots.filter((s) => s.receivedAt)).toHaveLength(6);
+        expect(progress.owner.confirmed).toBe(false);
+
+        clock.advance(60_000);
+        engine.matchCalls.length = 0;
+        const video = await shoot(alice, wbId, session.id, "VIDEO");
+        expect(video.statusCode, video.body).toBe(201);
+        const filmed = await getCheck(bob, check.id);
+        expect(filmed).toMatchObject({
+          status: "OPEN",
+          owner: { confirmed: true, confirmedAt: clock.now().toISOString(), code },
+          item: { comparing: true, videoAvailable: true, result: null },
+        });
+        expect((await requests(alice, wbId))[0]).toMatchObject({ filmed: true });
+
+        const link = await call(bob, "POST", `/purchase-checks/${check.id}/video`);
+        expect(link.statusCode, link.body).toBe(200);
+        const downloaded = await fetch(link.json().url);
+        expect(downloaded.status).toBe(200);
+        expect(downloaded.headers.get("content-disposition")).toContain(
+          `remote-check-${check.id}.mp4`,
+        );
+        expect((await call(alice, "POST", `/purchase-checks/${check.id}/video`)).statusCode).toBe(
+          404,
+        );
+
+        await run();
+        expect(engine.matchCalls).toHaveLength(1);
+        // Compared with the photos recorded before, not with the session filmed for the check.
+        const sent = engine.matchCalls[0];
+        expect(sent?.reference.map((r) => r.label)).toEqual([
+          "owner photo: DIAL",
+          "owner photo: CASEBACK",
+          "owner photo: CLASP",
+          "owner photo: SERIAL",
+          "owner photo: SIDE",
+        ]);
+        expect(sent?.candidate.map((c) => c.label)).toEqual([
+          "seller photo: DIAL",
+          "seller photo: CASEBACK",
+          "seller photo: CLASP",
+          "seller photo: SERIAL",
+          "seller photo: SIDE",
+        ]);
+        const row = await db.prisma.purchaseCheck.findUniqueOrThrow({ where: { id: check.id } });
+        const filmedSession = await db.prisma.evidence.findMany({
+          where: { captureSessionId: session.id },
+          select: { id: true },
+        });
+        expect(row.referenceEvidenceIds.some((id) => filmedSession.some((e) => e.id === id))).toBe(
+          false,
+        );
+        expect((await getCheck(bob, check.id)).item).toMatchObject({
+          comparing: false,
+          result: "MATCH",
+          videoAvailable: true,
+        });
+        expect(await requests(alice, wbId)).toEqual([]);
+        expect(
+          await db.prisma.auditLog.count({
+            where: {
+              action: { in: ["purchase_check.filmed", "purchase_check.video_viewed"] },
+              targetId: check.id,
+            },
+          }),
+        ).toBe(2);
+        await expect(
+          db.prisma.purchaseCheck.update({
+            where: { id: check.id },
+            data: { ownerCode: "ABCDEF" },
+          }),
+        ).rejects.toThrow(/remote check code cannot be changed/);
+      });
+
+      it("expires when the owner does not film in time, and is limited per item per day", async () => {
+        const alice = await owner();
+        const bob = await owner();
+        const wbId = await asset(alice, true);
+        const check = (await startRemote(bob, wbId)).json<Check>();
+        clock.advance(24 * 3_600_000 - 5 * 60_000);
+        // A session ends with the check.
+        const session = (await film(alice, wbId, check.id)).json<{ expiresAt: string }>();
+        expect(session.expiresAt).toBe(new Date(clock.now().getTime() + 5 * 60_000).toISOString());
+        clock.advance(5 * 60_000);
+        expect((await getCheck(bob, check.id)).status).toBe("EXPIRED");
+        expect((await film(alice, wbId, check.id)).json().error.code).toBe("purchase_check_closed");
+        expect(await requests(alice, wbId)).toEqual([]);
+
+        for (let i = 0; i < 3; i++) {
+          expect((await startRemote(await owner(), wbId)).statusCode).toBe(201);
+        }
+        // An in-person check is separate from the buyer's remote one.
+        expect((await startCheck(bob, wbId)).statusCode).toBe(201);
+        const limited = await startRemote(await owner(), wbId);
+        expect(limited.statusCode).toBe(429);
+        expect(limited.json().error.code).toBe("purchase_check_limit_reached");
+      });
     });
   });
 });

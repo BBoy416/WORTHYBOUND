@@ -560,7 +560,8 @@ model Evidence {
   reviewReason          String?
   /// Set on evidence added by the verifier assigned to this request (source VERIFIER).
   verificationRequestId String?            @db.Uuid
-  /// Set on photos taken in a capture session (ADR 0013), with the shot they are.
+  /// Set on photos taken in a capture session (ADR 0013), with the shot they are; the VIDEO shot
+  /// of a remote check's session is a video (ADR 0014).
   captureSessionId      String?            @db.Uuid
   captureShot           String?
   originalFilename      String?
@@ -642,26 +643,31 @@ enum CaptureSessionStatus {
 
 /// A timed photo session (ADR 0013): the owner photographs the required shots with the app's
 /// camera, one of them next to the one-time code written on paper, while the code is valid.
+/// A session for a remote check uses the check's code and adds a video (ADR 0014).
 model CaptureSession {
-  id          String               @id @default(uuid(7)) @db.Uuid
-  assetId     String               @db.Uuid
-  ownerId     String               @db.Uuid
-  code        String
+  id              String               @id @default(uuid(7)) @db.Uuid
+  assetId         String               @db.Uuid
+  ownerId         String               @db.Uuid
+  /// The remote check the seller films the item for; null for the owner's own sessions.
+  purchaseCheckId String?              @db.Uuid
+  code            String
   /// Shots required for the asset's category when the session started (CAPTURE_SHOTS).
-  shots       String[]
-  status      CaptureSessionStatus @default(OPEN)
-  expiresAt   DateTime             @db.Timestamptz(3)
-  completedAt DateTime?            @db.Timestamptz(3)
-  createdAt   DateTime             @default(now()) @db.Timestamptz(3)
-  updatedAt   DateTime             @updatedAt @db.Timestamptz(3)
+  shots           String[]
+  status          CaptureSessionStatus @default(OPEN)
+  expiresAt       DateTime             @db.Timestamptz(3)
+  completedAt     DateTime?            @db.Timestamptz(3)
+  createdAt       DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime             @updatedAt @db.Timestamptz(3)
 
-  asset    Asset            @relation(fields: [assetId], references: [id], onDelete: Restrict)
-  owner    User             @relation(fields: [ownerId], references: [id], onDelete: Restrict)
-  evidence Evidence[]
-  uploads  EvidenceUpload[]
+  asset         Asset            @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  owner         User             @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  purchaseCheck PurchaseCheck?   @relation(fields: [purchaseCheckId], references: [id], onDelete: Restrict)
+  evidence      Evidence[]
+  uploads       EvidenceUpload[]
 
   @@index([assetId, createdAt])
   @@index([ownerId, createdAt])
+  @@index([purchaseCheckId])
   @@map("capture_sessions")
 }
 
@@ -679,24 +685,35 @@ enum ItemMatchResult {
   INCONCLUSIVE
 }
 
-/// A buyer's check of an item before buying, in person (ADR 0014): the seller signs the buyer's
-/// one-time code with the owner's wallet, and the buyer photographs the item, which is compared
-/// with the asset's recorded photos. The buyer never learns the seller's wallet or identity.
+enum PurchaseCheckKind {
+  IN_PERSON
+  /// The seller films the item with the check's code in a capture session.
+  REMOTE
+}
+
+/// A buyer's check of an item before buying (ADR 0014). In person, the seller signs the buyer's
+/// one-time code with the owner's wallet, and the buyer photographs the item. Remotely, the seller
+/// films the item with the code in view in a capture session. The photos are compared with the
+/// asset's recorded photos. The buyer never learns the seller's wallet or identity.
 model PurchaseCheck {
   id                   String              @id @default(uuid(7)) @db.Uuid
   assetId              String              @db.Uuid
   buyerId              String              @db.Uuid
+  kind                 PurchaseCheckKind   @default(IN_PERSON)
   /// One-time code the seller signs (ownerConfirmationMessage); replaced when it expires.
+  /// For a remote check, the code the seller shows in the video, valid until the check expires.
   ownerCode            String
   ownerCodeExpiresAt   DateTime            @db.Timestamptz(3)
   /// The owner who signed the code, their signature (base58) and when.
   ownerConfirmedById   String?             @db.Uuid
   ownerSignature       String?
   ownerConfirmedAt     DateTime?           @db.Timestamptz(3)
-  /// Shots the buyer takes (purchaseCheckShots) when the check started.
+  /// Shots the buyer takes (purchaseCheckShots) when the check started; for a remote check, the
+  /// shots the seller takes (remoteCheckShots).
   shots                String[]
   status               PurchaseCheckStatus @default(OPEN)
-  /// When the last photo arrived and the comparison was queued.
+  /// When the last photo arrived (or the seller's session completed) and the comparison was
+  /// queued.
   photosCompletedAt    DateTime?           @db.Timestamptz(3)
   itemResult           ItemMatchResult?
   /// Why the result is INCONCLUSIVE without a comparison (ITEM_MATCH_REASONS).
@@ -718,6 +735,7 @@ model PurchaseCheck {
   buyer            User                 @relation("PurchaseCheckBuyer", fields: [buyerId], references: [id], onDelete: Restrict)
   ownerConfirmedBy User?                @relation("PurchaseCheckOwner", fields: [ownerConfirmedById], references: [id], onDelete: Restrict)
   photos           PurchaseCheckPhoto[]
+  captureSessions  CaptureSession[]
 
   @@index([assetId, createdAt])
   @@index([buyerId, createdAt])

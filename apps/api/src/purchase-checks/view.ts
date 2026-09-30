@@ -1,4 +1,10 @@
-import type { Asset, Evidence, PurchaseCheck, PurchaseCheckPhoto } from "@worthybound/database";
+import type {
+  Asset,
+  CaptureSession,
+  Evidence,
+  PurchaseCheck,
+  PurchaseCheckPhoto,
+} from "@worthybound/database";
 import {
   ASSET_CATEGORIES,
   ASSET_STATUSES,
@@ -9,16 +15,24 @@ import {
   ITEM_MATCH_RESULTS,
   type ItemMatchReason,
   ownerConfirmationMessage,
+  PURCHASE_CHECK_KINDS,
   PURCHASE_CHECK_STATUSES,
   publicEvidencePath,
   VERIFICATION_LEVELS,
 } from "@worthybound/shared";
 import { z } from "zod";
+import { captureSessionSchema, type SessionRecord, toCaptureSession } from "../capture/view.js";
 
 export type CheckRecord = PurchaseCheck & {
   asset: Asset;
   photos: Pick<PurchaseCheckPhoto, "shot" | "createdAt">[];
+  /** A remote check's latest capture session, if the seller started one. */
+  captureSessions: (Pick<CaptureSession, "ownerId" | "status" | "expiresAt" | "completedAt"> & {
+    evidence: Pick<Evidence, "captureShot" | "createdAt">[];
+  })[];
 };
+
+export type RemoteRequestRecord = PurchaseCheck & { captureSessions: SessionRecord[] };
 
 export type RecordedPhoto = Pick<Evidence, "id" | "publicStorageKey">;
 
@@ -28,6 +42,7 @@ const BLOCKED = ["REPORTED_LOST", "REPORTED_STOLEN", "DISPUTED", "REVOKED"] as c
 /** The buyer's view of a check. Never names the seller's wallet or identity. */
 export const purchaseCheckSchema = z.object({
   id: z.uuid(),
+  kind: z.enum(PURCHASE_CHECK_KINDS),
   status: z.enum(PURCHASE_CHECK_STATUSES),
   asset: z.object({
     wbId: z.string(),
@@ -40,13 +55,20 @@ export const purchaseCheckSchema = z.object({
     transferBlocked: z.boolean(),
   }),
   owner: z.object({
-    /** The current owner signed the buyer's code with the owner's wallet. */
+    /**
+     * The current owner signed the buyer's code with the owner's wallet or, remotely, filmed the
+     * item with it.
+     */
     confirmed: z.boolean(),
     confirmedAt: z.iso.datetime().nullable(),
-    /** Code for the seller to sign, while it is valid and not yet signed. */
+    /**
+     * Code for the seller to sign, while it is valid and not yet signed. Remotely, the code the
+     * seller shows in the video, always shown so the buyer can look for it.
+     */
     code: z.string().nullable(),
+    /** Until when the seller can sign or film. */
     codeExpiresAt: z.iso.datetime().nullable(),
-    /** What the seller's wallet shows when signing. */
+    /** What the seller's wallet shows when signing; null for remote checks. */
     message: z.string().nullable(),
   }),
   item: z.object({
@@ -59,6 +81,8 @@ export const purchaseCheckSchema = z.object({
     ),
     /** Every photo arrived and the comparison is running. */
     comparing: z.boolean(),
+    /** The seller's video for a remote check can be watched. */
+    videoAvailable: z.boolean(),
     result: z.enum(ITEM_MATCH_RESULTS).nullable(),
     /** Why the result is inconclusive without a comparison. */
     reason: z.string().nullable(),
@@ -79,17 +103,31 @@ export function toPurchaseCheck(
   at: Date,
 ): PurchaseCheckView {
   const { asset } = check;
-  const taken = new Map(check.photos.map((p) => [p.shot, p.createdAt]));
-  const confirmed = check.ownerConfirmedAt !== null && check.ownerConfirmedById === asset.ownerId;
-  const codeValid =
-    check.status === "OPEN" &&
-    check.ownerConfirmedAt === null &&
-    check.ownerCodeExpiresAt > at &&
-    check.expiresAt > at;
+  const remote = check.kind === "REMOTE";
+  const session = check.captureSessions[0];
+  const filming = session && (session.status === "COMPLETED" || session.expiresAt > at);
+  const taken = new Map<string | null, Date>(
+    remote
+      ? filming
+        ? session.evidence.map((e) => [e.captureShot, e.createdAt])
+        : []
+      : check.photos.map((p) => [p.shot, p.createdAt]),
+  );
+  const filmed = session?.status === "COMPLETED" && session.ownerId === asset.ownerId;
+  const confirmed = remote
+    ? filmed
+    : check.ownerConfirmedAt !== null && check.ownerConfirmedById === asset.ownerId;
   const expired =
     check.status === "OPEN" && check.photosCompletedAt === null && check.expiresAt <= at;
+  const codeValid = remote
+    ? check.status === "OPEN" && check.photosCompletedAt === null && !expired
+    : check.status === "OPEN" &&
+      check.ownerConfirmedAt === null &&
+      check.ownerCodeExpiresAt > at &&
+      check.expiresAt > at;
   return {
     id: check.id,
+    kind: check.kind,
     status: expired ? "EXPIRED" : check.status,
     asset: {
       wbId: asset.wbId,
@@ -102,10 +140,12 @@ export function toPurchaseCheck(
     },
     owner: {
       confirmed,
-      confirmedAt: confirmed ? iso(check.ownerConfirmedAt) : null,
-      code: codeValid ? check.ownerCode : null,
+      confirmedAt: confirmed
+        ? iso(remote ? (session?.completedAt ?? null) : check.ownerConfirmedAt)
+        : null,
+      code: codeValid || remote ? check.ownerCode : null,
       codeExpiresAt: codeValid ? iso(check.ownerCodeExpiresAt) : null,
-      message: codeValid ? ownerConfirmationMessage(asset.wbId, check.ownerCode) : null,
+      message: codeValid && !remote ? ownerConfirmationMessage(asset.wbId, check.ownerCode) : null,
     },
     item: {
       shots: (check.shots as CaptureShot[]).map((shot) => ({
@@ -114,6 +154,7 @@ export function toPurchaseCheck(
         receivedAt: iso(taken.get(shot) ?? null),
       })),
       comparing: check.photosCompletedAt !== null && check.itemResult === null,
+      videoAvailable: remote && filmed,
       result: check.itemResult,
       reason: check.itemReason
         ? (ITEM_MATCH_REASONS[check.itemReason as ItemMatchReason] ?? null)
@@ -124,6 +165,32 @@ export function toPurchaseCheck(
         .map((e) => ({ path: publicEvidencePath(asset.wbId, e.id) })),
     },
     expiresAt: check.expiresAt.toISOString(),
+    createdAt: check.createdAt.toISOString(),
+  };
+}
+
+/** The owner's view of a remote check of their asset. Never names the buyer. */
+export const remoteRequestSchema = z.object({
+  id: z.uuid(),
+  /** Write this on paper and keep it in view while filming. */
+  code: z.string(),
+  expiresAt: z.iso.datetime(),
+  /** The item was filmed and the buyer can see the result. */
+  filmed: z.boolean(),
+  /** The latest capture session for the check, if one was started. */
+  session: captureSessionSchema.nullable(),
+  createdAt: z.iso.datetime(),
+});
+export type RemoteRequestView = z.infer<typeof remoteRequestSchema>;
+
+export function toRemoteRequest(check: RemoteRequestRecord, at: Date): RemoteRequestView {
+  const session = check.captureSessions[0];
+  return {
+    id: check.id,
+    code: check.ownerCode,
+    expiresAt: check.expiresAt.toISOString(),
+    filmed: check.photosCompletedAt !== null,
+    session: session ? toCaptureSession(session, at) : null,
     createdAt: check.createdAt.toISOString(),
   };
 }

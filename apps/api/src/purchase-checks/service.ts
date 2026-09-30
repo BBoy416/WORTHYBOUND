@@ -3,6 +3,8 @@ import { CHECK_VERSION } from "@worthybound/automated-checks";
 import type { Evidence, Prisma, PrismaClient } from "@worthybound/database";
 import {
   CAPTURE_CODE_SHOT,
+  CAPTURE_SESSION_MINUTES,
+  CAPTURE_VIDEO_SHOT,
   type CaptureShot,
   type ItemMatchReason,
   MAX_REFERENCE_PHOTOS,
@@ -11,7 +13,11 @@ import {
   PURCHASE_CHECK_MINUTES,
   PURCHASE_CHECKS_PER_ASSET_PER_DAY,
   PURCHASE_CHECKS_PER_BUYER_PER_DAY,
+  type PurchaseCheckKind,
   purchaseCheckShots,
+  REMOTE_CHECK_HOURS,
+  REMOTE_CHECKS_PER_ASSET_PER_DAY,
+  remoteCheckShots,
 } from "@worthybound/shared";
 import type { Storage } from "@worthybound/storage";
 import type { OwnerConfirmationInput } from "@worthybound/validation";
@@ -19,12 +25,13 @@ import { fileTypeFromBuffer } from "file-type";
 import type { Actor } from "../assets/service.js";
 import { writeAudit } from "../audit.js";
 import { verifyWalletSignature } from "../auth/siws.js";
-import { captureCode } from "../capture/service.js";
+import { captureCode, withEvidence } from "../capture/service.js";
+import type { SessionRecord } from "../capture/view.js";
 import type { AutomatedChecks } from "../checks/worker.js";
 import { decodeBase58 } from "../crypto.js";
 import { ApiError, notFound } from "../errors.js";
 import { checkImage } from "../evidence/inspect.js";
-import type { CheckRecord } from "./view.js";
+import type { CheckRecord, RemoteRequestRecord } from "./view.js";
 
 type Tx = Prisma.TransactionClient;
 type Db = Tx | PrismaClient;
@@ -35,13 +42,38 @@ export const PURCHASE_CHECK_PREFIX = "purchase-checks/";
 export const MAX_CHECK_PHOTO_BYTES = 10 * 1024 * 1024;
 const PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
+const DOWNLOAD_EXPIRY_SECONDS = 5 * 60;
+const VIDEO_EXTENSIONS: Record<string, string> = { "video/mp4": "mp4", "video/quicktime": "mov" };
+
+/** A remote check's latest session, whose shots show the buyer the seller's progress. */
+const latestSession = {
+  orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+  take: 1,
+  select: {
+    ownerId: true,
+    status: true,
+    expiresAt: true,
+    completedAt: true,
+    evidence: { select: { captureShot: true, createdAt: true } },
+  },
+} satisfies Prisma.CaptureSessionFindManyArgs;
+
 const withPhotos = {
   asset: true,
   photos: { select: { shot: true, createdAt: true } },
+  captureSessions: latestSession,
 } satisfies Prisma.PurchaseCheckInclude;
 
 const checkClosed = () =>
   new ApiError(409, "purchase_check_closed", "This check has ended; start a new one");
+const wrongKind = (kind: PurchaseCheckKind) =>
+  new ApiError(
+    409,
+    "purchase_check_kind",
+    kind === "REMOTE"
+      ? "This is a remote check; the seller films the item"
+      : "This check is in person; the buyer photographs the item",
+  );
 
 /**
  * The asset's recorded photos to compare a buyer's photos with (ADR 0014): the verifier's, then
@@ -62,8 +94,9 @@ export async function referencePhotos(db: Db, assetId: string): Promise<Evidence
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: MAX_REFERENCE_PHOTOS,
     }),
+    // Sessions filmed for a remote check are compared, not compared with.
     db.captureSession.findFirst({
-      where: { assetId, status: "COMPLETED" },
+      where: { assetId, purchaseCheckId: null, status: "COMPLETED" },
       orderBy: [{ completedAt: "desc" }, { id: "desc" }],
       select: { id: true, shots: true },
     }),
@@ -116,6 +149,56 @@ export async function recordInconclusive(
     },
     null,
   );
+}
+
+/**
+ * Records that the seller filmed the item for a remote check and queues the comparison, when the
+ * seller's capture session completes. Run in the session's transaction; tells whether a
+ * comparison was queued.
+ */
+export async function remoteCheckFilmed(
+  tx: Tx,
+  checkId: string,
+  captureSessionId: string,
+  actor: Actor,
+  at: Date,
+  checksAvailable: boolean,
+): Promise<boolean> {
+  await tx.$queryRaw`SELECT 1 FROM "purchase_checks" WHERE "id" = ${checkId}::uuid FOR UPDATE`;
+  const check = await tx.purchaseCheck.findUniqueOrThrow({ where: { id: checkId } });
+  if (check.status !== "OPEN" || check.photosCompletedAt !== null || check.expiresAt < at) {
+    return false;
+  }
+  await tx.purchaseCheck.update({
+    where: { id: checkId },
+    data: { photosCompletedAt: at, updatedAt: at },
+  });
+  await writeAudit(
+    tx,
+    {
+      actorId: actor.userId,
+      action: "purchase_check.filmed",
+      targetType: "purchase_check",
+      targetId: checkId,
+      metadata: { captureSessionId },
+    },
+    actor.fp,
+  );
+  if (!checksAvailable) {
+    await recordInconclusive(tx, checkId, "CHECKS_UNAVAILABLE", at);
+    return false;
+  }
+  await tx.automatedJob.create({
+    data: {
+      kind: "ITEM_MATCH",
+      entityId: checkId,
+      requestedById: actor.userId,
+      runAfter: at,
+      createdAt: at,
+      updatedAt: at,
+    },
+  });
+  return true;
 }
 
 export interface PurchaseCheckServiceOptions {
@@ -174,72 +257,103 @@ export function createPurchaseCheckService({
     }
   }
 
-  return {
-    /**
-     * Starts a check of a published item, or returns the buyer's open one. Checks are limited per
-     * buyer and per item per day, so they cannot be used to probe other people's items.
-     */
-    async start(wbId: string, actor: Actor) {
-      const at = now();
-      const result = await prisma.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT 1 FROM "assets" WHERE "wbId" = ${wbId} FOR UPDATE`;
-        const asset = await tx.asset.findUnique({ where: { wbId } });
-        if (!asset || asset.publishedAt === null || asset.status === "REVOKED") {
-          throw notFound("Asset");
-        }
-        if (asset.ownerId === actor.userId) {
-          throw new ApiError(422, "own_asset", "You cannot check an item you own before buying it");
-        }
-        await expireDue(tx, { assetId: asset.id }, at);
-        const open = await tx.purchaseCheck.findFirst({
-          where: { assetId: asset.id, buyerId: actor.userId, status: "OPEN" },
-          orderBy: { createdAt: "desc" },
-          include: withPhotos,
-        });
-        if (open) return { check: open, created: false };
+  /** The owner's published asset, locked; 404 for anyone else. */
+  async function lockOwnedAsset(tx: Tx, wbId: string, actor: Actor) {
+    await tx.$queryRaw`SELECT 1 FROM "assets" WHERE "wbId" = ${wbId} FOR UPDATE`;
+    const asset = await tx.asset.findUnique({ where: { wbId } });
+    if (!asset || asset.ownerId !== actor.userId || asset.publishedAt === null) {
+      throw notFound("Asset");
+    }
+    return asset;
+  }
 
-        const since = new Date(at.getTime() - DAY_MS);
-        const [forBuyer, forAsset] = await Promise.all([
-          tx.purchaseCheck.count({ where: { buyerId: actor.userId, createdAt: { gt: since } } }),
-          tx.purchaseCheck.count({ where: { assetId: asset.id, createdAt: { gt: since } } }),
-        ]);
-        if (
-          forBuyer >= PURCHASE_CHECKS_PER_BUYER_PER_DAY ||
-          forAsset >= PURCHASE_CHECKS_PER_ASSET_PER_DAY
-        ) {
-          throw new ApiError(
-            429,
-            "purchase_check_limit_reached",
-            "Too many checks were started today; try again tomorrow",
-          );
-        }
-        const check = await tx.purchaseCheck.create({
-          data: {
-            assetId: asset.id,
-            buyerId: actor.userId,
-            ownerCode: captureCode(),
-            ownerCodeExpiresAt: new Date(at.getTime() + OWNER_CODE_MINUTES * 60_000),
-            shots: purchaseCheckShots(asset.category),
-            expiresAt: new Date(at.getTime() + PURCHASE_CHECK_MINUTES * 60_000),
-            createdAt: at,
-          },
-          include: withPhotos,
-        });
-        await writeAudit(
-          tx,
-          {
-            actorId: actor.userId,
-            action: "purchase_check.started",
-            targetType: "asset",
-            targetId: asset.wbId,
-            metadata: { purchaseCheckId: check.id },
-          },
-          actor.fp,
-        );
-        return { check, created: true };
+  /**
+   * Starts a check of a published item, or returns the buyer's open one of that kind. Checks are
+   * limited per buyer and per item per day, so they cannot be used to probe other people's items;
+   * remote checks, which ask the seller to film the item, are limited further per item.
+   */
+  async function open(wbId: string, kind: PurchaseCheckKind, actor: Actor) {
+    const at = now();
+    const result = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT 1 FROM "assets" WHERE "wbId" = ${wbId} FOR UPDATE`;
+      const asset = await tx.asset.findUnique({ where: { wbId } });
+      if (!asset || asset.publishedAt === null || asset.status === "REVOKED") {
+        throw notFound("Asset");
+      }
+      if (asset.ownerId === actor.userId) {
+        throw new ApiError(422, "own_asset", "You cannot check an item you own before buying it");
+      }
+      await expireDue(tx, { assetId: asset.id }, at);
+      const current = await tx.purchaseCheck.findFirst({
+        where: { assetId: asset.id, buyerId: actor.userId, kind, status: "OPEN" },
+        orderBy: { createdAt: "desc" },
+        include: withPhotos,
       });
-      return { ...(await withRecorded(result.check)), created: result.created };
-    },
+      if (current) return { check: current, created: false };
+
+      const since = new Date(at.getTime() - DAY_MS);
+      const [forBuyer, forAsset, remoteForAsset] = await Promise.all([
+        tx.purchaseCheck.count({ where: { buyerId: actor.userId, createdAt: { gt: since } } }),
+        tx.purchaseCheck.count({ where: { assetId: asset.id, createdAt: { gt: since } } }),
+        tx.purchaseCheck.count({
+          where: { assetId: asset.id, kind: "REMOTE", createdAt: { gt: since } },
+        }),
+      ]);
+      if (
+        forBuyer >= PURCHASE_CHECKS_PER_BUYER_PER_DAY ||
+        forAsset >= PURCHASE_CHECKS_PER_ASSET_PER_DAY ||
+        (kind === "REMOTE" && remoteForAsset >= REMOTE_CHECKS_PER_ASSET_PER_DAY)
+      ) {
+        throw new ApiError(
+          429,
+          "purchase_check_limit_reached",
+          "Too many checks were started today; try again tomorrow",
+        );
+      }
+      const remoteExpiry = new Date(at.getTime() + REMOTE_CHECK_HOURS * 60 * 60_000);
+      const check = await tx.purchaseCheck.create({
+        data: {
+          assetId: asset.id,
+          buyerId: actor.userId,
+          kind,
+          ownerCode: captureCode(),
+          ...(kind === "REMOTE"
+            ? {
+                ownerCodeExpiresAt: remoteExpiry,
+                shots: remoteCheckShots(asset.category),
+                expiresAt: remoteExpiry,
+              }
+            : {
+                ownerCodeExpiresAt: new Date(at.getTime() + OWNER_CODE_MINUTES * 60_000),
+                shots: purchaseCheckShots(asset.category),
+                expiresAt: new Date(at.getTime() + PURCHASE_CHECK_MINUTES * 60_000),
+              }),
+          createdAt: at,
+        },
+        include: withPhotos,
+      });
+      await writeAudit(
+        tx,
+        {
+          actorId: actor.userId,
+          action: "purchase_check.started",
+          targetType: "asset",
+          targetId: asset.wbId,
+          metadata: { purchaseCheckId: check.id, kind },
+        },
+        actor.fp,
+      );
+      return { check, created: true };
+    });
+    return { ...(await withRecorded(result.check)), created: result.created };
+  }
+
+  return {
+    /** Starts a check in person, or returns the buyer's open one. */
+    start: (wbId: string, actor: Actor) => open(wbId, "IN_PERSON", actor),
+
+    /** Requests a remote check: the seller films the item with the code within 24 hours. */
+    startRemote: (wbId: string, actor: Actor) => open(wbId, "REMOTE", actor),
 
     async get(id: string, actor: Actor) {
       await expireDue(prisma, { id, buyerId: actor.userId }, now());
@@ -251,6 +365,7 @@ export function createPurchaseCheckService({
       const at = now();
       const check = await prisma.$transaction(async (tx) => {
         const current = await lockCheck(tx, id, actor);
+        if (current.kind !== "IN_PERSON") throw wrongKind(current.kind);
         if (current.status !== "OPEN" || current.expiresAt <= at) throw checkClosed();
         if (current.ownerConfirmedAt !== null) return current;
         return tx.purchaseCheck.update({
@@ -284,6 +399,7 @@ export function createPurchaseCheckService({
         const check = await tx.purchaseCheck.findFirst({
           where: {
             assetId: asset.id,
+            kind: "IN_PERSON",
             ownerCode: input.code,
             ownerConfirmedAt: null,
             status: { not: "EXPIRED" },
@@ -338,6 +454,7 @@ export function createPurchaseCheckService({
     async addPhoto(id: string, shot: CaptureShot, body: Buffer, actor: Actor) {
       const at = now();
       const assertOpen = (check: CheckRecord) => {
+        if (check.kind !== "IN_PERSON") throw wrongKind(check.kind);
         if (check.status !== "OPEN" || check.photosCompletedAt !== null || check.expiresAt <= at) {
           throw checkClosed();
         }
@@ -423,6 +540,123 @@ export function createPurchaseCheckService({
       });
       if (!photo) throw notFound("Photo");
       return storage.read(photo.storageKey);
+    },
+
+    /**
+     * A 5-minute link to the video the seller filmed for the buyer's remote check. The video is
+     * private evidence of the asset, shown only to this buyer.
+     */
+    async video(id: string, actor: Actor) {
+      const check = await buyersCheck(prisma, id, actor);
+      if (check.kind !== "REMOTE") throw wrongKind(check.kind);
+      const video = await prisma.evidence.findFirst({
+        where: {
+          captureShot: CAPTURE_VIDEO_SHOT,
+          captureSession: { purchaseCheckId: id, status: "COMPLETED" },
+        },
+      });
+      if (!video) throw notFound("Video");
+      const link = await storage.presignDownload({
+        key: video.storageKey,
+        filename: `remote-check-${id}.${VIDEO_EXTENSIONS[video.mimeType] ?? "mp4"}`,
+        contentType: video.mimeType,
+        expiresInSeconds: DOWNLOAD_EXPIRY_SECONDS,
+      });
+      await writeAudit(
+        prisma,
+        {
+          actorId: actor.userId,
+          action: "purchase_check.video_viewed",
+          targetType: "purchase_check",
+          targetId: id,
+          metadata: { evidenceId: video.id },
+        },
+        actor.fp,
+      );
+      return link;
+    },
+
+    /** The asset's open remote checks, for its owner; never names the buyers. */
+    async remoteRequests(wbId: string, actor: Actor): Promise<RemoteRequestRecord[]> {
+      const at = now();
+      const asset = await prisma.asset.findUnique({ where: { wbId } });
+      if (!asset || asset.ownerId !== actor.userId || asset.publishedAt === null) {
+        throw notFound("Asset");
+      }
+      await expireDue(prisma, { assetId: asset.id, kind: "REMOTE" }, at);
+      return prisma.purchaseCheck.findMany({
+        where: { assetId: asset.id, kind: "REMOTE", status: "OPEN" },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        include: {
+          captureSessions: { orderBy: latestSession.orderBy, take: 1, include: withEvidence },
+        },
+      });
+    },
+
+    /**
+     * Starts the capture session in which the owner films the item for a remote check, with the
+     * check's code and shots, or returns the open one. The session ends with the check at the
+     * latest.
+     */
+    async startRemoteSession(
+      wbId: string,
+      checkId: string,
+      actor: Actor,
+    ): Promise<{ session: SessionRecord; created: boolean }> {
+      const at = now();
+      return prisma.$transaction(async (tx) => {
+        const asset = await lockOwnedAsset(tx, wbId, actor);
+        if (asset.status === "REVOKED") {
+          throw new ApiError(409, "asset_revoked", "Evidence cannot be added to a revoked asset");
+        }
+        await tx.$queryRaw`SELECT 1 FROM "purchase_checks" WHERE "id" = ${checkId}::uuid FOR UPDATE`;
+        const check = await tx.purchaseCheck.findUnique({ where: { id: checkId } });
+        if (!check || check.assetId !== asset.id || check.kind !== "REMOTE") {
+          throw notFound("Check");
+        }
+        if (check.status !== "OPEN" || check.photosCompletedAt !== null || check.expiresAt <= at) {
+          throw checkClosed();
+        }
+        await tx.captureSession.updateMany({
+          where: { assetId: asset.id, status: "OPEN", expiresAt: { lte: at } },
+          data: { status: "EXPIRED", updatedAt: at },
+        });
+        const current = await tx.captureSession.findFirst({
+          where: { purchaseCheckId: check.id, status: "OPEN" },
+          include: withEvidence,
+        });
+        if (current) return { session: current, created: false };
+        const session = await tx.captureSession.create({
+          data: {
+            assetId: asset.id,
+            ownerId: actor.userId,
+            purchaseCheckId: check.id,
+            code: check.ownerCode,
+            shots: check.shots,
+            expiresAt: new Date(
+              Math.min(at.getTime() + CAPTURE_SESSION_MINUTES * 60_000, check.expiresAt.getTime()),
+            ),
+            createdAt: at,
+          },
+          include: withEvidence,
+        });
+        await writeAudit(
+          tx,
+          {
+            actorId: actor.userId,
+            action: "capture.started",
+            targetType: "asset",
+            targetId: asset.wbId,
+            metadata: {
+              captureSessionId: session.id,
+              purchaseCheckId: check.id,
+              shots: session.shots,
+            },
+          },
+          actor.fp,
+        );
+        return { session, created: true };
+      });
     },
   };
 }

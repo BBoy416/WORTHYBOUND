@@ -363,9 +363,20 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
     });
   }
 
+  /** A stored evidence photo, checked against its hash and without its metadata. */
+  async function evidencePhoto(e: Evidence): Promise<Buffer | null> {
+    const stored = await readAll(await storage.read(e.storageKey));
+    if (createHash("sha256").update(stored).digest("hex") !== e.sha256) {
+      log.warn({ evidenceId: e.id }, "stored evidence does not match its hash");
+      return null;
+    }
+    return checkImage(stored).catch(() => null);
+  }
+
   /**
-   * Compares a buyer's photos with the item's recorded photos. Recorded photos are private
-   * evidence, so they are sent only with the current owner's consent to AI checks.
+   * Compares a buyer's photos, or for a remote check the photos the seller took in the check's
+   * capture session, with the item's recorded photos. Recorded photos are private evidence, so
+   * they are sent only with the current owner's consent to AI checks.
    */
   async function matchItem(job: AutomatedJob): Promise<void> {
     const check = await prisma.purchaseCheck.findUnique({
@@ -386,12 +397,7 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
 
     const reference: { id: string; label: string; data: Buffer }[] = [];
     for (const e of await referencePhotos(prisma, check.assetId)) {
-      const stored = await readAll(await storage.read(e.storageKey));
-      if (createHash("sha256").update(stored).digest("hex") !== e.sha256) {
-        log.warn({ evidenceId: e.id }, "stored evidence does not match its hash");
-        continue;
-      }
-      const data = await checkImage(stored).catch(() => null);
+      const data = await evidencePhoto(e);
       if (!data) continue;
       const label = e.source === "VERIFIER" ? "verifier photo" : `owner photo: ${e.captureShot}`;
       reference.push({ id: e.id, label, data });
@@ -400,13 +406,30 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
 
     const order = new Map(check.shots.map((s, i) => [s, i]));
     const candidate = [];
-    for (const p of [...check.photos].sort(
-      (a, b) => (order.get(a.shot) ?? 0) - (order.get(b.shot) ?? 0),
-    )) {
-      candidate.push({
-        label: `buyer photo: ${p.shot}`,
-        data: await readAll(await storage.read(p.storageKey)),
+    if (check.kind === "REMOTE") {
+      const filmed = await prisma.evidence.findMany({
+        where: {
+          type: "PHOTO",
+          captureShot: { not: CAPTURE_CODE_SHOT },
+          captureSession: { purchaseCheckId: check.id, status: "COMPLETED" },
+        },
       });
+      for (const e of filmed.sort(
+        (a, b) => (order.get(a.captureShot ?? "") ?? 0) - (order.get(b.captureShot ?? "") ?? 0),
+      )) {
+        const data = await evidencePhoto(e);
+        if (data) candidate.push({ label: `seller photo: ${e.captureShot}`, data });
+      }
+      if (candidate.length === 0) throw new Skipped("remote_check_photos_unreadable");
+    } else {
+      for (const p of [...check.photos].sort(
+        (a, b) => (order.get(a.shot) ?? 0) - (order.get(b.shot) ?? 0),
+      )) {
+        candidate.push({
+          label: `buyer photo: ${p.shot}`,
+          data: await readAll(await storage.read(p.storageKey)),
+        });
+      }
     }
     const outcome = await engine.compareItem({
       asset: { category: check.asset.category, brand: check.asset.brand, model: check.asset.model },

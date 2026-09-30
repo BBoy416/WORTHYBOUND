@@ -1,4 +1,9 @@
-import { CAPTURE_CODE_SHOT, CAPTURE_SHOTS_BY_CATEGORY, type CaptureShot } from "./capture.js";
+import {
+  CAPTURE_CODE_SHOT,
+  CAPTURE_SHOTS_BY_CATEGORY,
+  CAPTURE_VIDEO_SHOT,
+  type CaptureShot,
+} from "./capture.js";
 import type { AssetCategory } from "./enums.js";
 
 /** Minutes a buyer has to finish a check before buying, in person (ADR 0014). */
@@ -8,6 +13,10 @@ export const OWNER_CODE_MINUTES = 5;
 /** Checks a buyer may start per day, and checks of one item per day by anyone. */
 export const PURCHASE_CHECKS_PER_BUYER_PER_DAY = 10;
 export const PURCHASE_CHECKS_PER_ASSET_PER_DAY = 10;
+/** Hours the seller has to film the item for a remote check (ADR 0014). */
+export const REMOTE_CHECK_HOURS = 24;
+/** Remote checks of one item per day by anyone; each asks the seller to film the item. */
+export const REMOTE_CHECKS_PER_ASSET_PER_DAY = 3;
 /** Recorded photos compared with the buyer's, at most. */
 export const MAX_REFERENCE_PHOTOS = 8;
 
@@ -17,6 +26,15 @@ export const MAX_REFERENCE_PHOTOS = 8;
  */
 export const purchaseCheckShots = (category: AssetCategory): CaptureShot[] =>
   CAPTURE_SHOTS_BY_CATEGORY[category].filter((s) => s !== CAPTURE_CODE_SHOT);
+
+/**
+ * Shots the seller takes for a remote check, in a capture session with the check's code: the
+ * capture shots for the category, then a video of the item with the code in view.
+ */
+export const remoteCheckShots = (category: AssetCategory): CaptureShot[] => [
+  ...CAPTURE_SHOTS_BY_CATEGORY[category],
+  CAPTURE_VIDEO_SHOT,
+];
 
 /** Why an item check is inconclusive without comparing photos. */
 export const ITEM_MATCH_REASONS = {

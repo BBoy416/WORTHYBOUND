@@ -18,7 +18,7 @@ type Tx = Prisma.TransactionClient;
 
 const DAY_MS = 24 * 60 * 60_000;
 
-const withEvidence = {
+export const withEvidence = {
   evidence: { select: { id: true, captureShot: true, createdAt: true } },
 } satisfies Prisma.CaptureSessionInclude;
 
@@ -57,17 +57,17 @@ export async function assertShotOpen(
 }
 
 /**
- * Completes the session once every required shot has arrived. Run after storing a shot, in its
- * transaction, with the session locked.
+ * Completes the session once every required shot has arrived, and tells whether it did. Run after
+ * storing a shot, in its transaction, with the session locked.
  */
 export async function completeIfDone(
   tx: Tx,
   session: CaptureSession,
   actor: Actor,
   at: Date,
-): Promise<void> {
+): Promise<boolean> {
   const taken = await tx.evidence.count({ where: { captureSessionId: session.id } });
-  if (taken < session.shots.length) return;
+  if (taken < session.shots.length) return false;
   await tx.captureSession.update({
     where: { id: session.id },
     data: { status: "COMPLETED", completedAt: at, updatedAt: at },
@@ -92,6 +92,7 @@ export async function completeIfDone(
     },
     actor.fp,
   );
+  return true;
 }
 
 export interface CaptureServiceOptions {
@@ -148,16 +149,18 @@ export function createCaptureService({ prisma, now }: CaptureServiceOptions) {
           throw new ApiError(409, "asset_revoked", "Evidence cannot be added to a revoked asset");
         }
         await expireDue(tx, asset.id, at);
+        // Sessions for remote checks are started from the check and limited with it.
         const open = await tx.captureSession.findFirst({
-          where: { assetId: asset.id, status: "OPEN" },
+          where: { assetId: asset.id, purchaseCheckId: null, status: "OPEN" },
           include: withEvidence,
         });
         if (open) return { session: open, created: false };
 
         const since = new Date(at.getTime() - DAY_MS);
+        const own = { purchaseCheckId: null, createdAt: { gt: since } };
         const [forAsset, forUser] = await Promise.all([
-          tx.captureSession.count({ where: { assetId: asset.id, createdAt: { gt: since } } }),
-          tx.captureSession.count({ where: { ownerId: actor.userId, createdAt: { gt: since } } }),
+          tx.captureSession.count({ where: { ...own, assetId: asset.id } }),
+          tx.captureSession.count({ where: { ...own, ownerId: actor.userId } }),
         ]);
         if (
           forAsset >= CAPTURE_SESSIONS_PER_ASSET_PER_DAY ||

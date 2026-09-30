@@ -36,6 +36,8 @@ export const purchaseCheckPhotoParamsSchema = z.strictObject({
   checkId: uuidSchema,
   shot: z.enum(CAPTURE_SHOTS),
 });
+/** A remote check of the owner's asset. */
+export const remoteCheckParamsSchema = z.strictObject({ wbId: wbIdSchema, checkId: uuidSchema });
 
 /**
  * The seller's signature (base58) of `ownerConfirmationMessage` with the buyer's code. The code

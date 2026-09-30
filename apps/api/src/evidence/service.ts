@@ -31,6 +31,7 @@ import { enqueueEvidenceChecks } from "../checks/queue.js";
 import { evidenceCheckStates } from "../checks/view.js";
 import type { AutomatedChecks } from "../checks/worker.js";
 import { ApiError, fromDomainError, notFound } from "../errors.js";
+import { remoteCheckFilmed } from "../purchase-checks/service.js";
 import { recordTrust } from "../trust/record.js";
 import { findAssignedRequest, lockAssignedRequest } from "../verification/requests.js";
 import { inspectFile, perceptualHash, previewImage, publicPhotoCopy, readAll } from "./inspect.js";
@@ -646,7 +647,17 @@ export function createEvidenceService({
             },
             actor.fp,
           );
-          if (session) await completeIfDone(tx, session, actor, at);
+          const matchQueued =
+            session && (await completeIfDone(tx, session, actor, at)) && session.purchaseCheckId
+              ? await remoteCheckFilmed(
+                  tx,
+                  session.purchaseCheckId,
+                  session.id,
+                  actor,
+                  at,
+                  checks !== null,
+                )
+              : false;
           if (elsewhere) {
             await writeAudit(
               tx,
@@ -669,13 +680,13 @@ export function createEvidenceService({
             checks && !upload.verificationRequestId
               ? await enqueueEvidenceChecks(tx, asset.id, actor.userId, at)
               : 0;
-          return { evidence, wbId: asset.wbId, queued };
+          return { evidence, wbId: asset.wbId, queued, matchQueued };
         });
         if (!result) {
           await removeQuietly(storageKey, publicKey);
           return completedResult(upload.id);
         }
-        if (result.queued > 0) checks?.kick();
+        if (result.queued > 0 || result.matchQueued) checks?.kick();
         return { evidence: result.evidence, wbId: result.wbId, replayed: false };
       } catch (error) {
         await removeQuietly(storageKey, publicKey);

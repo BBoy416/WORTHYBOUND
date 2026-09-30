@@ -47,6 +47,22 @@ one-time code that the buyer also sees; within 24 hours the seller films the ite
 in view, in a capture session. The buyer sees the result and the video. This proves the seller
 has the item now and that it matches the token.
 
+**Checks before buying, remotely (2026-10-05).** A signed-in buyer requests a remote check from
+the passport (`POST /assets/:wbId/remote-checks`); it stays open 24 hours, one per buyer and item,
+and counts toward the daily limits of checks, with at most 3 remote checks per item per day. The
+check has a 6-character code that the buyer sees throughout. The owner sees the open requests on
+their asset page, without the buyer (`GET /assets/:wbId/remote-checks`), and films the item in a
+capture session started from the request
+(`POST /assets/:wbId/remote-checks/:checkId/capture-session`): the session uses the check's code,
+ends with the check at the latest, and asks for the category's capture shots, including the code
+shot, then a `VIDEO` shot turning the item around with the code in view (MP4 or QuickTime). These
+sessions are not counted in the owner's capture limits. The owner's account filming the item shows
+the buyer "confirmed current owner"; no wallet signature is asked. When the session completes, the
+buyer can watch the video through a 5-minute link (`POST /purchase-checks/:checkId/video`), and
+the session's photos without the code shot are compared with the recorded photos as in person,
+under the same consent rule. Sessions filmed for a remote check are never recorded photos for
+other checks. The shots are evidence of the asset like any capture session. Checks are audited.
+
 **In-person transfer.** When the checks pass, the buyer pays and the program transfers the token
 in the same transaction (ADR 0002 steps 2-3). No escrow wait is needed; the buyer checked the item.
 

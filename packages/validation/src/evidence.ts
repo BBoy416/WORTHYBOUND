@@ -2,6 +2,7 @@ import {
   AUTOMATED_CHECK_RESULTS,
   canBePublic,
   CAPTURE_SHOTS,
+  CAPTURE_VIDEO_SHOT,
   PUBLIC_PHOTO_MIME_TYPES,
   EVIDENCE_MAX_BYTES,
   EVIDENCE_MIME_TYPES,
@@ -54,11 +55,15 @@ export const evidenceUploadSchema = z
   .refine(
     (input) =>
       input.captureSessionId === undefined ||
-      (input.type === "PHOTO" &&
-        (PUBLIC_PHOTO_MIME_TYPES as readonly string[]).includes(input.mimeType) &&
+      ((input.captureShot === CAPTURE_VIDEO_SHOT
+        ? input.type === "VIDEO" && input.mimeType.startsWith("video/")
+        : input.type === "PHOTO" &&
+          (PUBLIC_PHOTO_MIME_TYPES as readonly string[]).includes(input.mimeType)) &&
         input.capturedAt === undefined),
     {
-      message: "capture shots are JPEG, PNG or WebP photos, timed by the server",
+      message:
+        "capture shots are JPEG, PNG or WebP photos, or an MP4 or QuickTime video for the " +
+        "video shot, timed by the server",
       path: ["captureShot"],
     },
   );

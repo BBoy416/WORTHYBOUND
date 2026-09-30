@@ -118,6 +118,10 @@ export type CaptureSessionStatus = (typeof CAPTURE_SESSION_STATUSES)[number];
 export const PURCHASE_CHECK_STATUSES = ["OPEN", "COMPLETED", "EXPIRED"] as const;
 export type PurchaseCheckStatus = (typeof PURCHASE_CHECK_STATUSES)[number];
 
+/** In person, or remotely with a video the seller films (ADR 0014). */
+export const PURCHASE_CHECK_KINDS = ["IN_PERSON", "REMOTE"] as const;
+export type PurchaseCheckKind = (typeof PURCHASE_CHECK_KINDS)[number];
+
 /** Whether the item in front of a buyer matches the asset's recorded photos (ADR 0014). */
 export const ITEM_MATCH_RESULTS = ["MATCH", "NO_MATCH", "INCONCLUSIVE"] as const;
 export type ItemMatchResult = (typeof ITEM_MATCH_RESULTS)[number];
@@ -307,6 +311,7 @@ export const DOMAIN_ENUMS = {
   EvidenceUploadStatus: EVIDENCE_UPLOAD_STATUSES,
   CaptureSessionStatus: CAPTURE_SESSION_STATUSES,
   PurchaseCheckStatus: PURCHASE_CHECK_STATUSES,
+  PurchaseCheckKind: PURCHASE_CHECK_KINDS,
   ItemMatchResult: ITEM_MATCH_RESULTS,
   ReviewStatus: REVIEW_STATUSES,
   VerifierStatus: VERIFIER_STATUSES,
