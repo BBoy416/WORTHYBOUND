@@ -16,7 +16,7 @@ import {
   type Role,
   type VerifierStatus,
 } from "@worthybound/shared";
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { del, get, post } from "../api.js";
 import {
   Badge,
@@ -36,6 +36,7 @@ import type {
   AdminTemplateVersion,
   ReviewVerifier,
   RoleAssignment,
+  VerifierReports,
   VerifierSummary,
 } from "../types.js";
 
@@ -232,6 +233,7 @@ export function VerifierReviewPage({ verifierId }: { verifierId: string }) {
           <ErrorText error={error} />
         </Card>
       </div>
+      <AiReport base={base} />
       <Card title="Categories">
         <p className="muted small">
           Approve the verifier first, then each category they may verify.
@@ -279,6 +281,93 @@ export function VerifierReviewPage({ verifierId }: { verifierId: string }) {
         </ul>
       </Card>
     </div>
+  );
+}
+
+const RECOMMENDATION_LABELS: Record<VerifierReports["items"][number]["recommendation"], string> = {
+  APPROVE: "Suggests approval",
+  REJECT: "Suggests rejection",
+  NEEDS_MORE_INFORMATION: "Needs more information",
+};
+
+/** The latest AI report on the application. Advisory: the reviewer decides. */
+function AiReport({ base }: { base: string }) {
+  const reports = useLoad(() => get<VerifierReports>(`${base}/ai-reports`), [base]);
+  const { busy, error, run } = useAction();
+  const pending = reports.data?.pending;
+  useEffect(() => {
+    if (!pending) return;
+    const timer = setInterval(() => reports.reload(), 5000);
+    return () => clearInterval(timer);
+  }, [pending]);
+  const data = reports.data;
+  if (!data) return reports.error ? null : <Loading />;
+  if (!data.available && data.items.length === 0) return null;
+  const [latest] = data.items;
+  return (
+    <Card title="AI report (advisory)">
+      <p className="muted small">
+        Written by an AI model from the application and public web pages. It can be wrong: check
+        credentials yourself. The applicant never sees it.
+      </p>
+      {latest ? (
+        <>
+          <p>
+            <Badge
+              value={latest.recommendation === "REJECT" ? "REJECTED" : "PENDING"}
+              label={RECOMMENDATION_LABELS[latest.recommendation]}
+            />{" "}
+            <span className="muted small">
+              {formatDateTime(latest.createdAt)} · {latest.model}
+            </span>
+          </p>
+          <p className="small">{latest.summary}</p>
+          <ReportList title="Strengths" items={latest.strengths} />
+          <ReportList title="Concerns" items={latest.concerns} />
+          <ReportList title="Ask or verify" items={latest.questions} />
+          {latest.sources.length > 0 && (
+            <ReportList
+              title="Sources"
+              items={latest.sources.map((url) => (
+                <a href={url} target="_blank" rel="noreferrer noopener">
+                  {url}
+                </a>
+              ))}
+            />
+          )}
+        </>
+      ) : (
+        !data.pending && <p className="muted">No report yet.</p>
+      )}
+      {data.pending && <p className="muted small">Writing a report… this updates automatically.</p>}
+      {data.lastError && <p className="error small">{data.lastError}</p>}
+      {data.available && !data.pending && (
+        <button
+          className="ghost small"
+          disabled={busy}
+          onClick={() => void run(async () => (await post(`${base}/ai-reports`), reports.reload()))}
+        >
+          {latest ? "Write a new report" : "Write a report"}
+        </button>
+      )}
+      <ErrorText error={error} />
+    </Card>
+  );
+}
+
+function ReportList({ title, items }: { title: string; items: ReactNode[] }) {
+  if (items.length === 0) return null;
+  return (
+    <>
+      <p className="small">
+        <strong>{title}</strong>
+      </p>
+      <ul className="small">
+        {items.map((item, i) => (
+          <li key={i}>{item}</li>
+        ))}
+      </ul>
+    </>
   );
 }
 

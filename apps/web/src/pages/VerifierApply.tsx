@@ -91,7 +91,8 @@ function ApplicationForm({ onDone }: { onDone: () => void }) {
       <p className="muted small">
         Verifiers check items for owners and sign what they found. An administrator reviews each
         application and approves it one category at a time. Individuals are not named publicly;
-        organisations are.
+        organisations are. To help the review, your application may be summarised by an AI model
+        (OpenAI), which may look up the business name and website you give; it does not decide.
       </p>
       <form className="form" onSubmit={submit}>
         <Field label="You are">

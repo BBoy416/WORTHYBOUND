@@ -92,6 +92,11 @@ export async function recordTrust(tx: Tx, assetId: string, at: Date): Promise<Tr
         reviewStatus: true,
         duplicateOfId: true,
         createdAt: true,
+        automatedChecks: {
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          take: 1,
+          select: { id: true, result: true, createdAt: true },
+        },
       },
     }),
     tx.attestation.findMany({
@@ -149,7 +154,12 @@ export async function recordTrust(tx: Tx, assetId: string, at: Date): Promise<Tr
   const evaluations = versions.map((v) =>
     evaluateTemplate(requirementsOf(v), { attestations: facts, evidence, at }),
   );
-  const satisfied = evaluations.some((e) => e.satisfied);
+  // Owner files whose latest automated check failed deduct and block templates until a verifier
+  // accepts them (ADR 0013).
+  const failedAutomatedChecks = evidence.filter(
+    (e) => e.automatedChecks[0]?.result === "FAILED" && e.reviewStatus !== "ACCEPTED",
+  ).length;
+  const satisfied = failedAutomatedChecks === 0 && evaluations.some((e) => e.satisfied);
   const missingRequiredEvidence =
     evaluations.length > 0 ? Math.min(...evaluations.map((e) => e.missingEvidenceCount)) : 0;
 
@@ -167,6 +177,17 @@ export async function recordTrust(tx: Tx, assetId: string, at: Date): Promise<Tr
       issuedAt: e.createdAt.toISOString(),
       status: e.reviewStatus === "REJECTED" ? "REJECTED" : "ACTIVE",
     });
+    const check = e.automatedChecks[0];
+    if (check?.result === "PASSED") {
+      proofs.push({
+        id: `check:${check.id}`,
+        type,
+        source: "AUTOMATED",
+        sourceId: "automated-checks",
+        issuedAt: check.createdAt.toISOString(),
+        status: e.reviewStatus === "REJECTED" ? "REJECTED" : "ACTIVE",
+      });
+    }
   }
   for (const a of attestations) {
     // Inconclusive findings prove nothing either way; disputed ones wait for the outcome.
@@ -234,6 +255,7 @@ export async function recordTrust(tx: Tx, assetId: string, at: Date): Promise<Tr
     proofs,
     openDisputes,
     missingRequiredEvidence,
+    failedAutomatedChecks,
     evaluatedAt: at.toISOString(),
   });
 

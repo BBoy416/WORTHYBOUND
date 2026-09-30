@@ -1,6 +1,7 @@
 import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
+import type { CheckEngine } from "@worthybound/automated-checks";
 import type { PrismaClient } from "@worthybound/database";
 import type { WorthyBoundOracle } from "@worthybound/solana";
 import type { Storage } from "@worthybound/storage";
@@ -16,6 +17,8 @@ import { assetRoutes } from "./assets/routes.js";
 import { createAuthenticate, createRequireRole } from "./auth/guard.js";
 import { authRoutes } from "./auth/routes.js";
 import { type ChainSync, createChainSync } from "./chain/sync.js";
+import { checkRoutes } from "./checks/routes.js";
+import { type AutomatedChecks, createAutomatedChecks } from "./checks/worker.js";
 import type { Config } from "./config.js";
 import { type AppContext, DEFAULT_RATE_LIMITS, type RateLimits } from "./context.js";
 import { ApiError } from "./errors.js";
@@ -39,12 +42,16 @@ export interface BuildAppOptions {
   register?: (app: FastifyInstance, ctx: AppContext) => Promise<void> | void;
   /** Signs chain transactions; without it, tokenization is unavailable. */
   oracle?: WorthyBoundOracle;
+  /** Runs AI checks and reports; without it, they are unavailable. */
+  checkEngine?: CheckEngine;
 }
 
 declare module "fastify" {
   interface FastifyInstance {
     /** Chain job worker; `server.ts` starts it. Null without an oracle. */
     chainSync: ChainSync | null;
+    /** AI check worker; `server.ts` starts it. Null without a check engine. */
+    automatedChecks: AutomatedChecks | null;
   }
 }
 
@@ -130,8 +137,13 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       })
     : null;
   app.decorate("chainSync", chainSync);
+  const automatedChecks = options.checkEngine
+    ? createAutomatedChecks({ prisma, storage, engine: options.checkEngine, now, log: app.log })
+    : null;
+  app.decorate("automatedChecks", automatedChecks);
   app.addHook("onClose", async () => {
     await chainSync?.stop();
+    await automatedChecks?.stop();
   });
   const ctx: AppContext = {
     config,
@@ -142,6 +154,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     requireRole: createRequireRole(authenticate),
     rateLimits: { ...DEFAULT_RATE_LIMITS, ...options.rateLimits },
     chainSync,
+    automatedChecks,
   };
 
   app.get("/health", async (_request, reply) => {
@@ -163,6 +176,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await app.register(adminRoutes, ctx);
   await app.register(templateRoutes, ctx);
   await app.register(verificationRoutes, ctx);
+  await app.register(checkRoutes, ctx);
   if (config.WEB_DIST_DIR) await registerWebApp(app, config.WEB_DIST_DIR);
   if (options.register) await options.register(app, ctx);
   return app;

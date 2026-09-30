@@ -1,3 +1,4 @@
+import { DEFAULT_OPENAI_MODEL } from "@worthybound/automated-checks";
 import { WORTHYBOUND_PROGRAM_ADDRESS } from "@worthybound/solana";
 import { createStorage, type Storage } from "@worthybound/storage";
 import { z } from "zod";
@@ -47,6 +48,9 @@ const configSchema = z.object({
     .default("worthybound-evidence-private"),
   S3_ACCESS_KEY_ID: z.string().min(3, "must be at least 3 characters"),
   S3_SECRET_ACCESS_KEY: z.string().min(8, "must be at least 8 characters"),
+  /** AI checks of owner evidence and reports on verifier applications; unavailable when unset. */
+  OPENAI_API_KEY: optional(z.string().min(20, "must be at least 20 characters")),
+  OPENAI_MODEL: optional(z.string().regex(/^[a-z0-9][a-z0-9.:_-]*$/, "expected a model ID")),
 });
 
 export type Config = z.infer<typeof configSchema> & {
@@ -58,6 +62,8 @@ export type Config = z.infer<typeof configSchema> & {
   publicWebUrl: string;
   /** API_PUBLIC_URL, or this API's local address in development. */
   apiPublicUrl: string;
+  /** OPENAI_MODEL, or the default model. */
+  openaiModel: string;
 };
 
 /** Validates the environment. Throws one error listing every invalid setting, never their values. */
@@ -81,7 +87,14 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     /\/$/,
     "",
   );
-  return { ...config, authUri, chainId: "solana:devnet", publicWebUrl: authUri, apiPublicUrl };
+  return {
+    ...config,
+    authUri,
+    chainId: "solana:devnet",
+    publicWebUrl: authUri,
+    apiPublicUrl,
+    openaiModel: config.OPENAI_MODEL ?? DEFAULT_OPENAI_MODEL,
+  };
 }
 
 export function createStorageFromConfig(config: Config): Storage {

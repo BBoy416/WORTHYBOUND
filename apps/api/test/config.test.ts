@@ -84,6 +84,17 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...valid, SOLANA_WS_URL: "https://x" })).toThrow(/SOLANA_WS_URL/);
   });
 
+  it("reads the optional OpenAI settings without printing the key", () => {
+    const unset = loadConfig({ ...valid, OPENAI_API_KEY: "", OPENAI_MODEL: "" });
+    expect(unset.OPENAI_API_KEY).toBeUndefined();
+    expect(unset.openaiModel).toBe("gpt-6.1-sol");
+    expect(loadConfig({ ...valid, OPENAI_MODEL: "gpt-6-luna" }).openaiModel).toBe("gpt-6-luna");
+    const run = () => loadConfig({ ...valid, OPENAI_API_KEY: "sk-do-not-print" });
+    expect(run).toThrow(/OPENAI_API_KEY: must be at least 20 characters/);
+    expect(run).not.toThrow(/sk-do-not-print/);
+    expect(() => loadConfig({ ...valid, OPENAI_MODEL: "Not a model" })).toThrow(/OPENAI_MODEL/);
+  });
+
   it("requires the public API address in production", () => {
     expect(() =>
       loadConfig({ ...valid, NODE_ENV: "production", AUTH_DOMAIN: "app.worthybound.com" }),

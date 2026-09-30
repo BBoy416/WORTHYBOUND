@@ -16,6 +16,7 @@ import { z } from "zod";
 import { fingerprint } from "../audit.js";
 import type { Actor } from "../assets/service.js";
 import type { AuthContext } from "../auth/guard.js";
+import { evidenceCheckStates } from "../checks/view.js";
 import type { AppContext, RateLimit } from "../context.js";
 import { notFound } from "../errors.js";
 import { createEvidenceService } from "./service.js";
@@ -52,7 +53,13 @@ const perUser = (limit: RateLimit) => ({
 
 export const evidenceRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx) => {
   const { config, prisma, storage, now, authenticate, rateLimits } = ctx;
-  const service = createEvidenceService({ prisma, storage, now, log: app.log });
+  const service = createEvidenceService({
+    prisma,
+    storage,
+    now,
+    log: app.log,
+    checks: ctx.automatedChecks,
+  });
   const actor = (request: FastifyRequest): Actor => ({
     userId: (request.auth as AuthContext).user.id,
     fp: fingerprint(config.SESSION_SECRET, request),
@@ -106,7 +113,10 @@ export const evidenceRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx
         request.params.uploadId,
         actor(request),
       );
-      return reply.code(replayed ? 200 : 201).send(toOwnerEvidence(evidence, wbId));
+      const checks = await evidenceCheckStates(prisma, [evidence.id]);
+      return reply
+        .code(replayed ? 200 : 201)
+        .send(toOwnerEvidence(evidence, wbId, checks.get(evidence.id) ?? null));
     },
   );
 
@@ -120,8 +130,10 @@ export const evidenceRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx
       },
     },
     async (request) => {
-      const { asset, items } = await service.list(request.params.wbId, actor(request));
-      return { items: items.map((e) => toOwnerEvidence(e, asset.wbId)) };
+      const { asset, items, checks } = await service.list(request.params.wbId, actor(request));
+      return {
+        items: items.map((e) => toOwnerEvidence(e, asset.wbId, checks.get(e.id) ?? null)),
+      };
     },
   );
 
@@ -217,11 +229,13 @@ export const evidenceRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx
       },
     },
     async (request) => {
-      const { asset, items } = await service.listForRequest(
+      const { asset, items, checks } = await service.listForRequest(
         request.params.requestId,
         actor(request),
       );
-      return { items: items.map((e) => toOwnerEvidence(e, asset.wbId)) };
+      return {
+        items: items.map((e) => toOwnerEvidence(e, asset.wbId, checks.get(e.id) ?? null)),
+      };
     },
   );
 

@@ -1,6 +1,6 @@
 # ADR 0013: Automated checks and guided capture
 
-- Status: Proposed (amends ADR 0003)
+- Status: Accepted, partly implemented (amends ADR 0003)
 - Date: 2026-09-29
 
 ## Context
@@ -83,6 +83,31 @@ Reusable or zero-knowledge identity proofs can replace this later without changi
 given per asset before the first check, under a data processing agreement that forbids training
 on it and limits retention. Deterministic checks run on WorthyBound's own infrastructure. Check
 results are private; the passport shows only that automated checks passed, and when.
+
+## Implementation (2026-09-30)
+
+The first engine is OpenAI, behind the `CheckEngine` interface in `@worthybound/automated-checks`.
+It is enabled by `OPENAI_API_KEY` (model: `OPENAI_MODEL`); without it the checks are unavailable.
+
+- **Evidence checks.** Each owner photo (JPEG, PNG, WebP) and PDF document, except type `OTHER`,
+  is checked once per check version, after the current owner consents for the asset. Photos are
+  re-encoded without metadata before they are sent; requests use the Responses API with
+  Structured Outputs and `store: false`. The model reports findings from a fixed list of problems
+  and a confidence; a fixed rule decides the result: `FAILED` only for a problem that suggests a
+  fake, `PASSED` only for a consistent file without problems, both at confidence 0.7 or more,
+  otherwise `INCONCLUSIVE`. Exact copies of files on another asset fail deterministically
+  (`REUSED_FILE`) without calling the service. Verifier uploads are never checked.
+- **Trust Score.** Engine `1.2.0`, weights `weights-2026.3`. Each passed check is an `AUTOMATED`
+  proof (source multiplier 1.5, at most 20 points). With a passed check and no failed one, the
+  owner-only caps (35, or 45 with KYC) and the no-inspection cap (60) are replaced by 65. Each file whose latest
+  check failed deducts 10 (at most 30) and blocks templates, until a verifier accepts the file.
+- **Verifier applications.** Each application, and each request for more categories, gets an
+  advisory AI report: recommendation, summary, strengths, concerns, questions for the reviewer,
+  and the web pages consulted (web search is used only when a business name or website is
+  given). Reports are append-only, visible to verifier reviewers and admins only, and never change
+  the application: reviewers decide, and can request a new report.
+- Checks run in a job queue in the API process, like chain sync (ADR 0016), with retries for
+  outages and rate limits. Guided capture and the deterministic checks are still to come.
 
 ## Consequences
 

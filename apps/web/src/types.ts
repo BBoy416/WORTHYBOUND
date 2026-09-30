@@ -5,7 +5,9 @@ import type {
   AttestationMethod,
   AttestationResult,
   AttestationStatus,
+  AutomatedCheckResult,
   CategoryPermissionStatus,
+  CheckProblem,
   ClaimType,
   EvidenceType,
   EvidenceVisibility,
@@ -18,6 +20,7 @@ import type {
   TokenizationStatus,
   VerificationLevel,
   VerificationRequestStatus,
+  VerifierReportRecommendation,
   VerifierEntityType,
   VerifierStatus,
 } from "@worthybound/shared";
@@ -90,6 +93,19 @@ export interface OwnerEvidence {
   description: string | null;
   createdAt: string;
   publicPath: string | null;
+  /** The AI check of an owner upload; null if it was not checked. */
+  automatedCheck: {
+    status: AutomatedCheckResult | "PENDING" | "UNAVAILABLE";
+    problems: CheckProblem[];
+    checkedAt: string | null;
+  } | null;
+}
+
+/** `GET /assets/:wbId/automated-checks`. */
+export interface AutomatedChecksConsent {
+  available: boolean;
+  enabled: boolean;
+  enabledAt: string | null;
 }
 
 export interface TemplateSummary {
@@ -253,4 +269,24 @@ export interface ReviewVerifier extends VerifierProfile {
     history: (StatusChange<CategoryPermissionStatus> & { actorId: string | null })[];
   }[];
   history: (StatusChange<VerifierStatus> & { actorId: string | null })[];
+}
+
+/** Reviewer view (`GET /review/verifiers/:verifierId/ai-reports`); advisory only. */
+export interface VerifierReports {
+  available: boolean;
+  pending: boolean;
+  lastError: string | null;
+  items: {
+    id: string;
+    recommendation: VerifierReportRecommendation;
+    summary: string;
+    strengths: string[];
+    concerns: string[];
+    questions: string[];
+    sources: string[];
+    engine: string;
+    model: string;
+    reportVersion: string;
+    createdAt: string;
+  }[];
 }

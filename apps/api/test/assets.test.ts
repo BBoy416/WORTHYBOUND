@@ -38,7 +38,7 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
 
   const call = (
     who: Owner | null,
-    method: "GET" | "POST" | "PATCH",
+    method: "GET" | "POST" | "PATCH" | "PUT",
     url: string,
     payload?: object,
     headers: Record<string, string> = {},
@@ -526,6 +526,25 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
     });
   });
 
+  describe("AI checks consent", () => {
+    it("cannot be given without a check engine; withdrawing always works", async () => {
+      const alice = await owner();
+      const wbId = await published(alice);
+      const url = `/assets/${wbId}/automated-checks`;
+      expect((await call(alice, "GET", url)).json()).toEqual({
+        available: false,
+        enabled: false,
+        enabledAt: null,
+      });
+      const on = await call(alice, "PUT", url, { enabled: true });
+      expect(on.statusCode).toBe(503);
+      expect(on.json().error.code).toBe("ai_checks_unavailable");
+      expect((await call(alice, "PUT", url, { enabled: false })).statusCode).toBe(200);
+      expect((await call(alice, "PUT", url, { enabled: "yes" })).statusCode).toBe(400);
+      expect((await assetRow(wbId)).automatedChecksConsentById).toBeNull();
+    });
+  });
+
   describe("public passport", () => {
     it("is readable without signing in and shows no private data", async () => {
       const alice = await owner();
@@ -550,8 +569,8 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
         verificationLevel: "UNVERIFIED",
         trust: {
           score: 7,
-          engineVersion: "1.1.0",
-          weightsVersion: "weights-2026.2",
+          engineVersion: "1.2.0",
+          weightsVersion: "weights-2026.3",
           disclaimer: expect.stringContaining("does not guarantee authenticity"),
         },
         custody: { transferCount: 0 },

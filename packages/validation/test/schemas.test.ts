@@ -13,6 +13,7 @@ import {
   attestationSubmissionSchema,
   authNonceRequestSchema,
   authVerifyRequestSchema,
+  automatedChecksConsentSchema,
   categoryPermissionChangeSchema,
   EVIDENCE_MAX_BYTES,
   evidenceParamsSchema,
@@ -214,6 +215,16 @@ describe("evidence request schemas", () => {
   it("accepts only a visibility change", () => {
     expect(issues(evidenceVisibilitySchema, { visibility: "PUBLIC" })).toEqual([]);
     expect(issues(evidenceVisibilitySchema, { visibility: "PUBLIC", sha256: SHA })).toEqual([
+      "unrecognized_keys",
+    ]);
+  });
+
+  it("accepts only a yes or no for AI checks", () => {
+    expect(issues(automatedChecksConsentSchema, { enabled: true })).toEqual([]);
+    expect(issues(automatedChecksConsentSchema, { enabled: "true" })).toEqual([
+      "invalid_type:enabled",
+    ]);
+    expect(issues(automatedChecksConsentSchema, { enabled: false, at: "now" })).toEqual([
       "unrecognized_keys",
     ]);
   });

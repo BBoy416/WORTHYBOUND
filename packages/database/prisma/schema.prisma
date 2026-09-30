@@ -276,6 +276,29 @@ enum ChainTransactionStatus {
   SUPERSEDED
 }
 
+enum AutomatedCheckResult {
+  PASSED
+  FAILED
+  INCONCLUSIVE
+}
+
+enum AutomatedJobKind {
+  EVIDENCE_CHECK
+  VERIFIER_REPORT
+}
+
+enum AutomatedJobStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum VerifierReportRecommendation {
+  APPROVE
+  REJECT
+  NEEDS_MORE_INFORMATION
+}
+
 // ─── Identity and access ──────────────────────────────────────────────────────
 
 /// A wallet address is never treated as proof of real-world identity.
@@ -318,6 +341,9 @@ model User {
   provenanceEvents          ProvenanceEvent[]
   auditLogs                 AuditLog[]
   idempotencyKeys           IdempotencyKey[]
+  automatedChecksConsents   Asset[]                           @relation("AutomatedChecksConsent")
+  verifierReportsRequested  VerifierApplicationReport[]
+  automatedJobsRequested    AutomatedJob[]
 
   @@map("users")
 }
@@ -397,10 +423,15 @@ model Asset {
   verificationLevel           VerificationLevel  @default(UNVERIFIED)
   /// Set once when the owner publishes the passport. Identity fields are locked from then on.
   publishedAt                 DateTime?          @db.Timestamptz(3)
+  /// Who agreed to send this asset's private evidence to the AI check service, and when. Checks
+  /// run only while this is the current owner (ADR 0013).
+  automatedChecksConsentById  String?            @db.Uuid
+  automatedChecksConsentAt    DateTime?          @db.Timestamptz(3)
   createdAt                   DateTime           @default(now()) @db.Timestamptz(3)
   updatedAt                   DateTime           @updatedAt @db.Timestamptz(3)
 
-  owner                User                  @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  owner                  User                  @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  automatedChecksConsent User?                 @relation("AutomatedChecksConsent", fields: [automatedChecksConsentById], references: [id], onDelete: Restrict)
   statusEvents         AssetStatusEvent[]
   ownerships           Ownership[]
   transferRequests     TransferRequest[]
@@ -412,6 +443,7 @@ model Asset {
   disputes             Dispute[]
   trustScoreSnapshots  TrustScoreSnapshot[]
   provenanceEvents     ProvenanceEvent[]
+  automatedChecks      AutomatedCheck[]
 
   @@index([ownerId])
   @@index([serialFingerprint])
@@ -519,6 +551,7 @@ model Evidence {
   commitmentItems     EvidenceCommitmentItem[]
   attestations        AttestationEvidence[]
   disputes            Dispute[]
+  automatedChecks     AutomatedCheck[]
 
   @@unique([assetId, sha256])
   @@index([sha256])
@@ -622,6 +655,7 @@ model Verifier {
   approvedBy          User?                            @relation("VerifierApprover", fields: [approvedById], references: [id], onDelete: Restrict)
   categoryPermissions VerifierCategoryPermission[]
   statusEvents        VerifierStatusEvent[]
+  applicationReports  VerifierApplicationReport[]
   assignedRequests    VerificationRequest[]
   requestStatusEvents VerificationRequestStatusEvent[]
   attestations        Attestation[]
@@ -906,6 +940,87 @@ model TrustScoreSnapshot {
 
   @@index([assetId, computedAt])
   @@map("trust_score_snapshots")
+}
+
+// ─── Automated checks (ADR 0013) ────────────────────────────────────────
+
+/// Append-only. One check of one evidence file. The newest check of a file supersedes older ones.
+model AutomatedCheck {
+  id           String               @id @default(uuid(7)) @db.Uuid
+  assetId      String               @db.Uuid
+  evidenceId   String               @db.Uuid
+  result       AutomatedCheckResult
+  /// Problem categories (CHECK_PROBLEMS); the only findings owners see.
+  problems     String[]
+  /// Detection details, for administrators only.
+  summary      String
+  /// The model's confidence (0-1); null for deterministic checks.
+  confidence   Float?
+  /// e.g. `openai`, or `worthybound` for deterministic checks.
+  engine       String
+  /// Model (as reported by the service) or deterministic rule that produced the result.
+  model        String
+  checkVersion String
+  /// SHA-256 of the file that was examined.
+  sha256       String
+  createdAt    DateTime             @default(now()) @db.Timestamptz(3)
+
+  asset    Asset    @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  evidence Evidence @relation(fields: [evidenceId], references: [id], onDelete: Restrict)
+
+  @@index([assetId])
+  @@index([evidenceId, createdAt])
+  @@map("automated_checks")
+}
+
+/// Append-only. Advisory AI report on a verifier application; reviewers make every decision.
+/// Never shown to the applicant.
+model VerifierApplicationReport {
+  id             String                       @id @default(uuid(7)) @db.Uuid
+  verifierId     String                       @db.Uuid
+  recommendation VerifierReportRecommendation
+  summary        String
+  strengths      String[]
+  concerns       String[]
+  /// Questions the reviewer could ask the applicant.
+  questions      String[]
+  /// Web pages the model consulted.
+  sources        String[]
+  /// SHA-256 of the canonical application data the report was made from.
+  inputHash      String
+  engine         String
+  model          String
+  reportVersion  String
+  /// Reviewer who asked for a new report; null for the report made on application.
+  requestedById  String?                      @db.Uuid
+  createdAt      DateTime                     @default(now()) @db.Timestamptz(3)
+
+  verifier    Verifier @relation(fields: [verifierId], references: [id], onDelete: Restrict)
+  requestedBy User?    @relation(fields: [requestedById], references: [id], onDelete: Restrict)
+
+  @@index([verifierId, createdAt])
+  @@map("verifier_application_reports")
+}
+
+/// Queued checks and reports. At most one PENDING job per kind and entity.
+model AutomatedJob {
+  id            String             @id @default(uuid(7)) @db.Uuid
+  kind          AutomatedJobKind
+  /// Evidence (EVIDENCE_CHECK) or verifier (VERIFIER_REPORT).
+  entityId      String             @db.Uuid
+  status        AutomatedJobStatus @default(PENDING)
+  attempts      Int                @default(0)
+  runAfter      DateTime           @default(now()) @db.Timestamptz(3)
+  lastError     String?
+  requestedById String?            @db.Uuid
+  createdAt     DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime           @updatedAt @db.Timestamptz(3)
+
+  requestedBy User? @relation(fields: [requestedById], references: [id], onDelete: Restrict)
+
+  @@index([status, runAfter])
+  @@index([kind, entityId])
+  @@map("automated_jobs")
 }
 
 // ─── History, chain and audit ─────────────────────────────────────────────────

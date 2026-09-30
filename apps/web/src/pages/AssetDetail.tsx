@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { get, post } from "../api.js";
+import { get, post, put } from "../api.js";
 import { EvidenceList, UploadForm } from "../components/Evidence.js";
 import {
   Badge,
@@ -16,6 +16,7 @@ import { formatDate, formatDateTime, humanize } from "../format.js";
 import { Link } from "../router.js";
 import { useSession } from "../session.js";
 import type {
+  AutomatedChecksConsent,
   OwnerAsset,
   OwnerEvidence,
   OwnerRequest,
@@ -43,6 +44,13 @@ export function AssetDetailPage({ wbId }: { wbId: string }) {
     const timer = setInterval(() => asset.reload(), 3000);
     return () => clearInterval(timer);
   }, [pending]);
+
+  const checking = evidence.data?.items.some((e) => e.automatedCheck?.status === "PENDING");
+  useEffect(() => {
+    if (!checking) return;
+    const timer = setInterval(() => (evidence.reload(), trust.reload(), asset.reload()), 5000);
+    return () => clearInterval(timer);
+  }, [checking]);
 
   const a = asset.data;
   if (!a) return <Loading error={asset.error} />;
@@ -114,6 +122,7 @@ export function AssetDetailPage({ wbId }: { wbId: string }) {
       </div>
 
       <Card title="Evidence vault">
+        <AutomatedChecks base={base} asset={a} onChange={reloadAll} />
         {evidence.data ? (
           <EvidenceList
             items={evidence.data.items}
@@ -141,6 +150,54 @@ export function AssetDetailPage({ wbId }: { wbId: string }) {
 
       <Verification asset={a} requests={requests.data?.items ?? null} onChange={reloadAll} />
       <TrustBreakdown trust={trust.data} error={trust.error} />
+    </div>
+  );
+}
+
+/** The owner's consent to AI checks of their uploads for this asset. */
+function AutomatedChecks({
+  base,
+  asset: a,
+  onChange,
+}: {
+  base: string;
+  asset: OwnerAsset;
+  onChange: () => void;
+}) {
+  const consent = useLoad(() => get<AutomatedChecksConsent>(`${base}/automated-checks`), [base]);
+  const { busy, error, run } = useAction();
+  const c = consent.data;
+  if (!c || !c.available || (a.status === "REVOKED" && !c.enabled)) return null;
+  const set = (enabled: boolean) =>
+    void run(async () => {
+      await put(`${base}/automated-checks`, { enabled });
+      consent.reload();
+      onChange();
+    });
+  return (
+    <div className="ai-checks">
+      {c.enabled ? (
+        <p className="small">
+          <Badge value="ACTIVE" label="AI checks on" /> Since {formatDate(c.enabledAt)}, each photo
+          and document you add is checked for signs of a fake: photos of screens, generated or
+          edited images, documents that do not match this item.{" "}
+          <button className="ghost small" disabled={busy} onClick={() => set(false)}>
+            Turn off
+          </button>
+        </p>
+      ) : (
+        <p className="small">
+          Turn on AI checks to have your photos and documents checked for signs of a fake. Passed
+          checks can raise the Trust Score up to 65 without a verifier; failed checks lower it until
+          a verifier reviews the file. Files are sent to OpenAI without their metadata (location,
+          camera) and are not used for training. Results already recorded stay if you turn checks
+          off.{" "}
+          <button className="small" disabled={busy} onClick={() => set(true)}>
+            Turn on AI checks
+          </button>
+        </p>
+      )}
+      <ErrorText error={error ?? consent.error} />
     </div>
   );
 }

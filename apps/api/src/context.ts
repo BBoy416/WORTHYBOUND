@@ -2,6 +2,7 @@ import type { PrismaClient, Role } from "@worthybound/database";
 import type { Storage } from "@worthybound/storage";
 import type { preHandlerAsyncHookHandler } from "fastify";
 import type { ChainSync } from "./chain/sync.js";
+import type { AutomatedChecks } from "./checks/worker.js";
 import type { Config } from "./config.js";
 
 export interface AppContext {
@@ -14,6 +15,8 @@ export interface AppContext {
   rateLimits: RateLimits;
   /** Null when no oracle key is configured; tokenization is then unavailable. */
   chainSync: ChainSync | null;
+  /** Null when no check engine (OpenAI key) is configured; AI checks are then unavailable. */
+  automatedChecks: AutomatedChecks | null;
 }
 
 export interface RateLimit {
@@ -32,6 +35,8 @@ export interface RateLimits {
   upload: RateLimit;
   /** Verifier applications, per user. */
   apply: RateLimit;
+  /** Requests to run AI checks or reports, per user. Each one costs a call to the service. */
+  checks: RateLimit;
   /** Public passports, per IP address. */
   public: RateLimit;
 }
@@ -42,5 +47,6 @@ export const DEFAULT_RATE_LIMITS: RateLimits = {
   write: { max: 60, timeWindowMs: 60_000 },
   upload: { max: 30, timeWindowMs: 60 * 60_000 },
   apply: { max: 5, timeWindowMs: 60 * 60_000 },
+  checks: { max: 10, timeWindowMs: 24 * 60 * 60_000 },
   public: { max: 120, timeWindowMs: 60_000 },
 };

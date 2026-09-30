@@ -68,6 +68,12 @@ export const evidenceVisibilitySchema = z.strictObject({
 });
 export type EvidenceVisibilityRequest = z.infer<typeof evidenceVisibilitySchema>;
 
+/** The owner's consent to AI checks of their uploads for one asset (ADR 0013). */
+export const automatedChecksConsentSchema = z.strictObject({
+  enabled: z.boolean(),
+});
+export type AutomatedChecksConsentRequest = z.infer<typeof automatedChecksConsentSchema>;
+
 export const evidenceParamsSchema = z.strictObject({
   wbId: wbIdSchema,
   evidenceId: uuidSchema,

@@ -1,5 +1,6 @@
 import {
   canBePublic,
+  CHECK_PROBLEM_MESSAGES,
   EVIDENCE_MAX_BYTES,
   EVIDENCE_MIME_TYPES,
   EVIDENCE_TYPES,
@@ -15,6 +16,14 @@ import { Badge, ErrorText, Field, useAction } from "./ui.js";
 
 const isMime = (type: string): type is EvidenceMimeType =>
   (EVIDENCE_MIME_TYPES as readonly string[]).includes(type);
+
+const CHECK_LABELS: Record<NonNullable<OwnerEvidence["automatedCheck"]>["status"], string> = {
+  PASSED: "AI check passed",
+  FAILED: "AI check failed",
+  INCONCLUSIVE: "AI check inconclusive",
+  PENDING: "AI check pending",
+  UNAVAILABLE: "AI check unavailable",
+};
 
 /**
  * Picks files, hashes each in the browser, asks the API for an upload, sends the file straight to
@@ -173,7 +182,21 @@ export function EvidenceList({
                 <strong>{humanize(e.type)}</strong> <Badge value={e.visibility} />{" "}
                 <Badge value={e.reviewStatus} />
                 {e.source === "VERIFIER" && <Badge value="VERIFIER" label="From verifier" />}
+                {e.automatedCheck && (
+                  <>
+                    {" "}
+                    <Badge
+                      value={e.automatedCheck.status}
+                      label={CHECK_LABELS[e.automatedCheck.status]}
+                    />
+                  </>
+                )}
               </div>
+              {e.automatedCheck && e.automatedCheck.problems.length > 0 && (
+                <div className="small error">
+                  {e.automatedCheck.problems.map((p) => CHECK_PROBLEM_MESSAGES[p]).join(" · ")}
+                </div>
+              )}
               <div className="muted small">
                 {e.originalFilename ?? e.id} · {formatBytes(e.sizeBytes)} ·{" "}
                 {formatDate(e.createdAt)}

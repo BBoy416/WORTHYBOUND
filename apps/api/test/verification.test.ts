@@ -914,8 +914,8 @@ describe.skipIf(!TEST_DATABASE_URL)("trust score and verified status", () => {
       score: 7,
       verificationLevel: "UNVERIFIED",
       capsApplied: [],
-      engineVersion: "1.1.0",
-      weightsVersion: "weights-2026.2",
+      engineVersion: "1.2.0",
+      weightsVersion: "weights-2026.3",
       disclaimer: expect.stringContaining("does not guarantee authenticity"),
     });
     expect(codes(score.factors)).toEqual(["OWNER_WALLET_VERIFIED", "CUSTODY_CONTINUITY"]);

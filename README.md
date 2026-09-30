@@ -93,6 +93,9 @@ passport links (`/passport/:wbId`) share one domain. Page loads get the app; API
 To tokenize assets, set `SOLANA_TRUST_ORACLE_KEYPAIR_PATH` to the oracle keypair (outside the
 repository). Without it the API starts, but `POST /assets/:wbId/tokenize` answers 503.
 
+To enable AI checks of owner evidence and reports on verifier applications (ADR 0013), set
+`OPENAI_API_KEY` (and optionally `OPENAI_MODEL`). Without it they are unavailable.
+
 ## Solana program (devnet)
 
 ```sh

@@ -76,6 +76,17 @@ export async function previewImage(bytes: Buffer): Promise<Buffer> {
     .toBuffer();
 }
 
+export const CHECK_IMAGE_MAX_SIZE = 2048;
+
+/** A JPEG of an image for the AI check: oriented and without metadata (no GPS leaves the vault). */
+export async function checkImage(bytes: Buffer): Promise<Buffer> {
+  return sharp(bytes, { failOn: "error", limitInputPixels: 100_000_000 })
+    .rotate()
+    .resize(CHECK_IMAGE_MAX_SIZE, CHECK_IMAGE_MAX_SIZE, { fit: "inside", withoutEnlargement: true })
+    .jpeg({ quality: 90 })
+    .toBuffer();
+}
+
 export async function readAll(stream: Readable): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of stream) chunks.push(chunk as Buffer);

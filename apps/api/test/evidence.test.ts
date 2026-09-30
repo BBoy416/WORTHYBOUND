@@ -3,11 +3,14 @@ import { merkleRoot } from "@worthybound/shared";
 import type { Storage } from "@worthybound/storage";
 import type { FastifyInstance } from "fastify";
 import sharp from "sharp";
+import { CheckEngineError } from "@worthybound/automated-checks";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { grantAdmin } from "../src/cli/admin-grant.js";
 import {
   type Clock,
   createTestDatabase,
   createTestStorage,
+  fakeCheckEngine,
   signIn,
   TEST_DATABASE_URL,
   TEST_STORAGE_AVAILABLE,
@@ -51,12 +54,13 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
   let storage: Storage;
   let app: FastifyInstance;
   let clock: Clock;
+  const engine = fakeCheckEngine();
 
   beforeAll(async () => {
     db = await createTestDatabase();
     storage = await createTestStorage();
     clock = testClock();
-    app = await testApp(db.prisma, { storage, now: clock.now });
+    app = await testApp(db.prisma, { storage, now: clock.now, checkEngine: engine });
   });
 
   afterAll(async () => {
@@ -70,7 +74,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
     return { wallet, token: await signIn(app, wallet) };
   };
 
-  const call = (who: Owner | null, method: "GET" | "POST", url: string, payload?: object) =>
+  const call = (who: Owner | null, method: "GET" | "POST" | "PUT", url: string, payload?: object) =>
     app.inject({
       method,
       url,
@@ -727,6 +731,215 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       ]);
       expect(responses.map((r) => r.statusCode)).toEqual([404, 404, 404]);
       expect(new Set(responses.map((r) => r.body)).size).toBe(1);
+    });
+  });
+  describe("AI checks", () => {
+    type Check = { status: string; problems: string[]; checkedAt: string | null } | null;
+    const evidenceChecks = async (who: Owner, wbId: string) =>
+      Object.fromEntries(
+        (await call(who, "GET", `/assets/${wbId}/evidence`))
+          .json<{ items: { id: string; automatedCheck: Check }[] }>()
+          .items.map((e) => [e.id, e.automatedCheck]),
+      );
+    const consent = (who: Owner, wbId: string, enabled: boolean) =>
+      call(who, "PUT", `/assets/${wbId}/automated-checks`, { enabled });
+    const trust = async (who: Owner, wbId: string) =>
+      (await call(who, "GET", `/assets/${wbId}/trust`)).json<{
+        score: number;
+        factors: { code: string; detail?: { source?: string } }[];
+        deductions: { code: string; count?: number }[];
+        capsApplied: { code: string }[];
+      }>();
+    const run = () =>
+      (app.automatedChecks as NonNullable<FastifyInstance["automatedChecks"]>).runOnce();
+    const passing = engine.evidence;
+
+    it("checks owner uploads only after the owner consents, without their metadata", async () => {
+      const alice = await owner();
+      const wbId = await asset(alice, true);
+      const photo = await added(alice, wbId, { body: await phonePhoto("#102030") });
+      const receipt = await added(alice, wbId, {
+        body: pdf(),
+        type: "RECEIPT",
+        mimeType: "application/pdf",
+      });
+      const other = await added(alice, wbId, {
+        body: pdf(),
+        type: "OTHER",
+        mimeType: "application/pdf",
+      });
+      expect(await run()).toBe(0);
+      expect(await evidenceChecks(alice, wbId)).toEqual({
+        [photo.id]: null,
+        [receipt.id]: null,
+        [other.id]: null,
+      });
+      expect((await call(alice, "GET", `/assets/${wbId}/automated-checks`)).json()).toEqual({
+        available: true,
+        enabled: false,
+        enabledAt: null,
+      });
+      const before = await trust(alice, wbId);
+
+      const enabled = await consent(alice, wbId, true);
+      expect(enabled.statusCode, enabled.body).toBe(200);
+      expect(enabled.json()).toMatchObject({ available: true, enabled: true });
+      expect((await evidenceChecks(alice, wbId))[photo.id]).toEqual({
+        status: "PENDING",
+        problems: [],
+        checkedAt: null,
+      });
+      engine.evidenceCalls.length = 0;
+      expect(await run()).toBe(2);
+
+      const sent = engine.evidenceCalls.find((c) => c.evidence.type === "PHOTO");
+      expect(sent?.asset).toMatchObject({ category: "LUXURY_WATCH", brand: "Rolex" });
+      expect(sent?.file.mimeType).toBe("image/jpeg");
+      const sentPhoto = Buffer.from(sent?.file.data ?? []);
+      expect(sentPhoto.includes("SECRETCAM")).toBe(false);
+      expect((await sharp(sentPhoto).metadata()).exif).toBeUndefined();
+      expect(engine.evidenceCalls.find((c) => c.evidence.type === "RECEIPT")?.file).toMatchObject({
+        mimeType: "application/pdf",
+      });
+
+      const checks = await evidenceChecks(alice, wbId);
+      expect(checks[photo.id]).toMatchObject({ status: "PASSED", problems: [] });
+      expect(checks[receipt.id]).toMatchObject({ status: "PASSED" });
+      expect(checks[other.id]).toBeNull();
+      const after = await trust(alice, wbId);
+      expect(after.score).toBeGreaterThan(before.score);
+      expect(after.factors.filter((f) => f.detail?.source === "AUTOMATED")).toHaveLength(2);
+      const stored = await db.prisma.automatedCheck.findMany({
+        where: { assetId: await assetId(wbId) },
+      });
+      expect(stored.map((c) => [c.engine, c.model, c.checkVersion])).toEqual([
+        ["fake", "fake-model-1", "evidence-check-v1"],
+        ["fake", "fake-model-1", "evidence-check-v1"],
+      ]);
+      expect(stored.map((c) => c.sha256).sort()).toEqual([photo.sha256, receipt.sha256].sort());
+
+      // Later uploads are queued straight away; checked files are not checked again.
+      const next = await upload(alice, wbId, { body: await phonePhoto("#203040") });
+      expect(next.res.json().automatedCheck).toMatchObject({ status: "PENDING" });
+      engine.evidenceCalls.length = 0;
+      expect(await run()).toBe(1);
+      expect(engine.evidenceCalls).toHaveLength(1);
+      expect(await consent(alice, wbId, true)).toMatchObject({ statusCode: 200 });
+      expect(await run()).toBe(0);
+    });
+
+    it("tells the owner the problem, keeps the details for admins and lowers the score", async () => {
+      const alice = await owner();
+      const wbId = await asset(alice, true);
+      await consent(alice, wbId, true);
+      engine.evidence = async () => ({
+        result: "FAILED",
+        problems: ["SCREEN_OR_PRINT"],
+        summary: "Moire pattern across the dial: DETAIL-FOR-ADMINS.",
+        confidence: 0.85,
+        model: "fake-model-1",
+      });
+      try {
+        await added(alice, wbId, { body: await phonePhoto("#304050") });
+        await run();
+      } finally {
+        engine.evidence = passing;
+      }
+      const [check] = Object.values(await evidenceChecks(alice, wbId));
+      expect(check).toMatchObject({ status: "FAILED", problems: ["SCREEN_OR_PRINT"] });
+      const list = await call(alice, "GET", `/assets/${wbId}/evidence`);
+      expect(list.body).not.toContain("DETAIL-FOR-ADMINS");
+      const score = await trust(alice, wbId);
+      expect(score.deductions).toContainEqual(
+        expect.objectContaining({ code: "FAILED_AUTOMATED_CHECKS", count: 1 }),
+      );
+      expect(score.capsApplied.map((c) => c.code)).not.toContain("AUTOMATED_CHECKS_PASSED");
+
+      const url = `/admin/assets/${wbId}/automated-checks`;
+      expect((await call(alice, "GET", url)).statusCode).toBe(403);
+      const admin = await owner();
+      await grantAdmin(db.prisma, admin.wallet.address);
+      const details = await call(admin, "GET", url);
+      expect(details.statusCode, details.body).toBe(200);
+      expect(details.json().items).toEqual([
+        expect.objectContaining({
+          result: "FAILED",
+          problems: ["SCREEN_OR_PRINT"],
+          summary: expect.stringContaining("DETAIL-FOR-ADMINS"),
+          confidence: 0.85,
+          engine: "fake",
+        }),
+      ]);
+      expect(
+        await db.prisma.auditLog.count({
+          where: { action: "evidence.automated_check", targetId: wbId },
+        }),
+      ).toBe(1);
+    });
+
+    it("fails files already attached to another asset without calling the service", async () => {
+      const alice = await owner();
+      const body = await phonePhoto("#405060");
+      await added(alice, await asset(alice, true), { body });
+      const wbId = await asset(alice, true);
+      const copy = await added(alice, wbId, { body });
+      await consent(alice, wbId, true);
+      engine.evidenceCalls.length = 0;
+      await run();
+      expect(engine.evidenceCalls).toHaveLength(0);
+      expect((await evidenceChecks(alice, wbId))[copy.id]).toMatchObject({
+        status: "FAILED",
+        problems: ["REUSED_FILE"],
+      });
+    });
+
+    it("retries outages later and gives up on errors that will not go away", async () => {
+      const alice = await owner();
+      const wbId = await asset(alice, true);
+      await consent(alice, wbId, true);
+      const photo = await added(alice, wbId, { body: await phonePhoto("#506070") });
+      engine.evidence = async () => {
+        throw new CheckEngineError("service returned 503", true);
+      };
+      try {
+        await run();
+        expect((await evidenceChecks(alice, wbId))[photo.id]).toMatchObject({ status: "PENDING" });
+        // Not due yet.
+        expect(await run()).toBe(0);
+        clock.advance(60_000);
+        engine.evidence = async () => {
+          throw new CheckEngineError("the model refused to answer", false);
+        };
+        expect(await run()).toBe(1);
+      } finally {
+        engine.evidence = passing;
+      }
+      expect((await evidenceChecks(alice, wbId))[photo.id]).toMatchObject({
+        status: "UNAVAILABLE",
+      });
+      const job = await db.prisma.automatedJob.findFirstOrThrow({ where: { entityId: photo.id } });
+      expect(job).toMatchObject({ status: "FAILED", attempts: 2 });
+    });
+
+    it("stops checking when consent is withdrawn and does not check verifier uploads", async () => {
+      const alice = await owner();
+      const wbId = await asset(alice, true);
+      await consent(alice, wbId, true);
+      const photo = await added(alice, wbId, { body: await phonePhoto("#607080") });
+      const off = await consent(alice, wbId, false);
+      expect(off.json()).toEqual({ available: true, enabled: false, enabledAt: null });
+      expect(await run()).toBe(0);
+      expect((await evidenceChecks(alice, wbId))[photo.id]).toBeNull();
+      expect(
+        (await db.prisma.auditLog.findMany({ where: { targetId: wbId } }))
+          .map((a) => a.action)
+          .filter((a) => a.startsWith("asset.automated_checks"))
+          .sort(),
+      ).toEqual(["asset.automated_checks_disabled", "asset.automated_checks_enabled"]);
+
+      const bob = await owner();
+      expect((await consent(bob, wbId, true)).statusCode).toBe(404);
+      expect((await call(null, "GET", `/assets/${wbId}/automated-checks`)).statusCode).toBe(401);
     });
   });
 });

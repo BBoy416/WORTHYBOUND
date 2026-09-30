@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { CheckEngineError } from "@worthybound/automated-checks";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { grantAdmin } from "../src/cli/admin-grant.js";
@@ -6,6 +7,7 @@ import { recordKyc } from "../src/cli/kyc-record.js";
 import {
   type Clock,
   createTestDatabase,
+  fakeCheckEngine,
   signIn,
   TEST_DATABASE_URL,
   testApp,
@@ -21,6 +23,7 @@ describe.skipIf(!TEST_DATABASE_URL)("verifier system", () => {
   let app: FastifyInstance;
   let clock: Clock;
   let admin: Person;
+  const engine = fakeCheckEngine();
 
   interface Person {
     wallet: TestWallet;
@@ -126,7 +129,7 @@ describe.skipIf(!TEST_DATABASE_URL)("verifier system", () => {
   beforeAll(async () => {
     db = await createTestDatabase();
     clock = testClock();
-    app = await testApp(db.prisma, { now: clock.now });
+    app = await testApp(db.prisma, { now: clock.now, checkEngine: engine });
     admin = await person();
     await grantAdmin(db.prisma, admin.wallet.address);
   });
@@ -608,6 +611,96 @@ describe.skipIf(!TEST_DATABASE_URL)("verifier system", () => {
     });
   });
 
+  describe("AI reports", () => {
+    const reports = (who: Person, id: string) =>
+      call(who, "GET", `/review/verifiers/${id}/ai-reports`);
+    /** Until the queue is empty: earlier tests queued reports too. */
+    const run = async () => {
+      const checks = app.automatedChecks as NonNullable<FastifyInstance["automatedChecks"]>;
+      while ((await checks.runOnce()) > 0);
+    };
+    const answer = engine.report;
+
+    it("writes an advisory report on each application for reviewers only", async () => {
+      const rev = await reviewer();
+      const applicant = await person();
+      const { id } = await apply(applicant, { bio: "Watchmaker since 2001" });
+      expect(await expectOk(reports(rev, id))).toEqual({
+        available: true,
+        pending: true,
+        lastError: null,
+        items: [],
+      });
+      await run();
+      expect(engine.reportCalls.filter((c) => c.bio === "Watchmaker since 2001")).toEqual([
+        {
+          entityType: "LABORATORY",
+          businessName: "Geneva Watch Lab",
+          website: "https://lab.example",
+          bio: "Watchmaker since 2001",
+          categories: ["LUXURY_WATCH", "JEWELRY"],
+          identityVerified: false,
+          previousRejections: 0,
+        },
+      ]);
+      const body = await expectOk(reports(rev, id));
+      expect(body).toMatchObject({ pending: false, lastError: null });
+      expect(body.items).toEqual([
+        expect.objectContaining({
+          recommendation: "NEEDS_MORE_INFORMATION",
+          concerns: ["No certifications named"],
+          sources: ["https://lab.example/about"],
+          engine: "fake",
+          model: "fake-model-1",
+          reportVersion: "verifier-report-v1",
+        }),
+      ]);
+      // Reviewers decide: the report changes nothing about the application.
+      const me = await call(applicant, "GET", "/verifier/me");
+      expect(me.json().status).toBe("APPLIED");
+      expect(me.body).not.toContain("certifications");
+      expect((await reports(applicant, id)).statusCode).toBe(403);
+      expect((await call(null, "GET", `/review/verifiers/${id}/ai-reports`)).statusCode).toBe(401);
+      expect((await reports(rev, randomUUID())).statusCode).toBe(404);
+    });
+
+    it("lets reviewers request a new report and shows when one could not be written", async () => {
+      const rev = await reviewer();
+      const applicant = await person();
+      const { id } = await apply(applicant);
+      await run();
+      engine.report = async () => {
+        throw new CheckEngineError("invalid recommendation", false);
+      };
+      try {
+        const requested = await call(rev, "POST", `/review/verifiers/${id}/ai-reports`);
+        expect(requested.statusCode, requested.body).toBe(202);
+        expect(requested.json()).toMatchObject({ pending: true });
+        clock.advance(1000);
+        await run();
+      } finally {
+        engine.report = answer;
+      }
+      const body = await expectOk(reports(rev, id));
+      expect(body.items).toHaveLength(1);
+      expect(body.lastError).toMatch(/could not be written/);
+      expect((await audits("verifier.ai_report_requested", id)).map((a) => a.actorId)).toEqual([
+        rev.id,
+      ]);
+
+      const self = await call(applicant, "POST", `/review/verifiers/${id}/ai-reports`);
+      expect(self.statusCode).toBe(403);
+      const ownReview = await call(rev, "POST", "/verifier/application", {
+        ...lab,
+        categories: ["OTHER"],
+      });
+      const own = ownReview.json<{ id: string }>().id;
+      expect(
+        (await call(rev, "POST", `/review/verifiers/${own}/ai-reports`)).json().error.code,
+      ).toBe("self_review");
+    });
+  });
+
   describe("admin roles", () => {
     it("grants and revokes VERIFIER_REVIEWER, taking effect at once", async () => {
       const p = await person();
@@ -700,6 +793,7 @@ describe.skipIf(!TEST_DATABASE_URL)("verifier rate limits", () => {
         write: generous,
         public: { max: 2, timeWindowMs: 60_000 },
         apply: { max: 2, timeWindowMs: 60_000 },
+        checks: { max: 1, timeWindowMs: 60_000 },
       },
     });
   });
@@ -723,6 +817,37 @@ describe.skipIf(!TEST_DATABASE_URL)("verifier rate limits", () => {
     for (let i = 0; i < 3; i++) codes.push((await applyAs(alice)).statusCode);
     expect(codes).toEqual([201, 409, 429]);
     expect((await applyAs(bob)).statusCode).toBe(201);
+  });
+
+  it("answers 503 for AI reports without a check engine, and limits requests per user", async () => {
+    const applicant = await signIn(app, new TestWallet());
+    const { id } = (
+      await app.inject({
+        method: "POST",
+        url: "/verifier/application",
+        payload: { entityType: "INDIVIDUAL", categories: ["OTHER"] },
+        cookies: { wb_session: applicant },
+      })
+    ).json<{ id: string }>();
+    const adminWallet = new TestWallet();
+    const admin = await signIn(app, adminWallet);
+    await grantAdmin(db.prisma, adminWallet.address);
+    const request = (method: "GET" | "POST") =>
+      app.inject({
+        method,
+        url: `/review/verifiers/${id}/ai-reports`,
+        cookies: { wb_session: admin },
+      });
+    expect((await request("GET")).json()).toEqual({
+      available: false,
+      pending: false,
+      lastError: null,
+      items: [],
+    });
+    const codes = [];
+    for (let i = 0; i < 2; i++) codes.push((await request("POST")).statusCode);
+    expect(codes).toEqual([503, 429]);
+    expect(await db.prisma.automatedJob.count()).toBe(0);
   });
 
   it("limits public profile lookups per IP address", async () => {
