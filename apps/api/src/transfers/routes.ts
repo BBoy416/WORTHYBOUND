@@ -144,6 +144,22 @@ export const transferRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx
     },
   );
 
+  app.get(
+    "/transfers/:transferId/shipment-session",
+    {
+      preHandler: authenticate,
+      schema: {
+        params: transferParamsSchema,
+        response: { 200: captureSessionSchema, ...errors },
+      },
+    },
+    async (request) =>
+      toCaptureSession(
+        await service.shipmentSession(request.params.transferId, actor(request)),
+        now(),
+      ),
+  );
+
   /**
    * Starts the seller's capture session of the item and the sealed package before shipping, or
    * returns the open one (200). Shots are uploaded as for any capture session.

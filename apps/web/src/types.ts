@@ -12,6 +12,7 @@ import type {
   ChainTransactionStatus,
   CheckProblem,
   ClaimType,
+  EscrowStatus,
   EvidenceType,
   EvidenceVisibility,
   IdentityStatus,
@@ -25,6 +26,7 @@ import type {
   Role,
   TemplateVersionStatus,
   TokenizationStatus,
+  TransferDelivery,
   TransferStatus,
   VerificationLevel,
   VerificationRequestStatus,
@@ -393,6 +395,10 @@ export interface Transfer {
   asset: { wbId: string; category: AssetCategory; brand: string | null; model: string | null };
   fromWalletAddress: string;
   toWalletAddress: string;
+  /** Handed over in person, or shipped with the price in escrow. */
+  delivery: TransferDelivery;
+  /** Null for transfers in person, and until a shipped transfer is accepted. */
+  escrow: TransferEscrow | null;
   /** Unsigned transaction (base64) to sign with the wallet, while accepted. */
   transaction: string | null;
   signedBySeller: boolean;
@@ -405,3 +411,35 @@ export interface Transfer {
   cancelledAt: string | null;
   createdAt: string;
 }
+
+type ChainJob = { status: ChainTransactionStatus; signature: string | null } | null;
+
+/** A shipped transfer's escrow (ADR 0014). */
+export interface TransferEscrow {
+  status: EscrowStatus;
+  /** Payment into escrow (base64) for the buyer to sign, once both signed the transfer. */
+  paymentTransaction: string | null;
+  awaitingYourPayment: boolean;
+  payment: ChainJob;
+  refund: ChainJob;
+  paidAt: string | null;
+  shipBy: string | null;
+  shipmentSessionId: string | null;
+  shipmentFilmed: boolean;
+  shippedAt: string | null;
+  carrier: string | null;
+  trackingNumber: string | null;
+  deliveryDueAt: string | null;
+  deliveryExtensions: number;
+  deliveredAt: string | null;
+  /** The buyer's photos of the package and the item (`/checks/:id`). */
+  receiptCheckId: string | null;
+  releaseAt: string | null;
+  disputedAt: string | null;
+  disputeReason: string | null;
+  resolution: string | null;
+  resolvedAt: string | null;
+}
+
+/** `GET /admin/transfers/disputes`: both parties, nothing to sign. */
+export type AdminTransfer = Omit<Transfer, "role" | "transaction" | "awaitingYourSignature">;

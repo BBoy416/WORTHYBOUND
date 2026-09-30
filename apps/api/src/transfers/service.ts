@@ -807,6 +807,23 @@ export function createTransferService({ prisma, now, oracle, log }: TransferServ
      * Starts the capture session in which the seller films the item and the sealed package with
      * the session's code before shipping, or returns the open one.
      */
+    /** The seller's latest capture session before shipping; 404 until one was started. */
+    async shipmentSession(id: string, actor: Actor): Promise<SessionRecord> {
+      await escrowFor(id, actor, "SELLER");
+      const at = now();
+      await prisma.captureSession.updateMany({
+        where: { transferRequestId: id, status: "OPEN", expiresAt: { lte: at } },
+        data: { status: "EXPIRED", updatedAt: at },
+      });
+      const session = await prisma.captureSession.findFirst({
+        where: { transferRequestId: id },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        include: withEvidence,
+      });
+      if (!session) throw notFound("Capture session");
+      return session;
+    },
+
     async startShipmentSession(
       id: string,
       actor: Actor,

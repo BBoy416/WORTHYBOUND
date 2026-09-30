@@ -1097,7 +1097,15 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
           trackingNumber: "1",
         });
         expect(notFilmed.body.error.code).toBe("shipment_not_filmed");
+        const sessionPath = `/transfers/${t.id}/shipment-session`;
+        expect((await call(alice, "GET", sessionPath)).statusCode).toBe(404);
         const session = await shipped(alice, wbId, t.id);
+        const filmed = await call(alice, "GET", sessionPath);
+        expect(filmed.json()).toMatchObject({ id: session.id, status: "COMPLETED" });
+        expect((await call(bob, "GET", sessionPath)).statusCode).toBe(404);
+        // Sessions before shipping are shown with the transfer, not in the asset's guided capture.
+        const own = await call(alice, "GET", `/assets/${wbId}/capture-sessions`);
+        expect(own.json().items.map((s: { id: string }) => s.id)).not.toContain(session.id);
         expect(session.shots.map((s) => s.shot)).toEqual([
           "DIAL",
           "CASEBACK",

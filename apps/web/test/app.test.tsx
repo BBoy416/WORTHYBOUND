@@ -1,13 +1,15 @@
 import type { PublicPassport } from "@worthybound/shared";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CaptureShot } from "@worthybound/shared";
 import type {
+  AdminTransfer,
   CaptureSession,
   OwnerAsset,
   OwnerEvidence,
   PurchaseCheck,
   Transfer,
+  TransferEscrow,
 } from "../src/types.js";
 import { me, mockFetch, renderAt, unauthenticated } from "./helpers.js";
 
@@ -1344,6 +1346,40 @@ describe("checks before buying", () => {
       expect((screen.getByText("Start recording") as HTMLButtonElement).disabled).toBe(true);
     });
   });
+
+  it("asks for photos of the package with the seller's code on delivery, and shows the result", async () => {
+    const receipt = (overrides: Partial<PurchaseCheck> = {}) =>
+      check({
+        kind: "RECEIPT",
+        owner: { ...check().owner, code: "PK4Z9M", message: null },
+        item: {
+          ...check().item,
+          shots: [
+            { shot: "PACKAGE", instruction: "The sealed package with the code", receivedAt: null },
+            { shot: "DIAL", instruction: "The dial, face on", receivedAt: null },
+          ],
+        },
+        ...overrides,
+      });
+    let state = receipt();
+    mockFetch({
+      "GET /auth/me": { json: me() },
+      [`GET /purchase-checks/${ID}`]: () => ({ json: state }),
+    });
+    renderAt(`/checks/${ID}`);
+    expect(await screen.findByText("PK4Z9M")).toBeTruthy();
+    expect(screen.getByText(/Check on delivery/)).toBeTruthy();
+    expect(screen.queryByText("1. The seller")).toBeNull();
+    expect(screen.getByText("Take photo: Package")).toBeTruthy();
+
+    cleanup();
+    state = receipt({
+      status: "COMPLETED",
+      item: { ...receipt().item, result: "NO_MATCH", checkedAt: "2026-09-30T10:05:00.000Z" },
+    });
+    renderAt(`/checks/${ID}`);
+    expect(await screen.findByText(/The payment is held for an administrator/)).toBeTruthy();
+  });
 });
 
 describe("transfers", () => {
@@ -1358,6 +1394,8 @@ describe("transfers", () => {
     fromWalletAddress: BUYER,
     toWalletAddress: ME,
     priceLamports: "0",
+    delivery: "IN_PERSON",
+    escrow: null,
     transaction: null,
     signedBySeller: false,
     signedByBuyer: false,
@@ -1416,6 +1454,7 @@ describe("transfers", () => {
       assetId: WB,
       toWalletAddress: BUYER,
       priceLamports: "2500000000",
+      delivery: "IN_PERSON",
     });
   });
 
@@ -1546,6 +1585,290 @@ describe("transfers", () => {
     await waitFor(() =>
       expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/cancel"))).toBe(true),
     );
+  });
+
+  describe("shipped, with the price in escrow", () => {
+    const PRICE = "2500000000";
+    const escrow = (overrides: Partial<TransferEscrow> = {}): TransferEscrow => ({
+      status: "AWAITING_PAYMENT",
+      paymentTransaction: null,
+      awaitingYourPayment: false,
+      payment: null,
+      refund: null,
+      paidAt: null,
+      shipBy: null,
+      shipmentSessionId: null,
+      shipmentFilmed: false,
+      shippedAt: null,
+      carrier: null,
+      trackingNumber: null,
+      deliveryDueAt: null,
+      deliveryExtensions: 0,
+      deliveredAt: null,
+      receiptCheckId: null,
+      releaseAt: null,
+      disputedAt: null,
+      disputeReason: null,
+      resolution: null,
+      resolvedAt: null,
+      ...overrides,
+    });
+    const shipped = (e: Partial<TransferEscrow>, overrides: Partial<Transfer> = {}) =>
+      transfer({
+        status: "ACCEPTED",
+        priceLamports: PRICE,
+        delivery: "SHIPPED",
+        signedBySeller: true,
+        signedByBuyer: true,
+        escrow: escrow(e),
+        ...overrides,
+      });
+    const seller = { role: "SENDER" as const, fromWalletAddress: ME, toWalletAddress: BUYER };
+    const paid = {
+      status: "PAID" as const,
+      paidAt: "2026-09-30T10:00:00.000Z",
+      shipBy: "2026-10-03T10:00:00.000Z",
+    };
+
+    it("starts a shipped transfer only with a price", async () => {
+      const state = asset({ tokenizationStatus: "TOKENIZED" });
+      const calls = mockFetch({
+        ...ownerRoutes(state),
+        "POST /transfers": { status: 201, json: transfer({ role: "SENDER" }) },
+      });
+      renderAt(`/assets/${WB}`);
+      fireEvent.change(await screen.findByLabelText("Transfer to wallet"), {
+        target: { value: BUYER },
+      });
+      fireEvent.change(screen.getByLabelText("Delivery"), { target: { value: "SHIPPED" } });
+      expect(screen.getByText(/The buyer pays the price into escrow/)).toBeTruthy();
+      expect((screen.getByText("Start transfer") as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.change(screen.getByLabelText("Price in SOL"), { target: { value: "2.5" } });
+      fireEvent.click(screen.getByText("Start transfer"));
+      await waitFor(() =>
+        expect(calls.find((c) => c.method === "POST" && c.url === "/transfers")?.body).toEqual({
+          assetId: WB,
+          toWalletAddress: BUYER,
+          priceLamports: PRICE,
+          delivery: "SHIPPED",
+        }),
+      );
+    });
+
+    it("lets the buyer pay into escrow once both signed, and sign again after a failed payment", async () => {
+      const signTransaction = standardWallet(ME);
+      let state = shipped({
+        awaitingYourPayment: true,
+        paymentTransaction: "AQID",
+        payment: { status: "FAILED", signature: null },
+      });
+      const calls = mockFetch({
+        "GET /auth/me": { json: me() },
+        "GET /transfers": () => ({ json: { items: [state] } }),
+        [`POST /transfers/${state.id}/payment`]: () => (
+          (state = shipped({ payment: { status: "PENDING", signature: null } })),
+          { json: state }
+        ),
+      });
+      renderAt("/transfers");
+      expect(await screen.findByText(/Your last payment did not go through/)).toBeTruthy();
+      fireEvent.click(screen.getByText("Pay 2.5 SOL into escrow"));
+      expect(await screen.findByText("Sending your payment to escrow on Solana…")).toBeTruthy();
+      expect(signTransaction).toHaveBeenCalledWith(
+        expect.objectContaining({ transaction: new Uint8Array([1, 2, 3]) }),
+      );
+      expect(calls.find((c) => c.url.endsWith("/payment"))?.body).toEqual({
+        signedTransaction: "CQk=",
+      });
+      expect(screen.queryByText("Cancel transfer")).toBeNull();
+    });
+
+    it("has the seller film the item and the package, then ship", async () => {
+      const session: CaptureSession = {
+        id: "0199a000-0000-7000-8000-0000000000s1",
+        code: "PK4Z9M",
+        status: "OPEN",
+        shots: [
+          { shot: "DIAL", instruction: "The dial, face on", evidenceId: null, receivedAt: null },
+          {
+            shot: "PACKAGE",
+            instruction: "The sealed package with the code",
+            evidenceId: null,
+            receivedAt: null,
+          },
+        ],
+        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+        completedAt: null,
+        createdAt: "2026-09-30T10:00:00.000Z",
+      };
+      let state = shipped(paid, seller);
+      const calls = mockFetch({
+        "GET /auth/me": { json: me() },
+        "GET /transfers": () => ({ json: { items: [state] } }),
+        [`POST /transfers/${state.id}/shipment-session`]: () => (
+          (state = shipped({ ...paid, shipmentSessionId: session.id }, seller)),
+          { status: 201, json: session }
+        ),
+        [`GET /transfers/${state.id}/shipment-session`]: { json: session },
+        [`POST /transfers/${state.id}/shipment`]: () => (
+          (state = shipped(
+            {
+              ...paid,
+              status: "SHIPPED",
+              shipmentFilmed: true,
+              shippedAt: "2026-09-30T12:00:00.000Z",
+              carrier: "DHL",
+              trackingNumber: "JD014",
+              deliveryDueAt: "2026-10-21T12:00:00.000Z",
+            },
+            seller,
+          )),
+          { json: state }
+        ),
+      });
+      renderAt("/transfers");
+      expect(await screen.findByText(/Ship by/)).toBeTruthy();
+      expect(screen.getByText("Cancel and refund")).toBeTruthy();
+      fireEvent.click(screen.getByText("Film the item and the package"));
+      expect(await screen.findByText("PK4Z9M")).toBeTruthy();
+      expect(screen.getByText(/Write this code on the package/)).toBeTruthy();
+      expect(screen.queryByLabelText("Carrier")).toBeNull();
+
+      cleanup();
+      state = shipped({ ...paid, shipmentSessionId: session.id, shipmentFilmed: true }, seller);
+      renderAt("/transfers");
+      expect(await screen.findByText("Item and package filmed ✓")).toBeTruthy();
+      fireEvent.change(screen.getByLabelText("Carrier"), { target: { value: "DHL" } });
+      fireEvent.change(screen.getByLabelText("Tracking number"), { target: { value: " JD014 " } });
+      fireEvent.click(screen.getByText("Mark as shipped"));
+      expect(await screen.findByText("JD014")).toBeTruthy();
+      expect(calls.find((c) => c.url.endsWith("/shipment"))?.body).toEqual({
+        carrier: "DHL",
+        trackingNumber: "JD014",
+      });
+      expect(screen.queryByText("Cancel and refund")).toBeNull();
+    });
+
+    it("lets the buyer confirm delivery, wait longer or report a problem", async () => {
+      const inTransit = {
+        ...paid,
+        status: "SHIPPED" as const,
+        shipmentFilmed: true,
+        shippedAt: "2026-09-30T12:00:00.000Z",
+        carrier: "DHL",
+        trackingNumber: "JD014",
+        deliveryDueAt: new Date(Date.now() + 5 * 24 * 60 * 60_000).toISOString(),
+      };
+      let state = shipped(inTransit);
+      const calls = mockFetch({
+        "GET /auth/me": { json: me() },
+        "GET /transfers": () => ({ json: { items: [state] } }),
+        [`POST /transfers/${state.id}/extend`]: { json: shipped(inTransit) },
+        [`POST /transfers/${state.id}/dispute`]: () => (
+          (state = shipped({ ...inTransit, status: "DISPUTED", disputeReason: "Box crushed" })),
+          { json: state }
+        ),
+        [`POST /transfers/${state.id}/delivered`]: () => (
+          (state = shipped({
+            ...inTransit,
+            status: "DELIVERED",
+            deliveredAt: "2026-10-02T12:00:00.000Z",
+            releaseAt: "2026-10-09T12:00:00.000Z",
+            receiptCheckId: "0199a000-0000-7000-8000-0000000000c9",
+          })),
+          { json: state }
+        ),
+      });
+      renderAt("/transfers");
+      expect(await screen.findByText(/Expected by/)).toBeTruthy();
+      // Before the delivery period ends, the buyer waits or reports a problem.
+      expect(screen.queryByText("Cancel and refund")).toBeNull();
+      fireEvent.click(screen.getByText("Wait 7 more days"));
+      await waitFor(() => expect(calls.some((c) => c.url.endsWith("/extend"))).toBe(true));
+
+      fireEvent.click(screen.getByText("Report a problem"));
+      fireEvent.change(screen.getByLabelText("What is wrong?"), {
+        target: { value: "Box crushed" },
+      });
+      fireEvent.click(screen.getByText("Report problem"));
+      expect(await screen.findByText(/the buyer reported “Box crushed”/)).toBeTruthy();
+
+      cleanup();
+      state = shipped(inTransit);
+      renderAt("/transfers");
+      fireEvent.click(await screen.findByText("I received it"));
+      const link = await screen.findByText("Photograph the package and the item");
+      expect(link.getAttribute("href")).toBe("/checks/0199a000-0000-7000-8000-0000000000c9");
+    });
+
+    it("lets the buyer cancel for a refund once the delivery period passed", async () => {
+      mockFetch({
+        "GET /auth/me": { json: me() },
+        "GET /transfers": {
+          json: {
+            items: [
+              shipped({
+                ...paid,
+                status: "SHIPPED",
+                shippedAt: "2026-09-01T12:00:00.000Z",
+                deliveryDueAt: "2026-09-22T12:00:00.000Z",
+                deliveryExtensions: 3,
+              }),
+              shipped(
+                {
+                  ...paid,
+                  status: "REFUNDED",
+                  refund: {
+                    status: "CONFIRMED",
+                    signature: "5REFUNDSIGNATUREabcdefghijkmnopqrstuvwxyz",
+                  },
+                },
+                {
+                  id: "0199a000-0000-7000-8000-0000000000t4",
+                  status: "CANCELLED",
+                  closedReason: "not_shipped",
+                },
+              ),
+            ],
+          },
+        },
+      });
+      renderAt("/transfers");
+      expect(await screen.findByText(/The delivery period ended/)).toBeTruthy();
+      expect(screen.getByText("Cancel and refund")).toBeTruthy();
+      expect(screen.queryByText("Wait 7 more days")).toBeNull();
+      expect(screen.getByText("Refunded: the seller did not ship in time.")).toBeTruthy();
+      expect(screen.getByText("5REF…wxyz ↗")).toBeTruthy();
+    });
+
+    it("lets an administrator pay the seller or refund the buyer of a held sale", async () => {
+      const held = (id: string, disputeReason: string): AdminTransfer =>
+        shipped(
+          { ...paid, status: "DISPUTED", disputedAt: "2026-10-01T10:00:00.000Z", disputeReason },
+          { id },
+        );
+      const noMatch = held("0199a000-0000-7000-8000-0000000000d1", "receipt_no_match");
+      const failed = held("0199a000-0000-7000-8000-0000000000d2", "release_failed");
+      const calls = mockFetch({
+        "GET /auth/me": { json: me(["USER", "ADMIN"]) },
+        "GET /admin/transfers/disputes": { json: { items: [noMatch, failed] } },
+        [`POST /admin/transfers/${noMatch.id}/resolution`]: { json: noMatch },
+      });
+      renderAt("/admin/disputes");
+      expect(await screen.findByText(/do not match the seller's photos/)).toBeTruthy();
+      expect(screen.getByText(/only a refund is possible/)).toBeTruthy();
+      expect(screen.getAllByText("Pay the seller")).toHaveLength(1);
+      expect(screen.getAllByText("Refund the buyer")).toHaveLength(2);
+      const [decision] = screen.getAllByLabelText("Decision, shown to both parties");
+      fireEvent.change(decision as HTMLElement, { target: { value: "Matches on inspection." } });
+      fireEvent.click(screen.getByText("Pay the seller"));
+      await waitFor(() =>
+        expect(calls.find((c) => c.url.endsWith("/resolution"))?.body).toEqual({
+          outcome: "RELEASE",
+          resolution: "Matches on inspection.",
+        }),
+      );
+    });
   });
 });
 

@@ -127,8 +127,9 @@ export function createCaptureService({ prisma, now }: CaptureServiceOptions) {
     async list(wbId: string, actor: Actor): Promise<SessionRecord[]> {
       const asset = await ownedAsset(prisma, wbId, actor);
       await expireDue(prisma, asset.id, now());
+      // Sessions for remote checks and shipments are shown with them.
       return prisma.captureSession.findMany({
-        where: { assetId: asset.id },
+        where: { assetId: asset.id, purchaseCheckId: null, transferRequestId: null },
         include: withEvidence,
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: 10,

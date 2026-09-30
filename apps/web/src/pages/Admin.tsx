@@ -31,11 +31,12 @@ import {
   useAction,
   useLoad,
 } from "../components/ui.js";
-import { formatDate, formatDateTime, humanize, shortAddress } from "../format.js";
+import { formatDate, formatDateTime, formatSol, humanize, shortAddress } from "../format.js";
 import { Link } from "../router.js";
 import { useSession } from "../session.js";
 import type {
   AdminCheck,
+  AdminTransfer,
   AdminTemplate,
   AdminTemplateVersion,
   ReviewVerifier,
@@ -44,7 +45,7 @@ import type {
   VerifierSummary,
 } from "../types.js";
 
-type Tab = "verifiers" | "templates" | "roles" | "checks";
+type Tab = "verifiers" | "templates" | "roles" | "checks" | "disputes";
 
 const ACTION_LABELS: Record<string, string> = {
   UNDER_REVIEW: "Start review",
@@ -79,6 +80,9 @@ export function AdminPage({ tab }: { tab: Tab }) {
             <TabLink to="/admin/checks" active={current === "checks"}>
               AI checks
             </TabLink>
+            <TabLink to="/admin/disputes" active={current === "disputes"}>
+              Escrow disputes
+            </TabLink>
           </nav>
         )}
       </div>
@@ -86,6 +90,7 @@ export function AdminPage({ tab }: { tab: Tab }) {
       {current === "templates" && <TemplatesTab />}
       {current === "roles" && <RolesTab />}
       {current === "checks" && <ChecksTab />}
+      {current === "disputes" && <DisputesTab />}
     </div>
   );
 }
@@ -846,5 +851,106 @@ function ChecksTab() {
         </ul>
       )}
     </Card>
+  );
+}
+
+// ─── Escrow disputes ──────────────────────────────────────────────────────────
+
+const HELD_REASONS: Record<string, string> = {
+  receipt_no_match:
+    "The buyer's photos on arrival do not match the seller's photos before shipping",
+  release_failed: "The transfer could not be completed on Solana; only a refund is possible",
+  asset_reported_stolen: "The owner reported the item stolen after shipping",
+  asset_reported_lost: "The owner reported the item lost after shipping",
+};
+
+/** Shipped sales held in escrow: pay the seller or refund the buyer (ADR 0014). */
+function DisputesTab() {
+  const list = useLoad(() => get<{ items: AdminTransfer[] }>("/admin/transfers/disputes"), []);
+  return (
+    <Card title="Escrow disputes">
+      <p className="muted small">
+        The payment stays in escrow and the item with the seller until you decide. Paying the seller
+        also transfers the item to the buyer; a refund cancels the sale.
+      </p>
+      {!list.data ? (
+        <Loading error={list.error} />
+      ) : list.data.items.length === 0 ? (
+        <p className="muted">No disputes.</p>
+      ) : (
+        <ul className="list">
+          {list.data.items.map((t) => (
+            <DisputeItem key={t.id} transfer={t} onChange={list.reload} />
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+function DisputeItem({ transfer: t, onChange }: { transfer: AdminTransfer; onChange: () => void }) {
+  const [resolution, setResolution] = useState("");
+  const { busy, error, run } = useAction();
+  const e = t.escrow;
+  const reason = e?.disputeReason ?? "";
+  const decide = (outcome: "RELEASE" | "REFUND") =>
+    void run(async () => {
+      await post(`/admin/transfers/${t.id}/resolution`, {
+        outcome,
+        resolution: resolution.trim(),
+      });
+      setResolution("");
+      onChange();
+    });
+  return (
+    <li>
+      <div>
+        <strong>
+          {t.asset.brand ?? "Unnamed"} {t.asset.model}
+        </strong>{" "}
+        <span className="mono small">{t.asset.wbId}</span> · {formatSol(t.priceLamports)}
+      </div>
+      <div className="muted small">
+        Seller <span className="mono">{shortAddress(t.fromWalletAddress)}</span> · Buyer{" "}
+        <span className="mono">{shortAddress(t.toWalletAddress)}</span> · Held{" "}
+        {formatDateTime(e?.disputedAt ?? null)}
+      </div>
+      <p className="small">
+        {HELD_REASONS[reason] ?? (
+          <>
+            The buyer reported: <q>{reason}</q>
+          </>
+        )}
+      </p>
+      {e?.shippedAt && (
+        <div className="muted small">
+          Shipped {formatDateTime(e.shippedAt)} with {e.carrier}, tracking{" "}
+          <span className="mono">{e.trackingNumber}</span>
+          {e.deliveredAt && ` · Delivered ${formatDateTime(e.deliveredAt)}`}
+        </div>
+      )}
+      <Field label="Decision, shown to both parties">
+        <textarea value={resolution} onChange={(event) => setResolution(event.target.value)} />
+      </Field>
+      <div className="actions">
+        {reason !== "release_failed" && (
+          <button
+            className="small"
+            disabled={busy || !resolution.trim()}
+            onClick={() => decide("RELEASE")}
+          >
+            Pay the seller
+          </button>
+        )}
+        <button
+          className="small danger"
+          disabled={busy || !resolution.trim()}
+          onClick={() => decide("REFUND")}
+        >
+          Refund the buyer
+        </button>
+      </div>
+      <ErrorText error={error} />
+    </li>
   );
 }

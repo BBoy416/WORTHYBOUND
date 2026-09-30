@@ -26,6 +26,14 @@ const REMOTE_RESULT_TEXT: Record<string, string> = {
   INCONCLUSIVE: "The photos could not tell whether the filmed item is the recorded item.",
 };
 
+const RECEIPT_RESULT_TEXT: Record<string, string> = {
+  MATCH: "The item you received matches the seller's photos before shipping. The sale is released.",
+  NO_MATCH:
+    "The item you received does not match the seller's photos before shipping. The payment is held for an administrator.",
+  INCONCLUSIVE:
+    "The photos could not tell whether you received the item the seller filmed. The sale is released on the release date unless you report a problem.",
+};
+
 const CODE_CHECK_TEXT: Record<RemoteCodeResult, string> = {
   SHOWN: "The seller's photo shows your code next to the item.",
   MISSING: "Your code is not visible in the seller's photo. Look for it in the video.",
@@ -89,7 +97,9 @@ export function PurchaseCheckPage({ checkId }: { checkId: string }) {
     c !== null &&
     (c.kind === "REMOTE"
       ? c.status === "OPEN" || c.owner.codeCheck === "PENDING"
-      : c.owner.code !== null || c.item.comparing);
+      : c.kind === "RECEIPT"
+        ? c.item.comparing
+        : c.owner.code !== null || c.item.comparing);
   useEffect(() => {
     if (!waiting) return;
     const timer = setInterval(() => (setCurrent(null), check.reload()), 3000);
@@ -104,6 +114,9 @@ export function PurchaseCheckPage({ checkId }: { checkId: string }) {
   if (!c) return <Loading error={check.error} />;
   if (c.kind === "REMOTE") {
     return <RemoteCheck check={c} path={path} error={error ?? check.error} />;
+  }
+  if (c.kind === "RECEIPT") {
+    return <ReceiptCheck check={c} path={path} onCheck={setCurrent} error={check.error} />;
   }
   const open = c.status === "OPEN";
   const next = c.item.shots.find((s) => s.receivedAt === null) ?? null;
@@ -231,7 +244,11 @@ function CheckHeader({ check: c }: { check: PurchaseCheck }) {
       <p className="crumbs">
         <Link to={`/passport/${c.asset.wbId}`}>Passport</Link> /{" "}
         <span className="mono">{c.asset.wbId}</span> /{" "}
-        {c.kind === "REMOTE" ? "Remote check" : "Check before buying"}
+        {c.kind === "REMOTE"
+          ? "Remote check"
+          : c.kind === "RECEIPT"
+            ? "Check on delivery"
+            : "Check before buying"}
       </p>
       <h1>
         {c.asset.brand} <span className="gold">{c.asset.model}</span>
@@ -247,6 +264,73 @@ function CheckHeader({ check: c }: { check: PurchaseCheck }) {
         </p>
       )}
     </>
+  );
+}
+
+/**
+ * The buyer's check of a shipped item on arrival (ADR 0014): the package with the seller's code,
+ * then the item, compared with the seller's photos before shipping.
+ */
+function ReceiptCheck({
+  check: c,
+  path,
+  onCheck,
+  error: loadError,
+}: {
+  check: PurchaseCheck;
+  path: string;
+  onCheck: (check: PurchaseCheck) => void;
+  error: string | null;
+}) {
+  const { busy, error, run } = useAction();
+  const next = c.item.shots.find((s) => s.receivedAt === null) ?? null;
+  const take = (photo: Blob) =>
+    void run(async () => {
+      if (!next) return;
+      onCheck(await postFile<PurchaseCheck>(`${path}/photos/${next.shot}`, photo));
+    });
+  return (
+    <div>
+      <CheckHeader check={c} />
+      <Card title="The package and the item">
+        {c.item.result ? (
+          <>
+            <p>
+              <Badge value={c.item.result} /> {RECEIPT_RESULT_TEXT[c.item.result]}
+            </p>
+            {c.item.reason && <p className="muted small">{c.item.reason}.</p>}
+          </>
+        ) : c.item.comparing ? (
+          <p className="muted">Comparing your photos with the seller's photos before shipping…</p>
+        ) : c.status === "OPEN" ? (
+          <p className="small">
+            Photograph the package before opening it, with the code the seller wrote on it:{" "}
+            <strong className="capture-code mono">{c.owner.code}</strong>, then the item.{" "}
+            <span className="muted">Take the photos by {formatDateTime(c.expiresAt)}.</span>
+          </p>
+        ) : (
+          <p className="muted">
+            This check ended before every photo was taken. The sale is released on the release date
+            unless you report a problem.
+          </p>
+        )}
+        <ol className="capture-shots small">
+          {c.item.shots.map((s) => (
+            <li key={s.shot} className={s.receivedAt ? "done" : ""}>
+              <strong>{humanize(s.shot)}</strong>: {s.instruction}
+              {s.receivedAt && " ✓"}
+            </li>
+          ))}
+        </ol>
+        {c.status === "OPEN" && next && (
+          <Camera label={`Take photo: ${humanize(next.shot)}`} busy={busy} onPhoto={take} />
+        )}
+      </Card>
+      <p className="small">
+        <Link to="/transfers">Back to transfers</Link>
+      </p>
+      <ErrorText error={error ?? loadError} />
+    </div>
   );
 }
 
