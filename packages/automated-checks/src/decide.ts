@@ -4,6 +4,7 @@ import {
   type CheckProblem,
   DETERMINISTIC_CHECK_PROBLEMS,
   FAILING_CHECK_PROBLEMS,
+  type ItemMatchResult,
 } from "@worthybound/shared";
 
 /** Problems the model may report; reuse is found by comparing files and records. */
@@ -44,6 +45,29 @@ export function decide(finding: ModelFinding): {
     return { result: "PASSED", problems, confidence };
   }
   return { result: "INCONCLUSIVE", problems, confidence };
+}
+
+/** What the model reports when comparing an item's photos, before the decision rule. */
+export interface MatchFinding {
+  verdict: "SAME_ITEM" | "DIFFERENT_ITEM" | "CANNOT_TELL";
+  confidence: number;
+}
+
+/**
+ * Turns a comparison into a result by a fixed rule: MATCH or NO_MATCH only with at least
+ * MIN_CONFIDENCE, otherwise INCONCLUSIVE.
+ */
+export function decideMatch(finding: MatchFinding): {
+  result: ItemMatchResult;
+  confidence: number;
+} {
+  const confidence = Number.isFinite(finding.confidence)
+    ? Math.min(1, Math.max(0, finding.confidence))
+    : 0;
+  const sure = confidence >= MIN_CONFIDENCE;
+  if (sure && finding.verdict === "SAME_ITEM") return { result: "MATCH", confidence };
+  if (sure && finding.verdict === "DIFFERENT_ITEM") return { result: "NO_MATCH", confidence };
+  return { result: "INCONCLUSIVE", confidence };
 }
 
 /**

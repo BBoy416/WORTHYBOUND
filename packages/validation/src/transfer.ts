@@ -1,5 +1,12 @@
+import { CAPTURE_CODE_ALPHABET, CAPTURE_CODE_LENGTH, CAPTURE_SHOTS } from "@worthybound/shared";
 import { z } from "zod";
-import { solanaAddressSchema, text, uuidSchema, wbIdSchema } from "./common.js";
+import {
+  solanaAddressSchema,
+  solanaSignatureSchema,
+  text,
+  uuidSchema,
+  wbIdSchema,
+} from "./common.js";
 
 export const transferRequestSchema = z.strictObject({
   assetId: wbIdSchema,
@@ -23,6 +30,33 @@ export const transferSignatureSchema = z.strictObject({
     .regex(/^[A-Za-z0-9+/]+={0,2}$/, "expected base64"),
 });
 export type TransferSignatureInput = z.infer<typeof transferSignatureSchema>;
+
+export const purchaseCheckParamsSchema = z.strictObject({ checkId: uuidSchema });
+export const purchaseCheckPhotoParamsSchema = z.strictObject({
+  checkId: uuidSchema,
+  shot: z.enum(CAPTURE_SHOTS),
+});
+
+/**
+ * The seller's signature (base58) of `ownerConfirmationMessage` with the buyer's code. The code
+ * is accepted in any case and with spaces, as read out or typed.
+ */
+export const ownerConfirmationSchema = z.strictObject({
+  code: z
+    .string()
+    .max(20)
+    .transform((code) => code.replace(/\s/g, "").toUpperCase())
+    .pipe(
+      z
+        .string()
+        .regex(
+          new RegExp(`^[${CAPTURE_CODE_ALPHABET}]{${CAPTURE_CODE_LENGTH}}$`),
+          "expected the buyer's code",
+        ),
+    ),
+  signature: solanaSignatureSchema,
+});
+export type OwnerConfirmationInput = z.infer<typeof ownerConfirmationSchema>;
 
 /** A dispute targets the asset, or one attestation or evidence item on it. */
 export const openDisputeSchema = z

@@ -286,6 +286,7 @@ enum AutomatedCheckResult {
 enum AutomatedJobKind {
   EVIDENCE_CHECK
   VERIFIER_REPORT
+  ITEM_MATCH
 }
 
 enum AutomatedJobStatus {
@@ -327,6 +328,8 @@ model User {
   evidenceReviewed          Evidence[]                        @relation("EvidenceReviewer")
   evidenceUploads           EvidenceUpload[]
   captureSessions           CaptureSession[]
+  purchaseChecks            PurchaseCheck[]                   @relation("PurchaseCheckBuyer")
+  ownerConfirmations        PurchaseCheck[]                   @relation("PurchaseCheckOwner")
   verifier                  Verifier?                         @relation("VerifierUser")
   verifiersApproved         Verifier[]                        @relation("VerifierApprover")
   permissionsApproved       VerifierCategoryPermission[]
@@ -440,6 +443,7 @@ model Asset {
   evidence               Evidence[]
   evidenceUploads        EvidenceUpload[]
   captureSessions        CaptureSession[]
+  purchaseChecks         PurchaseCheck[]
   evidenceCommitments    EvidenceCommitment[]
   verificationRequests   VerificationRequest[]
   attestations           Attestation[]
@@ -659,6 +663,83 @@ model CaptureSession {
   @@index([assetId, createdAt])
   @@index([ownerId, createdAt])
   @@map("capture_sessions")
+}
+
+enum PurchaseCheckStatus {
+  OPEN
+  /// The item check has a result.
+  COMPLETED
+  /// The buyer did not take every photo in time.
+  EXPIRED
+}
+
+enum ItemMatchResult {
+  MATCH
+  NO_MATCH
+  INCONCLUSIVE
+}
+
+/// A buyer's check of an item before buying, in person (ADR 0014): the seller signs the buyer's
+/// one-time code with the owner's wallet, and the buyer photographs the item, which is compared
+/// with the asset's recorded photos. The buyer never learns the seller's wallet or identity.
+model PurchaseCheck {
+  id                   String              @id @default(uuid(7)) @db.Uuid
+  assetId              String              @db.Uuid
+  buyerId              String              @db.Uuid
+  /// One-time code the seller signs (ownerConfirmationMessage); replaced when it expires.
+  ownerCode            String
+  ownerCodeExpiresAt   DateTime            @db.Timestamptz(3)
+  /// The owner who signed the code, their signature (base58) and when.
+  ownerConfirmedById   String?             @db.Uuid
+  ownerSignature       String?
+  ownerConfirmedAt     DateTime?           @db.Timestamptz(3)
+  /// Shots the buyer takes (purchaseCheckShots) when the check started.
+  shots                String[]
+  status               PurchaseCheckStatus @default(OPEN)
+  /// When the last photo arrived and the comparison was queued.
+  photosCompletedAt    DateTime?           @db.Timestamptz(3)
+  itemResult           ItemMatchResult?
+  /// Why the result is INCONCLUSIVE without a comparison (ITEM_MATCH_REASONS).
+  itemReason           String?
+  /// Comparison details, for administrators only.
+  itemSummary          String?
+  itemConfidence       Float?
+  engine               String?
+  model                String?
+  checkVersion         String?
+  /// Recorded photos the buyer's photos were compared with.
+  referenceEvidenceIds String[]
+  itemCheckedAt        DateTime?           @db.Timestamptz(3)
+  expiresAt            DateTime            @db.Timestamptz(3)
+  createdAt            DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime            @updatedAt @db.Timestamptz(3)
+
+  asset            Asset                @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  buyer            User                 @relation("PurchaseCheckBuyer", fields: [buyerId], references: [id], onDelete: Restrict)
+  ownerConfirmedBy User?                @relation("PurchaseCheckOwner", fields: [ownerConfirmedById], references: [id], onDelete: Restrict)
+  photos           PurchaseCheckPhoto[]
+
+  @@index([assetId, createdAt])
+  @@index([buyerId, createdAt])
+  @@map("purchase_checks")
+}
+
+/// Append-only. A photo the buyer took with the app's camera during a purchase check. Kept
+/// private: never evidence of the asset, and shown only to the buyer.
+model PurchaseCheckPhoto {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  checkId    String   @db.Uuid
+  shot       String
+  /// Private object-storage key of the metadata-free JPEG.
+  storageKey String   @unique
+  sha256     String
+  sizeBytes  Int
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  check PurchaseCheck @relation(fields: [checkId], references: [id], onDelete: Restrict)
+
+  @@unique([checkId, shot])
+  @@map("purchase_check_photos")
 }
 
 /// Append-only. Merkle root over a batch of evidence hashes, anchored on-chain.
@@ -1071,7 +1152,7 @@ model VerifierApplicationReport {
 model AutomatedJob {
   id            String             @id @default(uuid(7)) @db.Uuid
   kind          AutomatedJobKind
-  /// Evidence (EVIDENCE_CHECK) or verifier (VERIFIER_REPORT).
+  /// Evidence (EVIDENCE_CHECK), verifier (VERIFIER_REPORT) or purchase check (ITEM_MATCH).
   entityId      String             @db.Uuid
   status        AutomatedJobStatus @default(PENDING)
   attempts      Int                @default(0)

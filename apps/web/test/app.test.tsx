@@ -2,7 +2,13 @@ import type { PublicPassport } from "@worthybound/shared";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CaptureShot } from "@worthybound/shared";
-import type { CaptureSession, OwnerAsset, OwnerEvidence, Transfer } from "../src/types.js";
+import type {
+  CaptureSession,
+  OwnerAsset,
+  OwnerEvidence,
+  PurchaseCheck,
+  Transfer,
+} from "../src/types.js";
 import { me, mockFetch, renderAt, unauthenticated } from "./helpers.js";
 
 const WB = "WB-7F93A281";
@@ -963,6 +969,158 @@ describe("guided capture", () => {
     });
     renderAt(`/assets/${WB}`);
     expect(await screen.findByText("Guided capture: Caseback")).toBeTruthy();
+  });
+});
+
+describe("checks before buying", () => {
+  const ID = "0199a000-0000-7000-8000-0000000000c9";
+  const check = (overrides: Partial<PurchaseCheck> = {}): PurchaseCheck => ({
+    id: ID,
+    status: "OPEN",
+    asset: {
+      wbId: WB,
+      category: "LUXURY_WATCH",
+      brand: "Rolex",
+      model: "Submariner",
+      status: "VERIFIED",
+      verificationLevel: "PROFESSIONALLY_VERIFIED" as PurchaseCheck["asset"]["verificationLevel"],
+      transferBlocked: false,
+    },
+    owner: {
+      confirmed: false,
+      confirmedAt: null,
+      code: "K7P2QX",
+      codeExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+      message: `WorthyBound: I confirm to a buyer that I own ${WB}.\nCode: K7P2QX`,
+    },
+    item: {
+      shots: [
+        { shot: "DIAL", instruction: "The dial, face on", receivedAt: null },
+        { shot: "SIDE", instruction: "The side", receivedAt: null },
+      ],
+      comparing: false,
+      result: null,
+      reason: null,
+      checkedAt: null,
+      recordedPhotos: [],
+    },
+    expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+    createdAt: "2026-09-30T10:00:00.000Z",
+    ...overrides,
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("starts a check from the passport", async () => {
+    mockFetch({
+      "GET /auth/me": { json: me() },
+      [`GET /passport/${WB}`]: { json: { passport: passport(), url: "" } },
+      [`POST /assets/${WB}/purchase-checks`]: { status: 201, json: check() },
+      [`GET /purchase-checks/${ID}`]: { json: check() },
+    });
+    renderAt(`/passport/${WB}`);
+    fireEvent.click(await screen.findByText("Start a check"));
+    expect(await screen.findByText("K7P2QX")).toBeTruthy();
+    expect(window.location.pathname).toBe(`/checks/${ID}`);
+    expect(screen.getByText(/Expires in \d+:\d\d/)).toBeTruthy();
+  });
+
+  it("uploads each photo from the camera and shows the result", async () => {
+    vi.stubGlobal("navigator", {
+      ...navigator,
+      mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [{ stop: vi.fn() }] })) },
+    });
+    vi.spyOn(HTMLVideoElement.prototype, "videoWidth", "get").mockReturnValue(640);
+    vi.spyOn(HTMLVideoElement.prototype, "videoHeight", "get").mockReturnValue(480);
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      drawImage: vi.fn(),
+    } as never);
+    vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback) =>
+      callback(new Blob([new Uint8Array([0xff, 0xd8, 0xff])], { type: "image/jpeg" })),
+    );
+    const confirmed = {
+      confirmed: true,
+      confirmedAt: "2026-09-30T10:01:00.000Z",
+      code: null,
+      codeExpiresAt: null,
+      message: null,
+    };
+    const shots = (taken: string[]) =>
+      check().item.shots.map((s) => ({
+        ...s,
+        receivedAt: taken.includes(s.shot) ? "2026-09-30T10:02:00.000Z" : null,
+      }));
+    const first = check({ owner: confirmed });
+    const routes = {
+      "GET /auth/me": { json: me() },
+      [`GET /purchase-checks/${ID}`]: { json: first },
+      [`POST /purchase-checks/${ID}/photos/DIAL`]: {
+        json: check({ owner: confirmed, item: { ...check().item, shots: shots(["DIAL"]) } }),
+      },
+    };
+    const sent = mockFetch(routes);
+    renderAt(`/checks/${ID}`);
+    expect(await screen.findByText("Confirmed current owner")).toBeTruthy();
+    fireEvent.click(await screen.findByText("Take photo: Dial"));
+    expect(await screen.findByText("Take photo: Side")).toBeTruthy();
+    const upload = sent.find((c) => c.url === `/purchase-checks/${ID}/photos/DIAL`);
+    expect(upload?.headers["content-type"]).toBe("image/jpeg");
+    expect(upload?.body).toBeInstanceOf(Blob);
+    expect(screen.getByAltText("Dial").getAttribute("src")).toBe(
+      `/purchase-checks/${ID}/photos/DIAL`,
+    );
+  });
+
+  it("warns when the item does not match or cannot be transferred", async () => {
+    mockFetch({
+      "GET /auth/me": { json: me() },
+      [`GET /purchase-checks/${ID}`]: {
+        json: check({
+          status: "COMPLETED",
+          asset: { ...check().asset, status: "REPORTED_STOLEN", transferBlocked: true },
+          owner: { ...check().owner, code: null, codeExpiresAt: null, message: null },
+          item: {
+            ...check().item,
+            result: "NO_MATCH",
+            recordedPhotos: [{ path: `/passport/${WB}/evidence/e1` }],
+          },
+        }),
+      },
+    });
+    renderAt(`/checks/${ID}`);
+    expect((await screen.findByRole("alert")).textContent).toMatch(/reported stolen.*Do not buy/);
+    expect(screen.getByText(/does not match the recorded item/)).toBeTruthy();
+    expect(screen.getByText("The seller did not confirm ownership.")).toBeTruthy();
+  });
+
+  it("lets the owner sign a buyer's code with their wallet", async () => {
+    const signMessage = vi.fn(async (_message: Uint8Array) => ({
+      signature: new Uint8Array(64).fill(7),
+    }));
+    window.phantom = {
+      solana: {
+        connect: async () => ({ publicKey: { toString: () => me().user.walletAddress } }),
+        signMessage,
+      },
+    };
+    const calls = mockFetch({
+      ...ownerRoutes(asset()),
+      [`POST /assets/${WB}/owner-confirmations`]: {
+        json: { confirmed: true, confirmedAt: "2026-09-30T10:01:00.000Z" },
+      },
+    });
+    renderAt(`/assets/${WB}`);
+    const input = await screen.findByPlaceholderText("e.g. K7P2QX");
+    fireEvent.change(input, { target: { value: "k7p 2qx" } });
+    fireEvent.click(screen.getByText("Confirm to buyer"));
+    expect(await screen.findByText(/Confirmed. The buyer/)).toBeTruthy();
+    expect(new TextDecoder().decode(signMessage.mock.calls[0]?.[0] as Uint8Array)).toBe(
+      `WorthyBound: I confirm to a buyer that I own ${WB}.\nCode: K7P2QX`,
+    );
+    const sent = calls.find((c) => c.url === `/assets/${WB}/owner-confirmations`);
+    expect(sent?.body).toEqual({
+      code: "K7P2QX",
+      signature: expect.stringMatching(/^[1-9A-Za-z]+$/),
+    });
   });
 });
 

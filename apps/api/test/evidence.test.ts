@@ -1296,6 +1296,339 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       expect((await start(alice, wbId)).statusCode).toBe(201);
     });
   });
+
+  describe("checks before buying", () => {
+    const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    const base58 = (bytes: Uint8Array) => {
+      let value = BigInt(`0x${Buffer.from(bytes).toString("hex") || "0"}`);
+      let text = "";
+      for (; value > 0n; value /= 58n) text = BASE58[Number(value % 58n)] + text;
+      for (const byte of bytes) {
+        if (byte !== 0) break;
+        text = `1${text}`;
+      }
+      return text;
+    };
+    interface Check {
+      id: string;
+      status: string;
+      asset: { wbId: string; status: string; transferBlocked: boolean };
+      owner: {
+        confirmed: boolean;
+        confirmedAt: string | null;
+        code: string | null;
+        codeExpiresAt: string | null;
+        message: string | null;
+      };
+      item: {
+        shots: { shot: string; receivedAt: string | null }[];
+        comparing: boolean;
+        result: string | null;
+        reason: string | null;
+        recordedPhotos: { path: string }[];
+      };
+    }
+    const startCheck = (who: Owner, wbId: string) =>
+      call(who, "POST", `/assets/${wbId}/purchase-checks`);
+    const getCheck = async (who: Owner, id: string) =>
+      (await call(who, "GET", `/purchase-checks/${id}`)).json<Check>();
+    /** Signs the code as shown to the buyer; `code` is sent as typed by the seller. */
+    const confirm = (who: Owner, wbId: string, code: string, signer: TestWallet = who.wallet) =>
+      call(who, "POST", `/assets/${wbId}/owner-confirmations`, {
+        code: code.toLowerCase(),
+        signature: base58(
+          signer.sign(`WorthyBound: I confirm to a buyer that I own ${wbId}.\nCode: ${code}`),
+        ),
+      });
+    const sendPhoto = (
+      who: Owner | null,
+      id: string,
+      shot: string,
+      body: Buffer,
+      type = "image/jpeg",
+    ) =>
+      app.inject({
+        method: "POST",
+        url: `/purchase-checks/${id}/photos/${shot}`,
+        payload: body,
+        headers: { "content-type": type },
+        cookies: who ? { wb_session: who.token } : {},
+      });
+    let seed = 500;
+    /** Every shot the check asks for; returns the check after the last one. */
+    const takeAll = async (who: Owner, check: Check) => {
+      let res;
+      for (const s of check.item.shots) {
+        res = await sendPhoto(who, check.id, s.shot, await texturedPhoto(seed++));
+        expect(res.statusCode, res.body).toBe(200);
+      }
+      return res?.json<Check>() as Check;
+    };
+    /** A published asset with a completed capture session, optionally with AI checks on. */
+    const recordedAsset = async (who: Owner, consent: boolean) => {
+      const wbId = await asset(who, true);
+      if (consent) await call(who, "PUT", `/assets/${wbId}/automated-checks`, { enabled: true });
+      const session = (await call(who, "POST", `/assets/${wbId}/capture-sessions`)).json<{
+        id: string;
+        shots: { shot: string }[];
+      }>();
+      const ids: string[] = [];
+      for (const { shot: captureShot } of session.shots) {
+        const { res } = await upload(who, wbId, {
+          body: await texturedPhoto(seed++),
+          captureSessionId: session.id,
+          captureShot,
+        });
+        expect(res.statusCode, res.body).toBe(201);
+        ids.push(res.json().id);
+      }
+      return { wbId, ids };
+    };
+    const run = () =>
+      (app.automatedChecks as NonNullable<FastifyInstance["automatedChecks"]>).runOnce();
+
+    it("confirms the current owner to the buyer without naming them", async () => {
+      const alice = await owner();
+      const bob = await owner();
+      const carol = await owner();
+      const wbId = await asset(alice, true);
+
+      const res = await startCheck(bob, wbId);
+      expect(res.statusCode, res.body).toBe(201);
+      expect(res.body).not.toContain(alice.wallet.address);
+      const check = res.json<Check>();
+      expect(check).toMatchObject({ status: "OPEN", owner: { confirmed: false } });
+      expect(check.owner.code).toMatch(/^[A-HJKMNP-Z2-9]{6}$/);
+      expect(check.owner.message).toBe(
+        `WorthyBound: I confirm to a buyer that I own ${wbId}.\nCode: ${check.owner.code}`,
+      );
+      expect(new Date(check.owner.codeExpiresAt as string).getTime() - clock.now().getTime()).toBe(
+        5 * 60_000,
+      );
+      expect(check.item.shots.map((s) => s.shot)).toEqual([
+        "DIAL",
+        "CASEBACK",
+        "CLASP",
+        "SERIAL",
+        "SIDE",
+      ]);
+      const again = await startCheck(bob, wbId);
+      expect(again.statusCode).toBe(200);
+      expect(again.json().id).toBe(check.id);
+
+      expect((await startCheck(alice, wbId)).json().error.code).toBe("own_asset");
+      expect((await startCheck(bob, await asset(alice))).statusCode).toBe(404);
+      expect((await startCheck(null as unknown as Owner, wbId)).statusCode).toBe(401);
+      expect((await call(carol, "GET", `/purchase-checks/${check.id}`)).statusCode).toBe(404);
+
+      const code = check.owner.code as string;
+      expect((await confirm(alice, wbId, code, carol.wallet)).json().error.code).toBe(
+        "invalid_signature",
+      );
+      expect((await confirm(alice, wbId, "ABCDEF")).json().error.code).toBe("invalid_code");
+      expect((await confirm(carol, wbId, code)).statusCode).toBe(404);
+      const confirmed = await confirm(alice, wbId, code);
+      expect(confirmed.statusCode, confirmed.body).toBe(200);
+      expect(confirmed.json()).toEqual({ confirmed: true, confirmedAt: clock.now().toISOString() });
+      expect((await getCheck(bob, check.id)).owner).toEqual({
+        confirmed: true,
+        confirmedAt: clock.now().toISOString(),
+        code: null,
+        codeExpiresAt: null,
+        message: null,
+      });
+      expect((await confirm(alice, wbId, code)).json().error.code).toBe("invalid_code");
+      await expect(
+        db.prisma.purchaseCheck.update({
+          where: { id: check.id },
+          data: { ownerSignature: "1".repeat(88) },
+        }),
+      ).rejects.toThrow(/owner confirmation is final/);
+      expect(
+        await db.prisma.auditLog.count({
+          where: {
+            action: { in: ["purchase_check.started", "purchase_check.owner_confirmed"] },
+            targetId: wbId,
+          },
+        }),
+      ).toBe(2);
+
+      // A code is valid for 5 minutes; the buyer can ask for a new one.
+      const dave = await owner();
+      const late = (await startCheck(dave, wbId)).json<Check>();
+      clock.advance(5 * 60_000 + 1);
+      expect((await getCheck(dave, late.id)).owner.code).toBeNull();
+      expect((await confirm(alice, wbId, late.owner.code as string)).json().error.code).toBe(
+        "invalid_code",
+      );
+      const renewed = await call(dave, "POST", `/purchase-checks/${late.id}/owner-code`);
+      expect(renewed.statusCode, renewed.body).toBe(200);
+      const fresh = renewed.json<Check>().owner.code as string;
+      expect(fresh).toMatch(/^[A-HJKMNP-Z2-9]{6}$/);
+      expect((await confirm(alice, wbId, fresh)).statusCode).toBe(200);
+      expect((await getCheck(dave, late.id)).owner.confirmed).toBe(true);
+    });
+
+    it("compares the buyer's photos with the recorded ones", async () => {
+      const alice = await owner();
+      const bob = await owner();
+      const { wbId, ids } = await recordedAsset(alice, true);
+      const shown = await call(alice, "POST", `/assets/${wbId}/evidence/${ids[0]}/visibility`, {
+        visibility: "PUBLIC",
+      });
+      expect(shown.statusCode, shown.body).toBe(200);
+      await run();
+
+      const check = (await startCheck(bob, wbId)).json<Check>();
+      const first = await sendPhoto(bob, check.id, "DIAL", await phonePhoto("#224466"));
+      expect(first.statusCode, first.body).toBe(200);
+      expect(first.json<Check>().item.shots[0]?.receivedAt).toBe(clock.now().toISOString());
+      const stored = await call(bob, "GET", `/purchase-checks/${check.id}/photos/DIAL`);
+      expect(stored.statusCode).toBe(200);
+      expect(stored.headers["content-type"]).toBe("image/jpeg");
+      expect(stored.rawPayload.includes("SECRETCAM")).toBe(false);
+      expect((await sharp(stored.rawPayload).metadata()).exif).toBeUndefined();
+      expect(
+        (await call(alice, "GET", `/purchase-checks/${check.id}/photos/DIAL`)).statusCode,
+      ).toBe(404);
+
+      const code = async (res: Promise<{ json: () => { error: { code: string } } }>) =>
+        (await res).json().error.code;
+      expect(await code(sendPhoto(bob, check.id, "DIAL", await texturedPhoto(seed++)))).toBe(
+        "shot_taken",
+      );
+      expect(await code(sendPhoto(bob, check.id, "CODE", await texturedPhoto(seed++)))).toBe(
+        "shot_not_required",
+      );
+      expect(await code(sendPhoto(bob, check.id, "CLASP", pdf()))).toBe("not_a_photo");
+      expect(
+        (await sendPhoto(alice, check.id, "CLASP", await texturedPhoto(seed++))).statusCode,
+      ).toBe(404);
+      expect(
+        (await sendPhoto(null, check.id, "CLASP", await texturedPhoto(seed++))).statusCode,
+      ).toBe(401);
+
+      engine.matchCalls.length = 0;
+      let last;
+      for (const s of ["CASEBACK", "CLASP", "SERIAL", "SIDE"]) {
+        last = await sendPhoto(bob, check.id, s, await texturedPhoto(seed++));
+        expect(last.statusCode, last.body).toBe(200);
+      }
+      expect(last?.json<Check>().item).toMatchObject({ comparing: true, result: null });
+      await run();
+
+      expect(engine.matchCalls).toHaveLength(1);
+      const sent = engine.matchCalls[0];
+      expect(sent?.asset).toEqual({
+        category: "LUXURY_WATCH",
+        brand: "Rolex",
+        model: "Submariner",
+      });
+      expect(sent?.reference.map((r) => r.label)).toEqual([
+        "owner photo: DIAL",
+        "owner photo: CASEBACK",
+        "owner photo: CLASP",
+        "owner photo: SERIAL",
+        "owner photo: SIDE",
+      ]);
+      expect(sent?.candidate.map((c) => c.label)).toEqual([
+        "buyer photo: DIAL",
+        "buyer photo: CASEBACK",
+        "buyer photo: CLASP",
+        "buyer photo: SERIAL",
+        "buyer photo: SIDE",
+      ]);
+      const done = await getCheck(bob, check.id);
+      expect(done.status).toBe("COMPLETED");
+      expect(done.item).toMatchObject({ comparing: false, result: "MATCH", reason: null });
+      expect(done.item.recordedPhotos).toEqual([{ path: `/passport/${wbId}/evidence/${ids[0]}` }]);
+      expect(JSON.stringify(done)).not.toContain("scratches");
+      const row = await db.prisma.purchaseCheck.findUniqueOrThrow({ where: { id: check.id } });
+      expect(row).toMatchObject({
+        itemSummary: "The same scratches on the bezel.",
+        engine: "fake",
+        checkVersion: "item-match-v1",
+      });
+      expect(row.referenceEvidenceIds).toHaveLength(5);
+      await expect(
+        db.prisma.purchaseCheck.update({
+          where: { id: check.id },
+          data: { itemResult: "NO_MATCH" },
+        }),
+      ).rejects.toThrow(/status COMPLETED is final/);
+      expect(await code(sendPhoto(bob, check.id, "SIDE", await texturedPhoto(seed++)))).toBe(
+        "purchase_check_closed",
+      );
+    });
+
+    it("is inconclusive without consent, without recorded photos, or when the comparison fails", async () => {
+      const bob = await owner();
+      const alice = await owner();
+      const matchCalls = engine.matchCalls.length;
+
+      const noConsent = await recordedAsset(alice, false);
+      const first = (await startCheck(bob, noConsent.wbId)).json<Check>();
+      await takeAll(bob, first);
+      await run();
+      expect((await getCheck(bob, first.id)).item).toMatchObject({
+        result: "INCONCLUSIVE",
+        reason: "The owner has not agreed to AI checks of the item's photos",
+      });
+
+      const bare = await asset(alice, true);
+      await call(alice, "PUT", `/assets/${bare}/automated-checks`, { enabled: true });
+      const second = (await startCheck(bob, bare)).json<Check>();
+      await takeAll(bob, second);
+      await run();
+      expect((await getCheck(bob, second.id)).item).toMatchObject({
+        result: "INCONCLUSIVE",
+        reason: "The item has no recorded photos to compare with",
+      });
+      expect(engine.matchCalls).toHaveLength(matchCalls);
+
+      const recorded = await recordedAsset(alice, true);
+      await run();
+      const third = (await startCheck(bob, recorded.wbId)).json<Check>();
+      await takeAll(bob, third);
+      const matching = engine.match;
+      engine.match = async () => {
+        throw new CheckEngineError("the model refused to answer", false);
+      };
+      try {
+        await run();
+      } finally {
+        engine.match = matching;
+      }
+      expect((await getCheck(bob, third.id)).item).toMatchObject({
+        result: "INCONCLUSIVE",
+        reason: "The photos could not be compared",
+      });
+    });
+
+    it("expires unfinished checks and limits checks per item per day", async () => {
+      const alice = await owner();
+      const bob = await owner();
+      const wbId = await asset(alice, true);
+      const check = (await startCheck(bob, wbId)).json<Check>();
+      clock.advance(60 * 60_000);
+      expect((await getCheck(bob, check.id)).status).toBe("EXPIRED");
+      const late = await sendPhoto(bob, check.id, "DIAL", await texturedPhoto(seed++));
+      expect(late.json().error.code).toBe("purchase_check_closed");
+      expect((await call(bob, "POST", `/purchase-checks/${check.id}/owner-code`)).statusCode).toBe(
+        409,
+      );
+
+      for (let i = 1; i < 10; i++) {
+        expect((await startCheck(bob, wbId)).statusCode).toBe(201);
+        clock.advance(60 * 60_000);
+      }
+      const limited = await startCheck(bob, wbId);
+      expect(limited.statusCode).toBe(429);
+      expect(limited.json().error.code).toBe("purchase_check_limit_reached");
+      clock.advance(24 * 60 * 60_000);
+      expect((await startCheck(bob, wbId)).statusCode).toBe(201);
+    });
+  });
 });
 
 describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence rate limits", () => {

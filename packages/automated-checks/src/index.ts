@@ -1,5 +1,7 @@
 export {
   decide,
+  decideMatch,
+  type MatchFinding,
   MIN_CONFIDENCE,
   MODEL_PROBLEMS,
   type ModelFinding,

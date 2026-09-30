@@ -7,6 +7,7 @@ import { AssetDetailPage } from "./pages/AssetDetail.js";
 import { AssetsPage } from "./pages/Assets.js";
 import { HomePage } from "./pages/Home.js";
 import { NewAssetPage } from "./pages/NewAsset.js";
+import { PurchaseCheckPage } from "./pages/PurchaseCheck.js";
 import { PassportPage } from "./pages/Passport.js";
 import { TransfersPage } from "./pages/Transfers.js";
 import { VerifierQueuePage, VerifierRequestPage } from "./pages/Verifier.js";
@@ -81,6 +82,12 @@ export function Page({ path }: { path: string }) {
     return (
       <SignedIn>
         <AssetDetailPage wbId={m.wbId as string} />
+      </SignedIn>
+    );
+  if ((m = match("/checks/:checkId", path)))
+    return (
+      <SignedIn>
+        <PurchaseCheckPage checkId={m.checkId as string} />
       </SignedIn>
     );
   if (path === "/transfers")

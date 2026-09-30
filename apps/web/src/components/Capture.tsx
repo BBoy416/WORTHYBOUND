@@ -7,7 +7,7 @@ import { uploadEvidence } from "./Evidence.js";
 import { Card, ErrorText, Loading, useAction, useLoad } from "./ui.js";
 
 /** Minutes and seconds until `iso`, ticking every second. */
-function useCountdown(iso: string | null): string | null {
+export function useCountdown(iso: string | null): string | null {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!iso) return;
@@ -23,7 +23,7 @@ function useCountdown(iso: string | null): string | null {
  * The device camera. Photos come only from the live camera, never from the gallery, as guided
  * capture requires (ADR 0013).
  */
-function Camera({
+export function Camera({
   label,
   busy,
   onPhoto,

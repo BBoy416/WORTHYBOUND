@@ -28,6 +28,20 @@ expire (ADR 0012).
 The buyer must be signed in; checks are rate limited and audited, so they cannot be used to probe
 other people's items. A result means "matches the recorded item", never a guarantee.
 
+**Checks before buying, in person (2026-10-04).** A signed-in buyer starts a check from the
+passport (`POST /assets/:wbId/purchase-checks`); it stays open 60 minutes, one per buyer and item,
+at most 10 per buyer and 10 per item per day. The check shows a 6-character code (valid 5 minutes,
+renewable) that the owner signs on their asset page (`POST /assets/:wbId/owner-confirmations`,
+text `WorthyBound: I confirm to a buyer that I own <WB ID>.\nCode: <code>`); the confirmation is
+final and names neither wallet nor person. The buyer photographs the item with the live camera,
+one photo per capture shot of the category without the code shot; photos are stored without
+metadata and shown only to the buyer. The recorded photos are the verifiers' photos and the owner's
+latest completed capture session (at most 8), compared by the AI check engine only with the
+owner's consent to AI checks (ADR 0013); otherwise, without recorded photos, or when the
+comparison fails, the result is `INCONCLUSIVE` with the reason. The buyer sees recorded photos
+that are public on the passport; private ones are compared but never shown. The model's summary
+is stored for reviewers, not shown to the buyer. Checks are audited.
+
 **Check before buying, remotely.** The buyer requests a live check. WorthyBound gives the seller a
 one-time code that the buyer also sees; within 24 hours the seller films the item with the code
 in view, in a capture session. The buyer sees the result and the video. This proves the seller

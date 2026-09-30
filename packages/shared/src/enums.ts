@@ -115,6 +115,13 @@ export type EvidenceUploadStatus = (typeof EVIDENCE_UPLOAD_STATUSES)[number];
 export const CAPTURE_SESSION_STATUSES = ["OPEN", "COMPLETED", "EXPIRED"] as const;
 export type CaptureSessionStatus = (typeof CAPTURE_SESSION_STATUSES)[number];
 
+export const PURCHASE_CHECK_STATUSES = ["OPEN", "COMPLETED", "EXPIRED"] as const;
+export type PurchaseCheckStatus = (typeof PURCHASE_CHECK_STATUSES)[number];
+
+/** Whether the item in front of a buyer matches the asset's recorded photos (ADR 0014). */
+export const ITEM_MATCH_RESULTS = ["MATCH", "NO_MATCH", "INCONCLUSIVE"] as const;
+export type ItemMatchResult = (typeof ITEM_MATCH_RESULTS)[number];
+
 export const REVIEW_STATUSES = ["PENDING", "ACCEPTED", "REJECTED"] as const;
 export type ReviewStatus = (typeof REVIEW_STATUSES)[number];
 
@@ -269,7 +276,7 @@ export type ChainTransactionStatus = (typeof CHAIN_TRANSACTION_STATUSES)[number]
 export const AUTOMATED_CHECK_RESULTS = ["PASSED", "FAILED", "INCONCLUSIVE"] as const;
 export type AutomatedCheckResult = (typeof AUTOMATED_CHECK_RESULTS)[number];
 
-export const AUTOMATED_JOB_KINDS = ["EVIDENCE_CHECK", "VERIFIER_REPORT"] as const;
+export const AUTOMATED_JOB_KINDS = ["EVIDENCE_CHECK", "VERIFIER_REPORT", "ITEM_MATCH"] as const;
 export type AutomatedJobKind = (typeof AUTOMATED_JOB_KINDS)[number];
 
 export const AUTOMATED_JOB_STATUSES = ["PENDING", "COMPLETED", "FAILED"] as const;
@@ -299,6 +306,8 @@ export const DOMAIN_ENUMS = {
   EvidenceVisibility: EVIDENCE_VISIBILITIES,
   EvidenceUploadStatus: EVIDENCE_UPLOAD_STATUSES,
   CaptureSessionStatus: CAPTURE_SESSION_STATUSES,
+  PurchaseCheckStatus: PURCHASE_CHECK_STATUSES,
+  ItemMatchResult: ITEM_MATCH_RESULTS,
   ReviewStatus: REVIEW_STATUSES,
   VerifierStatus: VERIFIER_STATUSES,
   VerifierEntityType: VERIFIER_ENTITY_TYPES,

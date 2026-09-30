@@ -16,7 +16,9 @@ import type {
   EvidenceVisibility,
   IdentityStatus,
   ItemCondition,
+  ItemMatchResult,
   ProofSource,
+  PurchaseCheckStatus,
   ReviewStatus,
   Role,
   TemplateVersionStatus,
@@ -121,6 +123,39 @@ export interface CaptureSession {
   }[];
   expiresAt: string;
   completedAt: string | null;
+  createdAt: string;
+}
+
+/** A buyer's check before buying (`/purchase-checks/:id`); never names the seller. */
+export interface PurchaseCheck {
+  id: string;
+  status: PurchaseCheckStatus;
+  asset: {
+    wbId: string;
+    category: AssetCategory;
+    brand: string | null;
+    model: string | null;
+    status: AssetStatus;
+    verificationLevel: VerificationLevel;
+    transferBlocked: boolean;
+  };
+  owner: {
+    confirmed: boolean;
+    confirmedAt: string | null;
+    /** For the seller to sign, while valid and not yet signed. */
+    code: string | null;
+    codeExpiresAt: string | null;
+    message: string | null;
+  };
+  item: {
+    shots: { shot: CaptureShot; instruction: string; receivedAt: string | null }[];
+    comparing: boolean;
+    result: ItemMatchResult | null;
+    reason: string | null;
+    checkedAt: string | null;
+    recordedPhotos: { path: string }[];
+  };
+  expiresAt: string;
   createdAt: string;
 }
 

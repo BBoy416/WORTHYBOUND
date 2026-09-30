@@ -32,6 +32,8 @@ import {
   templateCreateSchema,
   templateRequirementsSchema,
   templateVersionStatusSchema,
+  ownerConfirmationSchema,
+  purchaseCheckPhotoParamsSchema,
   transferParamsSchema,
   transferRequestSchema,
   transferSignatureSchema,
@@ -574,6 +576,20 @@ describe("requests, transfers and disputes", () => {
       ]);
     }
     expect(transferSignatureSchema.safeParse({ signedTransaction: "AQID" }).success).toBe(true);
+    const signature = "5".repeat(88);
+    expect(ownerConfirmationSchema.parse({ code: " k7p 2qx ", signature }).code).toBe("K7P2QX");
+    expect(issues(ownerConfirmationSchema, { code: "K7P2Q0", signature })).toEqual([
+      "invalid_format:code",
+    ]);
+    expect(issues(ownerConfirmationSchema, { code: "K7P2QX", signature: "0x" })).toEqual([
+      "invalid_format:signature",
+    ]);
+    expect(purchaseCheckPhotoParamsSchema.safeParse({ checkId: UUID, shot: "DIAL" }).success).toBe(
+      true,
+    );
+    expect(issues(purchaseCheckPhotoParamsSchema, { checkId: UUID, shot: "SELFIE" })).toEqual([
+      "invalid_value:shot",
+    ]);
     expect(issues(transferSignatureSchema, { signedTransaction: "not base64!" })).toEqual([
       "invalid_format:signedTransaction",
     ]);

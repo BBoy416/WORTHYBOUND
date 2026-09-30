@@ -670,3 +670,14 @@ legend {
   border-radius: 8px;
   background: #000;
 }
+
+.compare {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  margin-top: 12px;
+}
+.compare h3 {
+  font-size: 0.9rem;
+  margin: 0 0 6px;
+}
