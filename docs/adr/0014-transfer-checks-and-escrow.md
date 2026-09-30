@@ -84,5 +84,6 @@ legal advice before payments are built.
 - The Phase 10 spike must confirm that the program can hold the token frozen during escrow and
   release it together with the payment.
 - Professional verifiers are needed only for disputes and high-value items, not for every sale.
-- Needs guided capture (ADR 0013), a camera-capable client and a payment provider; none exists yet.
+- Needs guided capture (ADR 0013, in the web app since 2026-10-01) and a payment provider, which
+  does not exist yet.
 - Verifier-fitted physical tags need their own decision when introduced.

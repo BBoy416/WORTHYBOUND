@@ -1,7 +1,8 @@
 import type { PublicPassport } from "@worthybound/shared";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OwnerAsset, OwnerEvidence, Transfer } from "../src/types.js";
+import type { CaptureShot } from "@worthybound/shared";
+import type { CaptureSession, OwnerAsset, OwnerEvidence, Transfer } from "../src/types.js";
 import { me, mockFetch, renderAt, unauthenticated } from "./helpers.js";
 
 const WB = "WB-7F93A281";
@@ -105,6 +106,7 @@ const evidence = (overrides: Partial<OwnerEvidence> = {}): OwnerEvidence => ({
   originalFilename: "front.jpg",
   description: null,
   createdAt: "2026-09-29T10:00:00.000Z",
+  captureShot: null,
   publicPath: null,
   automatedCheck: null,
   ...overrides,
@@ -122,6 +124,7 @@ const ownerRoutes = (a: OwnerAsset) => ({
   [`GET /assets/${WB}/evidence`]: { json: { items: [] } },
   [`GET /assets/${WB}/trust`]: { json: null },
   [`GET /assets/${WB}/verification-requests`]: { json: { items: [] } },
+  [`GET /assets/${WB}/capture-sessions`]: { json: { items: [] } },
   "GET /templates": { json: { items: [] } },
 });
 
@@ -840,6 +843,126 @@ describe("admin", () => {
       role: "VERIFIER_REVIEWER",
     });
     expect(calls.some((c) => c.method === "DELETE")).toBe(true);
+  });
+});
+
+describe("guided capture", () => {
+  const session = (taken: string[] = []): CaptureSession => ({
+    id: "0199a000-0000-7000-8000-000000000c01",
+    code: "H4RT9Z",
+    status: "OPEN",
+    shots: [
+      { shot: "DIAL", instruction: "The dial, face on" },
+      { shot: "CODE", instruction: "The item next to the code written on paper" },
+    ].map((s) => ({
+      ...(s as { shot: CaptureShot; instruction: string }),
+      evidenceId: taken.includes(s.shot)
+        ? `0199a000-0000-7000-8000-00000000e0${s.shot.length}`
+        : null,
+      receivedAt: taken.includes(s.shot) ? "2026-09-30T10:01:00.000Z" : null,
+    })),
+    expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+    completedAt: null,
+    createdAt: "2026-09-30T10:00:00.000Z",
+  });
+
+  /** A camera that delivers 640×480 frames, and a canvas that turns them into a JPEG. */
+  const camera = () => {
+    const stop = vi.fn();
+    const getUserMedia = vi.fn(async () => ({ getTracks: () => [{ stop }] }));
+    vi.stubGlobal("navigator", { ...navigator, mediaDevices: { getUserMedia } });
+    vi.spyOn(HTMLVideoElement.prototype, "videoWidth", "get").mockReturnValue(640);
+    vi.spyOn(HTMLVideoElement.prototype, "videoHeight", "get").mockReturnValue(480);
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      drawImage: vi.fn(),
+    } as never);
+    vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback) =>
+      callback(new Blob([new Uint8Array([0xff, 0xd8, 0xff, 1, 2])], { type: "image/jpeg" })),
+    );
+    return { getUserMedia, stop };
+  };
+  afterEach(() => vi.restoreAllMocks());
+
+  it("starts a session, shows the code and uploads each shot from the camera", async () => {
+    const { getUserMedia, stop } = camera();
+    let state: CaptureSession[] = [];
+    const calls = mockFetch({
+      ...ownerRoutes(asset()),
+      [`GET /assets/${WB}/capture-sessions`]: () => ({ json: { items: state } }),
+      [`POST /assets/${WB}/capture-sessions`]: () => (
+        (state = [session()]),
+        { status: 201, json: state[0] }
+      ),
+      [`POST /assets/${WB}/evidence/uploads`]: {
+        status: 201,
+        json: {
+          uploadId: "up1",
+          upload: { url: "https://r2.example/bucket/staging/up1", method: "PUT", headers: {} },
+          expiresAt: "",
+        },
+      },
+      "PUT https://r2.example/bucket/staging/up1": { json: undefined },
+      "POST /evidence/uploads/up1/complete": () => {
+        state = [
+          state[0]?.shots[0]?.evidenceId
+            ? {
+                ...session(["DIAL", "CODE"]),
+                status: "COMPLETED",
+                completedAt: "2026-09-30T10:02:00.000Z",
+              }
+            : session(["DIAL"]),
+        ];
+        return { status: 201, json: evidence({ captureShot: "DIAL" }) };
+      },
+    });
+    renderAt(`/assets/${WB}`);
+    fireEvent.click(await screen.findByText("Start guided capture"));
+    expect(await screen.findByText("H4RT9Z")).toBeTruthy();
+    expect(screen.getByText(/Expires in \d+:\d\d/)).toBeTruthy();
+    expect(getUserMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audio: false,
+        video: expect.objectContaining({ facingMode: "environment" }),
+      }),
+    );
+
+    fireEvent.click(await screen.findByText("Take photo: Dial"));
+    expect(await screen.findByText("Take photo: Code")).toBeTruthy();
+    const request = calls.find((c) => c.url === `/assets/${WB}/evidence/uploads`);
+    expect(request?.body).toMatchObject({
+      type: "PHOTO",
+      mimeType: "image/jpeg",
+      sizeBytes: 5,
+      originalFilename: "dial.jpg",
+      captureSessionId: session().id,
+      captureShot: "DIAL",
+    });
+    expect(request?.body).not.toHaveProperty("capturedAt");
+    expect(calls.some((c) => c.method === "PUT")).toBe(true);
+
+    fireEvent.click(screen.getByText("Take photo: Code"));
+    expect(await screen.findByText(/Last completed/)).toBeTruthy();
+    await waitFor(() => expect(stop).toHaveBeenCalled());
+  });
+
+  it("explains when the browser has no camera", async () => {
+    vi.stubGlobal("navigator", { ...navigator, mediaDevices: undefined });
+    mockFetch({
+      ...ownerRoutes(asset()),
+      [`GET /assets/${WB}/capture-sessions`]: { json: { items: [session()] } },
+    });
+    renderAt(`/assets/${WB}`);
+    expect(await screen.findByText(/no camera access/)).toBeTruthy();
+    expect((screen.getByText("Take photo: Dial") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("marks evidence taken in a session", async () => {
+    mockFetch({
+      ...ownerRoutes(asset()),
+      [`GET /assets/${WB}/evidence`]: { json: { items: [evidence({ captureShot: "CASEBACK" })] } },
+    });
+    renderAt(`/assets/${WB}`);
+    expect(await screen.findByText("Guided capture: Caseback")).toBeTruthy();
   });
 });
 

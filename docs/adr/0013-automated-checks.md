@@ -96,7 +96,7 @@ It is enabled by `OPENAI_API_KEY` (model: `OPENAI_MODEL`); without it the checks
   and a confidence; a fixed rule decides the result: `FAILED` only for a problem that suggests a
   fake, `PASSED` only for a consistent file without problems, both at confidence 0.7 or more,
   otherwise `INCONCLUSIVE`. Verifier uploads are never checked.
-- **Deterministic checks** (check version `evidence-check-v2`) run first and fail a file
+- **Deterministic checks** (added in check version `evidence-check-v2`) run first and fail a file
   without calling the service:
   - exact copies of a file on another asset (`REUSED_FILE`);
   - photos near-identical to an earlier photo on another asset (`SIMILAR_PHOTO`): a 64-bit
@@ -124,7 +124,24 @@ It is enabled by `OPENAI_API_KEY` (model: `OPENAI_MODEL`); without it the checks
   Score snapshot, only when no check failed. Administrators see every check with its details on
   the admin page (AI checks).
 - Checks run in a job queue in the API process, like chain sync (ADR 0016), with retries for
-  outages and rate limits. Guided capture is still to come.
+  outages and rate limits.
+- **Guided capture** (2026-10-01). The owner starts a session on the asset page
+  (`POST /assets/:wbId/capture-sessions`): a 6-character code without look-alike characters,
+  valid 15 minutes, and the shots for the category (e.g. for a watch: dial, caseback, clasp,
+  serial, side, and the item next to the code). At most one session is open per asset, and at
+  most 3 per asset and 10 per owner start per day. The web app takes each shot from the live
+  camera (`getUserMedia`); there is no file picker. Shots go through the Evidence Vault upload
+  with `captureSessionId` and `captureShot`, as JPEG, PNG or WebP photos. A shot counts only if
+  it is stored before the code expires, once per shot; its capture time is when the server
+  received its hash, never the file's metadata. The session completes when every shot has
+  arrived (provenance event `CAPTURE_COMPLETED`); otherwise it expires and its photos stay
+  ordinary evidence. Capture sessions are not append-only, but the database fixes their code,
+  shots and expiry and keeps a closed session closed.
+- Check version `evidence-check-v3` tells the check what each shot should show and, for the code
+  shot, the code: a missing or unreadable code is `CAPTURE_CODE_MISSING` (inconclusive), a
+  different code `CAPTURE_CODE_MISMATCH` (fails the file). Files checked under an earlier version
+  are checked again once. The Trust Score does not yet treat captured photos differently from
+  other owner photos.
 
 ## Consequences
 
@@ -134,6 +151,7 @@ It is enabled by `OPENAI_API_KEY` (model: `OPENAI_MODEL`); without it the checks
   automatically and keeps the Trust Score disclaimer.
 - An identical super-fake can pass photo checks; only professional inspection, or physical tags
   (ADR 0014), addresses it.
-- Guided capture needs a camera-capable client (web or mobile), which does not exist yet.
+- Guided capture needs a device with a camera; on a desktop without one, owners use their
+  phone.
 - A third-party service adds cost per check, which the business model has to cover.
 - Adds a proof source and weights: a new weights version and engine version (ADR 0003).

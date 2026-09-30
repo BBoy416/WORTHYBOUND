@@ -112,6 +112,9 @@ export type EvidenceVisibility = (typeof EVIDENCE_VISIBILITIES)[number];
 export const EVIDENCE_UPLOAD_STATUSES = ["PENDING", "COMPLETED", "FAILED"] as const;
 export type EvidenceUploadStatus = (typeof EVIDENCE_UPLOAD_STATUSES)[number];
 
+export const CAPTURE_SESSION_STATUSES = ["OPEN", "COMPLETED", "EXPIRED"] as const;
+export type CaptureSessionStatus = (typeof CAPTURE_SESSION_STATUSES)[number];
+
 export const REVIEW_STATUSES = ["PENDING", "ACCEPTED", "REJECTED"] as const;
 export type ReviewStatus = (typeof REVIEW_STATUSES)[number];
 
@@ -222,6 +225,7 @@ export const PROVENANCE_EVENT_TYPES = [
   "RECOVERED",
   "DISPUTE_OPENED",
   "DISPUTE_RESOLVED",
+  "CAPTURE_COMPLETED",
 ] as const;
 export type ProvenanceEventType = (typeof PROVENANCE_EVENT_TYPES)[number];
 
@@ -294,6 +298,7 @@ export const DOMAIN_ENUMS = {
   EvidenceType: EVIDENCE_TYPES,
   EvidenceVisibility: EVIDENCE_VISIBILITIES,
   EvidenceUploadStatus: EVIDENCE_UPLOAD_STATUSES,
+  CaptureSessionStatus: CAPTURE_SESSION_STATUSES,
   ReviewStatus: REVIEW_STATUSES,
   VerifierStatus: VERIFIER_STATUSES,
   VerifierEntityType: VERIFIER_ENTITY_TYPES,

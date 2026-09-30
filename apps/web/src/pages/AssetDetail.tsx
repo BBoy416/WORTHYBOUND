@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { get, post, put } from "../api.js";
+import { GuidedCapture } from "../components/Capture.js";
 import { EvidenceList, UploadForm } from "../components/Evidence.js";
 import {
   Badge,
@@ -122,6 +123,8 @@ export function AssetDetailPage({ wbId }: { wbId: string }) {
         </Card>
         <Lifecycle asset={a} onChange={reloadAll} />
       </div>
+
+      <GuidedCapture base={base} asset={a} onChange={reloadAll} />
 
       <Card title="Evidence vault">
         <AutomatedChecks base={base} asset={a} onChange={reloadAll} />

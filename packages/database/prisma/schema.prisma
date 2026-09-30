@@ -237,6 +237,7 @@ enum ProvenanceEventType {
   RECOVERED
   DISPUTE_OPENED
   DISPUTE_RESOLVED
+  CAPTURE_COMPLETED
 }
 
 enum SolanaCluster {
@@ -325,6 +326,7 @@ model User {
   evidenceUploaded          Evidence[]                        @relation("EvidenceUploader")
   evidenceReviewed          Evidence[]                        @relation("EvidenceReviewer")
   evidenceUploads           EvidenceUpload[]
+  captureSessions           CaptureSession[]
   verifier                  Verifier?                         @relation("VerifierUser")
   verifiersApproved         Verifier[]                        @relation("VerifierApprover")
   permissionsApproved       VerifierCategoryPermission[]
@@ -437,6 +439,7 @@ model Asset {
   transferRequests       TransferRequest[]
   evidence               Evidence[]
   evidenceUploads        EvidenceUpload[]
+  captureSessions        CaptureSession[]
   evidenceCommitments    EvidenceCommitment[]
   verificationRequests   VerificationRequest[]
   attestations           Attestation[]
@@ -551,6 +554,9 @@ model Evidence {
   reviewReason          String?
   /// Set on evidence added by the verifier assigned to this request (source VERIFIER).
   verificationRequestId String?            @db.Uuid
+  /// Set on photos taken in a capture session (ADR 0013), with the shot they are.
+  captureSessionId      String?            @db.Uuid
+  captureShot           String?
   originalFilename      String?
   description           String?
   capturedAt            DateTime?          @db.Timestamptz(3)
@@ -559,6 +565,7 @@ model Evidence {
 
   asset               Asset                    @relation(fields: [assetId], references: [id], onDelete: Restrict)
   verificationRequest VerificationRequest?     @relation(fields: [verificationRequestId], references: [id], onDelete: Restrict)
+  captureSession      CaptureSession?          @relation(fields: [captureSessionId], references: [id], onDelete: Restrict)
   duplicateOf         Evidence?                @relation("EvidenceDuplicate", fields: [duplicateOfId], references: [id], onDelete: Restrict)
   duplicates          Evidence[]               @relation("EvidenceDuplicate")
   upload              EvidenceUpload?
@@ -570,6 +577,7 @@ model Evidence {
   automatedChecks     AutomatedCheck[]
 
   @@unique([assetId, sha256])
+  @@unique([captureSessionId, captureShot])
   @@index([sha256])
   @@map("evidence")
 }
@@ -596,6 +604,9 @@ model EvidenceUpload {
   capturedAt            DateTime?            @db.Timestamptz(3)
   /// Set when the verifier assigned to this request uploads.
   verificationRequestId String?              @db.Uuid
+  /// Set when the upload is a shot of a capture session.
+  captureSessionId      String?              @db.Uuid
+  captureShot           String?
   /// Holding-area key the client uploads to. Never a public URL.
   stagingKey            String               @unique
   status                EvidenceUploadStatus @default(PENDING)
@@ -609,10 +620,43 @@ model EvidenceUpload {
   uploader            User                 @relation(fields: [uploaderId], references: [id], onDelete: Restrict)
   evidence            Evidence?            @relation(fields: [evidenceId], references: [id], onDelete: Restrict)
   verificationRequest VerificationRequest? @relation(fields: [verificationRequestId], references: [id], onDelete: Restrict)
+  captureSession      CaptureSession?      @relation(fields: [captureSessionId], references: [id], onDelete: Restrict)
 
   @@index([assetId, status])
   @@index([uploaderId, createdAt])
   @@map("evidence_uploads")
+}
+
+enum CaptureSessionStatus {
+  OPEN
+  COMPLETED
+  /// Not every required shot arrived while the code was valid.
+  EXPIRED
+}
+
+/// A timed photo session (ADR 0013): the owner photographs the required shots with the app's
+/// camera, one of them next to the one-time code written on paper, while the code is valid.
+model CaptureSession {
+  id          String               @id @default(uuid(7)) @db.Uuid
+  assetId     String               @db.Uuid
+  ownerId     String               @db.Uuid
+  code        String
+  /// Shots required for the asset's category when the session started (CAPTURE_SHOTS).
+  shots       String[]
+  status      CaptureSessionStatus @default(OPEN)
+  expiresAt   DateTime             @db.Timestamptz(3)
+  completedAt DateTime?            @db.Timestamptz(3)
+  createdAt   DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime             @updatedAt @db.Timestamptz(3)
+
+  asset    Asset            @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  owner    User             @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  evidence Evidence[]
+  uploads  EvidenceUpload[]
+
+  @@index([assetId, createdAt])
+  @@index([ownerId, createdAt])
+  @@map("capture_sessions")
 }
 
 /// Append-only. Merkle root over a batch of evidence hashes, anchored on-chain.

@@ -13,7 +13,12 @@ import {
   type VerifierApplicationInput,
 } from "@worthybound/automated-checks";
 import type { Asset, AutomatedJob, Evidence, PrismaClient } from "@worthybound/database";
-import type { CheckProblem } from "@worthybound/shared";
+import {
+  CAPTURE_CODE_SHOT,
+  CAPTURE_SHOT_INSTRUCTIONS,
+  type CaptureShot,
+  type CheckProblem,
+} from "@worthybound/shared";
 import type { Storage } from "@worthybound/storage";
 import { canonicalJson, sha256Hex } from "@worthybound/trust-engine";
 import type { FastifyBaseLogger } from "fastify";
@@ -125,7 +130,9 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
    * Deterministic checks first (near-identical photos, PDF receipts from image editors), then
    * the check engine; its document number is compared with earlier files on other assets.
    */
-  async function examine(evidence: Evidence & { asset: Asset }): Promise<Outcome> {
+  async function examine(
+    evidence: Evidence & { asset: Asset; captureSession: { code: string } | null },
+  ): Promise<Outcome> {
     const stored = await readAll(await storage.read(evidence.storageKey));
     if (createHash("sha256").update(stored).digest("hex") !== evidence.sha256) {
       log.warn({ evidenceId: evidence.id }, "stored evidence does not match its hash");
@@ -179,6 +186,15 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
         condition: evidence.asset.condition,
       },
       evidence: { type: evidence.type, description: evidence.description },
+      capture:
+        evidence.captureSession && evidence.captureShot
+          ? {
+              shot: evidence.captureShot as CaptureShot,
+              instruction: CAPTURE_SHOT_INSTRUCTIONS[evidence.captureShot as CaptureShot],
+              code:
+                evidence.captureShot === CAPTURE_CODE_SHOT ? evidence.captureSession.code : null,
+            }
+          : null,
       file: {
         mimeType: (image ? "image/jpeg" : "application/pdf") as CheckFileMimeType,
         data,
@@ -224,6 +240,7 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
       where: { id: job.entityId },
       include: {
         asset: true,
+        captureSession: { select: { code: true } },
         automatedChecks: { where: { checkVersion: CHECK_VERSION }, take: 1 },
       },
     });

@@ -2,7 +2,7 @@
   "name": "@worthybound/web",
   "version": "0.1.0",
   "private": true,
-  "description": "WorthyBound web app: wallet sign-in, assets, evidence, tokenization, transfers, verification and passports",
+  "description": "WorthyBound web app: wallet sign-in, assets, evidence, guided capture, tokenization, transfers, verification and passports",
   "type": "module",
   "scripts": {
     "dev": "vite",
