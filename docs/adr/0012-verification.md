@@ -31,6 +31,7 @@ WorthyBound, can later claim a verifier said something they did not. Templates m
 | `POST /verifier/requests/:requestId/evidence/uploads`      | assigned verifier | Upload form, completed as in ADR 0010      |
 | `GET /verifier/requests/:requestId/evidence`               | assigned verifier | The asset's evidence                       |
 | `POST /verifier/requests/:requestId/evidence/:id/download` | assigned verifier | 5-minute download link                     |
+| `GET /verifier/requests/:requestId/evidence/:id/preview`   | assigned verifier | Private preview of an image (ADR 0010)     |
 | `POST /verifier/requests/:requestId/evidence/:id/review`   | assigned verifier | Accepts or rejects evidence, once          |
 | `POST /verifier/requests/:requestId/attestations/message`  | assigned verifier | The exact text to sign                     |
 | `POST /verifier/requests/:requestId/attestations`          | assigned verifier | Submits the claim with its signature       |

@@ -168,6 +168,7 @@ export function VerifierRequestPage({ requestId }: { requestId: string }) {
             <EvidenceList
               items={evidence.data.items}
               downloadPath={(id) => `${base}/evidence/${id}/download`}
+              previewPath={(id) => `${base}/evidence/${id}/preview`}
               {...(working
                 ? {
                     onReview: async (e: OwnerEvidence, status: "ACCEPTED" | "REJECTED") => {

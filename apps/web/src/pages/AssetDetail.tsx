@@ -46,6 +46,10 @@ export function AssetDetailPage({ wbId }: { wbId: string }) {
 
   const a = asset.data;
   if (!a) return <Loading error={asset.error} />;
+  const needsPhotos =
+    a.status !== "REVOKED" &&
+    evidence.data !== undefined &&
+    !evidence.data.items.some((e) => e.type === "PHOTO");
   return (
     <div>
       <p className="crumbs">
@@ -76,6 +80,24 @@ export function AssetDetailPage({ wbId }: { wbId: string }) {
         </div>
       </section>
 
+      {needsPhotos && (
+        <Card title="Add photos of your item">
+          <p className="muted small">
+            Photos appear as the item's thumbnail and stay private unless you choose to show them on
+            the public passport. Add receipts, certificates and other documents in the evidence
+            vault below.
+          </p>
+          <UploadForm
+            requestPath={`${base}/evidence/uploads`}
+            types={["PHOTO"]}
+            allowPublic
+            multiple
+            submitLabel="Add photos"
+            onDone={reloadAll}
+          />
+        </Card>
+      )}
+
       <div className="grid">
         <Card title="Details">
           <Facts
@@ -96,6 +118,7 @@ export function AssetDetailPage({ wbId }: { wbId: string }) {
           <EvidenceList
             items={evidence.data.items}
             downloadPath={(id) => `${base}/evidence/${id}/download`}
+            previewPath={(id) => `${base}/evidence/${id}/preview`}
             onVisibility={async (e) => {
               await post(`${base}/evidence/${e.id}/visibility`, {
                 visibility: e.visibility === "PUBLIC" ? "PRIVATE" : "PUBLIC",
@@ -107,7 +130,12 @@ export function AssetDetailPage({ wbId }: { wbId: string }) {
           <Loading error={evidence.error} />
         )}
         {a.status !== "REVOKED" && (
-          <UploadForm requestPath={`${base}/evidence/uploads`} allowPublic onDone={reloadAll} />
+          <UploadForm
+            requestPath={`${base}/evidence/uploads`}
+            allowPublic
+            multiple
+            onDone={reloadAll}
+          />
         )}
       </Card>
 

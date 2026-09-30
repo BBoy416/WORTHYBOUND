@@ -64,3 +64,20 @@ export async function publicPhotoCopy(
     .toFormat(OUTPUT_FORMAT[mimeType])
     .toBuffer();
 }
+
+export const PREVIEW_MAX_SIZE = 480;
+
+/** A small WebP of an image for previews: oriented and without metadata, like public copies. */
+export async function previewImage(bytes: Buffer): Promise<Buffer> {
+  return sharp(bytes, { failOn: "error", limitInputPixels: 100_000_000 })
+    .rotate()
+    .resize(PREVIEW_MAX_SIZE, PREVIEW_MAX_SIZE, { fit: "inside", withoutEnlargement: true })
+    .webp({ quality: 80 })
+    .toBuffer();
+}
+
+export async function readAll(stream: Readable): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks);
+}

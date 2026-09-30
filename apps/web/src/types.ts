@@ -46,6 +46,11 @@ export interface OwnerAsset {
   missingForPublish: string[];
 }
 
+export interface OwnerAssetListItem extends OwnerAsset {
+  /** Private preview of one of the asset's photos (the first public one if any). */
+  thumbnailPath: string | null;
+}
+
 export interface Points {
   code: string;
   points: number;

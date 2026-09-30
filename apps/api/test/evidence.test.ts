@@ -498,6 +498,89 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       expect(res.statusCode).toBe(404);
     });
 
+    it("shows the owner a small preview of an image without its metadata", async () => {
+      const [alice, mallory] = [await owner(), await owner()];
+      const wbId = await asset(alice);
+      const body = await sharp({
+        create: { width: 1200, height: 800, channels: 3, background: "#224466" },
+      })
+        .jpeg()
+        .withExif({ IFD0: { Make: "SECRETCAM", Artist: "SECRET-OWNER" } })
+        .toBuffer();
+      const evidence = await added(alice, wbId, { body });
+      const url = `/assets/${wbId}/evidence/${evidence.id}/preview`;
+
+      const res = await call(alice, "GET", url);
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["content-type"]).toBe("image/webp");
+      expect(res.headers["cache-control"]).toBe("private, max-age=3600");
+      expect(res.headers["content-security-policy"]).toBe("default-src 'none'; sandbox");
+      expect(res.rawPayload.includes("SECRETCAM")).toBe(false);
+      const metadata = await sharp(res.rawPayload).metadata();
+      expect([metadata.format, metadata.width, metadata.height, metadata.exif]).toEqual([
+        "webp",
+        480,
+        320,
+        undefined,
+      ]);
+
+      // Made once, then kept next to the private file.
+      const key = `previews/${await assetId(wbId)}/${evidence.id}.webp`;
+      expect(await storage.head(key)).not.toBeNull();
+      expect((await call(alice, "GET", url)).rawPayload.equals(res.rawPayload)).toBe(true);
+
+      const theirs = await call(mallory, "GET", url);
+      const missing = await call(
+        mallory,
+        "GET",
+        `/assets/${wbId}/evidence/${randomUUID()}/preview`,
+      );
+      expect(theirs.statusCode).toBe(404);
+      expect(theirs.json().error.code).toBe(missing.json().error.code);
+      expect((await call(null, "GET", url)).statusCode).toBe(401);
+    });
+
+    it("has no preview for PDFs", async () => {
+      const alice = await owner();
+      const wbId = await asset(alice);
+      const evidence = await added(alice, wbId, {
+        body: pdf(),
+        type: "RECEIPT",
+        mimeType: "application/pdf",
+      });
+      const res = await call(alice, "GET", `/assets/${wbId}/evidence/${evidence.id}/preview`);
+      expect(res.statusCode).toBe(404);
+    });
+
+    it("gives each asset in the owner's list a thumbnail, preferring a public photo", async () => {
+      const alice = await owner();
+      const [withPublic, withPrivate, without] = [
+        await asset(alice),
+        await asset(alice),
+        await asset(alice),
+      ];
+      await added(alice, withPublic, { body: await phonePhoto("#110000") });
+      const shown = await added(alice, withPublic, {
+        body: await phonePhoto("#220000"),
+        visibility: "PUBLIC",
+      });
+      const hidden = await added(alice, withPrivate, { body: await phonePhoto("#330000") });
+      await added(alice, without, { body: pdf(), type: "RECEIPT", mimeType: "application/pdf" });
+
+      const res = await call(alice, "GET", "/assets");
+      expect(res.statusCode).toBe(200);
+      const thumbnails = Object.fromEntries(
+        res
+          .json<{ items: { wbId: string; thumbnailPath: string | null }[] }>()
+          .items.map((a) => [a.wbId, a.thumbnailPath]),
+      );
+      expect(thumbnails).toEqual({
+        [withPublic]: `/assets/${withPublic}/evidence/${shown.id}/preview`,
+        [withPrivate]: `/assets/${withPrivate}/evidence/${hidden.id}/preview`,
+        [without]: null,
+      });
+    });
+
     it("gives the owner a 5-minute link that downloads the file", async () => {
       const alice = await owner();
       const wbId = await asset(alice);

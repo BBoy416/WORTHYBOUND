@@ -29,6 +29,15 @@ export function canBePublic(type: EvidenceType, mimeType: string): boolean {
   return type === "PHOTO" && (PUBLIC_PHOTO_MIME_TYPES as readonly string[]).includes(mimeType);
 }
 
+/** Image evidence in these formats gets a small private preview for its owner and verifier. */
+export function hasPreview(mimeType: string): boolean {
+  return (PUBLIC_PHOTO_MIME_TYPES as readonly string[]).includes(mimeType);
+}
+
+/** Path of the owner's private preview of an evidence image, relative to the API's origin. */
+export const evidencePreviewPath = (wbId: string, evidenceId: string) =>
+  `/assets/${wbId}/evidence/${evidenceId}/preview`;
+
 /** Path of a public evidence photo on the API, relative to its origin. */
 export const publicEvidencePath = (wbId: string, evidenceId: string) =>
   `/passport/${wbId}/evidence/${evidenceId}`;

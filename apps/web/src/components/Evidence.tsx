@@ -1,9 +1,11 @@
 import {
+  canBePublic,
   EVIDENCE_MAX_BYTES,
   EVIDENCE_MIME_TYPES,
   EVIDENCE_TYPES,
-  PUBLIC_PHOTO_MIME_TYPES,
+  hasPreview,
   type EvidenceMimeType,
+  type EvidenceType,
 } from "@worthybound/shared";
 import { useState, type FormEvent } from "react";
 import { post, putFile, sha256Hex, type PresignedUpload } from "../api.js";
@@ -15,72 +17,89 @@ const isMime = (type: string): type is EvidenceMimeType =>
   (EVIDENCE_MIME_TYPES as readonly string[]).includes(type);
 
 /**
- * Picks a file, hashes it in the browser, asks the API for an upload, sends the file straight to
+ * Picks files, hashes each in the browser, asks the API for an upload, sends the file straight to
  * storage and completes the upload. `requestPath` is the owner's or the verifier's upload endpoint.
  */
 export function UploadForm({
   requestPath,
   types = EVIDENCE_TYPES,
   allowPublic,
+  multiple = false,
+  submitLabel = "Add evidence",
   onDone,
 }: {
   requestPath: string;
   types?: readonly string[];
   allowPublic: boolean;
+  multiple?: boolean;
+  submitLabel?: string;
   onDone: () => void;
 }) {
   const { busy, error, run } = useAction();
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [type, setType] = useState<string>(types[0] ?? "PHOTO");
   const [visibility, setVisibility] = useState("PRIVATE");
   const [description, setDescription] = useState("");
   const [step, setStep] = useState("");
 
+  const publicAllowed =
+    allowPublic &&
+    files.length > 0 &&
+    files.every((f) => canBePublic(type as EvidenceType, f.type));
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (!file) return;
+    if (files.length === 0) return;
+    const form = event.target as HTMLFormElement;
     void run(async () => {
-      if (!isMime(file.type))
-        throw new Error(`Files of type ${file.type || "unknown"} are not accepted`);
-      if (file.size > EVIDENCE_MAX_BYTES[file.type])
-        throw new Error("This file is too large for its type");
-      setStep("Hashing…");
-      const sha256 = await sha256Hex(file);
-      setStep("Uploading…");
-      const { uploadId, upload } = await post<{ uploadId: string; upload: PresignedUpload }>(
-        requestPath,
-        {
-          type,
-          sha256,
-          mimeType: file.type,
-          sizeBytes: file.size,
-          originalFilename: file.name,
-          ...(allowPublic ? { visibility } : {}),
-          ...(description.trim() ? { description: description.trim() } : {}),
-        },
-      );
-      await putFile(upload, file);
-      setStep("Checking…");
-      await post(`/evidence/uploads/${uploadId}/complete`);
-      setFile(null);
-      setDescription("");
-      (event.target as HTMLFormElement).reset();
-      onDone();
+      for (const file of files) {
+        if (!isMime(file.type))
+          throw new Error(`${file.name}: files of type ${file.type || "unknown"} are not accepted`);
+        if (file.size > EVIDENCE_MAX_BYTES[file.type])
+          throw new Error(`${file.name}: this file is too large for its type`);
+      }
+      let done = 0;
+      try {
+        for (const file of files) {
+          const of = files.length > 1 ? ` ${done + 1} of ${files.length}` : "";
+          setStep(`Hashing${of}…`);
+          const sha256 = await sha256Hex(file);
+          setStep(`Uploading${of}…`);
+          const { uploadId, upload } = await post<{ uploadId: string; upload: PresignedUpload }>(
+            requestPath,
+            {
+              type,
+              sha256,
+              mimeType: file.type,
+              sizeBytes: file.size,
+              originalFilename: file.name,
+              ...(publicAllowed ? { visibility } : {}),
+              ...(description.trim() ? { description: description.trim() } : {}),
+            },
+          );
+          await putFile(upload, file);
+          setStep(`Checking${of}…`);
+          await post(`/evidence/uploads/${uploadId}/complete`);
+          done++;
+        }
+        setFiles([]);
+        setDescription("");
+        form.reset();
+      } finally {
+        if (done > 0) onDone();
+      }
     }).finally(() => setStep(""));
   };
 
-  const canBePublic =
-    allowPublic &&
-    file !== null &&
-    (PUBLIC_PHOTO_MIME_TYPES as readonly string[]).includes(file.type);
   return (
     <form className="form upload" onSubmit={submit}>
       <div className="row">
-        <Field label="File">
+        <Field label={multiple ? "Files" : "File"}>
           <input
             type="file"
+            multiple={multiple}
             accept={EVIDENCE_MIME_TYPES.join(",")}
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
           />
         </Field>
         <Field label="Type">
@@ -96,19 +115,20 @@ export function UploadForm({
       <Field label="Description">
         <input value={description} onChange={(e) => setDescription(e.target.value)} />
       </Field>
-      {canBePublic && (
+      {publicAllowed && (
         <label className="check">
           <input
             type="checkbox"
             checked={visibility === "PUBLIC"}
             onChange={(e) => setVisibility(e.target.checked ? "PUBLIC" : "PRIVATE")}
           />
-          Show this photo on the public passport (metadata is removed)
+          {files.length > 1 ? "Show these photos" : "Show this photo"} on the public passport
+          (metadata is removed)
         </label>
       )}
       <ErrorText error={error} />
-      <button type="submit" disabled={busy || !file}>
-        {busy ? step || "Working…" : "Add evidence"}
+      <button type="submit" disabled={busy || files.length === 0}>
+        {busy ? step || "Working…" : submitLabel}
       </button>
     </form>
   );
@@ -117,11 +137,14 @@ export function UploadForm({
 export function EvidenceList({
   items,
   downloadPath,
+  previewPath,
   onVisibility,
   onReview,
 }: {
   items: OwnerEvidence[];
   downloadPath: (id: string) => string;
+  /** Private previews of JPEG, PNG and WebP files. */
+  previewPath?: (id: string) => string;
   onVisibility?: (item: OwnerEvidence) => Promise<void>;
   onReview?: (item: OwnerEvidence, status: "ACCEPTED" | "REJECTED") => Promise<void>;
 }) {
@@ -138,7 +161,9 @@ export function EvidenceList({
       <ul className="list">
         {items.map((e) => (
           <li key={e.id} className="evidence-row">
-            {e.publicPath ? (
+            {previewPath && hasPreview(e.mimeType) ? (
+              <img className="thumb" src={previewPath(e.id)} alt="" loading="lazy" />
+            ) : e.publicPath ? (
               <img className="thumb" src={e.publicPath} alt="" />
             ) : (
               <span className="thumb file">{e.mimeType.split("/")[1]?.toUpperCase()}</span>
@@ -160,12 +185,11 @@ export function EvidenceList({
               <button className="ghost small" onClick={() => void open(e.id)}>
                 Open
               </button>
-              {onVisibility &&
-                (PUBLIC_PHOTO_MIME_TYPES as readonly string[]).includes(e.mimeType) && (
-                  <button className="ghost small" onClick={() => void run(() => onVisibility(e))}>
-                    Make {e.visibility === "PUBLIC" ? "private" : "public"}
-                  </button>
-                )}
+              {onVisibility && canBePublic(e.type, e.mimeType) && (
+                <button className="ghost small" onClick={() => void run(() => onVisibility(e))}>
+                  Make {e.visibility === "PUBLIC" ? "private" : "public"}
+                </button>
+              )}
               {onReview && e.reviewStatus === "PENDING" && (
                 <>
                   <button

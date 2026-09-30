@@ -450,6 +450,25 @@ legend {
   border-color: var(--gold);
   text-decoration: none;
 }
+.tile-photo {
+  display: block;
+  width: calc(100% + 2.4rem);
+  margin: -1.1rem -1.2rem 0.9rem;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: var(--radius) var(--radius) 0 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--charcoal);
+}
+.tile-photo.no-photo {
+  display: grid;
+  place-items: center;
+  width: calc(100% + 2.4rem);
+  height: auto;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: var(--radius) var(--radius) 0 0;
+}
 .tile-score {
   margin: 0.4rem 0 0;
   font-size: 1.4rem;
