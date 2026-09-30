@@ -1,7 +1,7 @@
 import type { PublicPassport } from "@worthybound/shared";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OwnerAsset } from "../src/types.js";
+import type { OwnerAsset, OwnerEvidence } from "../src/types.js";
 import { me, mockFetch, renderAt, unauthenticated } from "./helpers.js";
 
 const WB = "WB-7F93A281";
@@ -90,6 +90,29 @@ const asset = (overrides: Partial<OwnerAsset> = {}): OwnerAsset => ({
   missingForPublish: [],
   ...overrides,
 });
+
+const evidence = (overrides: Partial<OwnerEvidence> = {}): OwnerEvidence => ({
+  id: "0199a000-0000-7000-8000-00000000e001",
+  type: "PHOTO",
+  source: "OWNER",
+  mimeType: "image/jpeg",
+  sizeBytes: 5,
+  sha256: "a".repeat(64),
+  visibility: "PRIVATE",
+  reviewStatus: "PENDING",
+  reviewReason: null,
+  originalFilename: "front.jpg",
+  description: null,
+  createdAt: "2026-09-29T10:00:00.000Z",
+  publicPath: null,
+  ...overrides,
+});
+
+/** The file input of the form whose submit button reads `label`. */
+const fileInputOf = (label: string) =>
+  (screen.getByText(label).closest("form") as HTMLFormElement).querySelector(
+    'input[type="file"]',
+  ) as HTMLInputElement;
 
 const ownerRoutes = (a: OwnerAsset) => ({
   "GET /auth/me": { json: me() },
@@ -252,14 +275,12 @@ describe("owner asset page", () => {
       "PUT https://r2.example/bucket/staging/up1": { json: undefined },
       "POST /evidence/uploads/up1/complete": { status: 201, json: {} },
     });
-    const { container } = renderAt(`/assets/${WB}`);
+    renderAt(`/assets/${WB}`);
     await screen.findByText("Add evidence");
     const file = new File([new Uint8Array([104, 101, 108, 108, 111])], "front.jpg", {
       type: "image/jpeg",
     });
-    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
-      target: { files: [file] },
-    });
+    fireEvent.change(fileInputOf("Add evidence"), { target: { files: [file] } });
     fireEvent.click(screen.getByLabelText(/Show this photo on the public passport/));
     fireEvent.click(screen.getByText("Add evidence"));
     await waitFor(() =>
@@ -282,15 +303,124 @@ describe("owner asset page", () => {
 
   it("rejects file types the vault does not accept before uploading", async () => {
     const calls = mockFetch(ownerRoutes(asset()));
-    const { container } = renderAt(`/assets/${WB}`);
+    renderAt(`/assets/${WB}`);
     await screen.findByText("Add evidence");
     const file = new File(["x"], "notes.txt", { type: "text/plain" });
-    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
-      target: { files: [file] },
-    });
+    fireEvent.change(fileInputOf("Add evidence"), { target: { files: [file] } });
     fireEvent.click(screen.getByText("Add evidence"));
     expect((await screen.findByRole("alert")).textContent).toMatch(/text\/plain are not accepted/);
     expect(calls.some((c) => c.url.includes("/evidence/uploads"))).toBe(false);
+  });
+
+  it("offers public sharing only for photos, not for images of receipts", async () => {
+    mockFetch(ownerRoutes(asset()));
+    renderAt(`/assets/${WB}`);
+    await screen.findByText("Add evidence");
+    const form = screen.getByText("Add evidence").closest("form") as HTMLFormElement;
+    fireEvent.change(fileInputOf("Add evidence"), {
+      target: { files: [new File(["x"], "receipt.jpg", { type: "image/jpeg" })] },
+    });
+    expect(within(form).queryByLabelText(/on the public passport/)).toBeTruthy();
+    fireEvent.change(within(form).getByLabelText("Type"), { target: { value: "RECEIPT" } });
+    expect(within(form).queryByLabelText(/on the public passport/)).toBeNull();
+  });
+
+  it("asks for photos until the item has one, and uploads several at once", async () => {
+    let items: OwnerEvidence[] = [];
+    let n = 0;
+    const calls = mockFetch({
+      ...ownerRoutes(asset()),
+      [`GET /assets/${WB}/evidence`]: () => ({ json: { items } }),
+      [`POST /assets/${WB}/evidence/uploads`]: () => (
+        n++,
+        {
+          status: 201,
+          json: {
+            uploadId: `up${n}`,
+            upload: { url: `https://r2.example/up${n}`, method: "PUT", headers: {} },
+            expiresAt: "",
+          },
+        }
+      ),
+      "PUT https://r2.example/up1": { json: undefined },
+      "PUT https://r2.example/up2": { json: undefined },
+      "POST /evidence/uploads/up1/complete": { status: 201, json: {} },
+      "POST /evidence/uploads/up2/complete": () => (
+        (items = [evidence()]),
+        { status: 201, json: {} }
+      ),
+    });
+    renderAt(`/assets/${WB}`);
+    await screen.findByText("Add photos of your item");
+    fireEvent.change(fileInputOf("Add photos"), {
+      target: {
+        files: [
+          new File(["front"], "front.jpg", { type: "image/jpeg" }),
+          new File(["back"], "back.png", { type: "image/png" }),
+        ],
+      },
+    });
+    fireEvent.click(screen.getByText("Add photos"));
+    await waitFor(() => expect(screen.queryByText("Add photos of your item")).toBeNull());
+    const requests = calls.filter((c) => c.url === `/assets/${WB}/evidence/uploads`);
+    expect(
+      requests.map((c) => {
+        const body = c.body as { type: string; originalFilename: string };
+        return [body.type, body.originalFilename];
+      }),
+    ).toEqual([
+      ["PHOTO", "front.jpg"],
+      ["PHOTO", "back.png"],
+    ]);
+  });
+
+  it("shows private previews of images and a label for other files", async () => {
+    mockFetch({
+      ...ownerRoutes(asset()),
+      [`GET /assets/${WB}/evidence`]: {
+        json: {
+          items: [
+            evidence(),
+            evidence({
+              id: "0199a000-0000-7000-8000-00000000e002",
+              type: "RECEIPT",
+              mimeType: "application/pdf",
+              originalFilename: "receipt.pdf",
+            }),
+          ],
+        },
+      },
+    });
+    const { container } = renderAt(`/assets/${WB}`);
+    await screen.findByText("receipt.pdf", { exact: false });
+    expect(screen.queryByText("Add photos of your item")).toBeNull();
+    expect(
+      Array.from(container.querySelectorAll("img.thumb")).map((i) => i.getAttribute("src")),
+    ).toEqual([`/assets/${WB}/evidence/0199a000-0000-7000-8000-00000000e001/preview`]);
+    expect(container.querySelector(".thumb.file")?.textContent).toBe("PDF");
+  });
+});
+
+describe("my assets", () => {
+  it("shows each asset's photo thumbnail, or a placeholder", async () => {
+    mockFetch({
+      "GET /auth/me": { json: me() },
+      "GET /assets": {
+        json: {
+          items: [
+            { ...asset(), thumbnailPath: `/assets/${WB}/evidence/e1/preview` },
+            { ...asset({ wbId: "WB-00000002", model: "Daytona" }), thumbnailPath: null },
+          ],
+          nextCursor: null,
+        },
+      },
+    });
+    const { container } = renderAt("/assets");
+    await screen.findByText("Daytona", { exact: false });
+    expect(container.querySelector("img.tile-photo")?.getAttribute("src")).toBe(
+      `/assets/${WB}/evidence/e1/preview`,
+    );
+    expect(screen.getByText("No photo yet")).toBeTruthy();
   });
 });
 

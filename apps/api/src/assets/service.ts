@@ -14,6 +14,7 @@ import {
   canPublish,
   generateWbId,
   missingPublishFields,
+  PUBLIC_PHOTO_MIME_TYPES,
   REQUEST_CANCELLING_ASSET_STATUSES,
 } from "@worthybound/shared";
 import { chainAddresses } from "@worthybound/solana";
@@ -217,7 +218,26 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
         ...(cursor ? { cursor: { wbId: cursor }, skip: 1 } : {}),
       });
       const page = items.slice(0, limit);
-      return { items: page, nextCursor: items.length > limit ? (page.at(-1)?.wbId ?? null) : null };
+      // One photo per asset for its thumbnail: the first public one, else the first private one.
+      const photos = await prisma.evidence.findMany({
+        where: {
+          assetId: { in: page.map((a) => a.id) },
+          type: "PHOTO",
+          mimeType: { in: [...PUBLIC_PHOTO_MIME_TYPES] },
+          reviewStatus: { not: "REJECTED" },
+        },
+        orderBy: [{ visibility: "desc" }, { createdAt: "asc" }, { id: "asc" }],
+        distinct: ["assetId"],
+        select: { id: true, assetId: true },
+      });
+      const thumbnails = new Map(photos.map((p) => [p.assetId, p.id]));
+      return {
+        items: page.map((asset) => ({
+          asset,
+          thumbnailEvidenceId: thumbnails.get(asset.id) ?? null,
+        })),
+        nextCursor: items.length > limit ? (page.at(-1)?.wbId ?? null) : null,
+      };
     },
 
     /** Creates a private draft. Returns `replayed` when an Idempotency-Key matched. */

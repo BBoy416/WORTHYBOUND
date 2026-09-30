@@ -10,7 +10,7 @@ import {
   verificationRequestParamsSchema,
   verifierEvidenceUploadSchema,
 } from "@worthybound/validation";
-import type { FastifyRequest } from "fastify";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { fingerprint } from "../audit.js";
@@ -58,6 +58,14 @@ export const evidenceRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx
     fp: fingerprint(config.SESSION_SECRET, request),
   });
   const write = { preHandler: authenticate, config: perUser(rateLimits.write) };
+  const preview = { preHandler: authenticate, config: perUser(rateLimits.public) };
+  const sendPreview = (reply: FastifyReply, image: Buffer) =>
+    reply
+      .header("content-type", "image/webp")
+      .header("content-disposition", "inline")
+      .header("content-security-policy", "default-src 'none'; sandbox")
+      .header("cache-control", "private, max-age=3600")
+      .send(image);
 
   app.post(
     "/assets/:wbId/evidence/uploads",
@@ -138,6 +146,17 @@ export const evidenceRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx
       reply.header("cache-control", "no-store");
       return { url: link.url, expiresAt: link.expiresAt.toISOString() };
     },
+  );
+
+  /** Small metadata-free WebP of a JPEG, PNG or WebP file, for the owner only. */
+  app.get(
+    "/assets/:wbId/evidence/:evidenceId/preview",
+    { ...preview, schema: { params: evidenceParamsSchema } },
+    async (request, reply) =>
+      sendPreview(
+        reply,
+        await service.preview(request.params.wbId, request.params.evidenceId, actor(request)),
+      ),
   );
 
   app.post(
@@ -227,6 +246,20 @@ export const evidenceRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx
       reply.header("cache-control", "no-store");
       return { url: link.url, expiresAt: link.expiresAt.toISOString() };
     },
+  );
+
+  app.get(
+    "/verifier/requests/:requestId/evidence/:evidenceId/preview",
+    { ...preview, schema: { params: requestEvidenceParamsSchema } },
+    async (request, reply) =>
+      sendPreview(
+        reply,
+        await service.previewForRequest(
+          request.params.requestId,
+          request.params.evidenceId,
+          actor(request),
+        ),
+      ),
   );
 
   app.post(

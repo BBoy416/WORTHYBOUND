@@ -2,10 +2,10 @@ import { get } from "../api.js";
 import { Badge, Card, Loading, useLoad } from "../components/ui.js";
 import { humanize } from "../format.js";
 import { Link } from "../router.js";
-import type { OwnerAsset } from "../types.js";
+import type { OwnerAssetListItem } from "../types.js";
 
 export function AssetsPage() {
-  const { data, error } = useLoad(() => get<{ items: OwnerAsset[] }>("/assets"), []);
+  const { data, error } = useLoad(() => get<{ items: OwnerAssetListItem[] }>("/assets"), []);
   return (
     <div>
       <div className="page-head">
@@ -24,6 +24,11 @@ export function AssetsPage() {
         <div className="asset-grid">
           {data.items.map((a) => (
             <Link key={a.wbId} to={`/assets/${a.wbId}`} className="asset-tile">
+              {a.thumbnailPath ? (
+                <img className="tile-photo" src={a.thumbnailPath} alt="" loading="lazy" />
+              ) : (
+                <div className="tile-photo no-photo">No photo yet</div>
+              )}
               <p className="eyebrow">{humanize(a.category)}</p>
               <h3>
                 {a.brand ?? "Unnamed"} {a.model}

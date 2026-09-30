@@ -42,6 +42,11 @@ export const ownerAssetSchema = z.object({
 });
 export type OwnerAsset = z.infer<typeof ownerAssetSchema>;
 
+/** An asset in the owner's list, with the private preview of one of its photos. */
+export const ownerAssetListItemSchema = ownerAssetSchema.extend({
+  thumbnailPath: z.string().nullable(),
+});
+
 export function toOwnerAsset(asset: Asset, publicWebUrl: string): OwnerAsset {
   const published = asset.publishedAt !== null && isPassportPublic(asset.status);
   return {

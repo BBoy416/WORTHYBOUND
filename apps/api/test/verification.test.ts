@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Storage } from "@worthybound/storage";
 import type { FastifyInstance } from "fastify";
+import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { grantAdmin } from "../src/cli/admin-grant.js";
 import { recordKyc } from "../src/cli/kyc-record.js";
@@ -1127,8 +1128,9 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("verifier evidenc
     expect(res.status, await res.text()).toBeLessThan(300);
   };
 
-  const uploadAs = async (who: Person, url: string, body: Buffer) => {
-    const { uploadId, upload: form } = await expectOk(call(who, "POST", url, meta(body)), 201);
+  const uploadAs = async (who: Person, url: string, body: Buffer, type?: string, mime?: string) => {
+    const payload = meta(body, type, mime);
+    const { uploadId, upload: form } = await expectOk(call(who, "POST", url, payload), 201);
     await sendFile(form, body);
     return {
       uploadId: uploadId as string,
@@ -1180,6 +1182,30 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("verifier evidenc
     expect(
       await errorCode(call(v, "POST", url, { ...meta(pdf()), visibility: "PUBLIC" }), 400),
     ).toBe("invalid_request");
+  });
+
+  it("shows the assigned verifier previews of the owner's photos, and nobody else", async () => {
+    const { owner, wbId, requestId, v } = await assigned();
+    const photo = await sharp({
+      create: { width: 900, height: 600, channels: 3, background: "#aa3300" },
+    })
+      .jpeg()
+      .toBuffer();
+    const upload = await uploadAs(
+      owner,
+      `/assets/${wbId}/evidence/uploads`,
+      photo,
+      "PHOTO",
+      "image/jpeg",
+    );
+    const evidence = await expectOk(upload.complete(), 201);
+    const url = `/verifier/requests/${requestId}/evidence/${evidence.id}/preview`;
+    const res = await call(v, "GET", url);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toBe("image/webp");
+    expect((await sharp(res.rawPayload).metadata()).width).toBe(480);
+    const other = await f.verifier(adminA);
+    expect(await errorCode(call(other, "GET", url), 404)).toBe("not_found");
   });
 
   it("refuses to complete an upload once the request is no longer assigned to the verifier", async () => {

@@ -4,6 +4,7 @@ import {
   assertTransition,
   canBePublic,
   EVIDENCE_REVIEW_LIFECYCLE,
+  hasPreview,
   MAX_EVIDENCE_PER_ASSET,
   MERKLE_ALGORITHM,
   merkleRoot,
@@ -21,7 +22,7 @@ import type { Actor } from "../assets/service.js";
 import { ApiError, fromDomainError, notFound } from "../errors.js";
 import { recordTrust } from "../trust/record.js";
 import { findAssignedRequest, lockAssignedRequest } from "../verification/requests.js";
-import { inspectFile, publicPhotoCopy } from "./inspect.js";
+import { inspectFile, previewImage, publicPhotoCopy, readAll } from "./inspect.js";
 
 type Tx = Prisma.TransactionClient;
 
@@ -33,6 +34,7 @@ export interface EvidenceServiceOptions {
 }
 
 export const STAGING_PREFIX = "staging/";
+export const PREVIEW_PREFIX = "previews/";
 const UPLOAD_EXPIRY_SECONDS = 15 * 60;
 const DOWNLOAD_EXPIRY_SECONDS = 5 * 60;
 
@@ -104,6 +106,16 @@ export function createEvidenceService({ prisma, storage, now, log }: EvidenceSer
     const evidence = await prisma.evidence.findUnique({ where: { id: evidenceId } });
     if (!evidence || evidence.assetId !== asset.id) throw notFound("Evidence");
     return evidence;
+  }
+
+  /** Made from the private file on first request, then kept in storage. */
+  async function previewOf(evidence: Evidence): Promise<Buffer> {
+    if (!hasPreview(evidence.mimeType)) throw notFound("Preview");
+    const key = `${PREVIEW_PREFIX}${evidence.assetId}/${evidence.id}.webp`;
+    if (await storage.head(key)) return readAll(await storage.read(key));
+    const image = await previewImage(await readAll(await storage.read(evidence.storageKey)));
+    await storage.put(key, image, "image/webp");
+    return image;
   }
 
   /** Best effort: the bucket's clean-up rule removes anything left in the holding area. */
@@ -311,6 +323,11 @@ export function createEvidenceService({ prisma, storage, now, log }: EvidenceSer
     async listForRequest(requestId: string, actor: Actor) {
       const request = await findAssignedRequest(prisma, requestId, actor.userId);
       return { asset: request.asset, items: await inSealOrder(request.assetId) };
+    },
+
+    async previewForRequest(requestId: string, evidenceId: string, actor: Actor) {
+      const request = await findAssignedRequest(prisma, requestId, actor.userId);
+      return previewOf(await ownedEvidence(request.asset, evidenceId));
     },
 
     async downloadForRequest(requestId: string, evidenceId: string, actor: Actor) {
@@ -585,6 +602,11 @@ export function createEvidenceService({ prisma, storage, now, log }: EvidenceSer
         if (error instanceof UploadRejected) throw await fail(upload, error.reason, actor);
         throw error;
       }
+    },
+
+    async preview(wbId: string, evidenceId: string, actor: Actor) {
+      const asset = await ownedAsset(prisma, wbId, actor);
+      return previewOf(await ownedEvidence(asset, evidenceId));
     },
 
     async download(wbId: string, evidenceId: string, actor: Actor) {

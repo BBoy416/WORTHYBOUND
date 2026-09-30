@@ -1,3 +1,4 @@
+import { evidencePreviewPath } from "@worthybound/shared";
 import {
   assetConditionRequestSchema,
   assetParamsSchema,
@@ -15,7 +16,13 @@ import type { AuthContext } from "../auth/guard.js";
 import type { AppContext, RateLimit } from "../context.js";
 import { ApiError } from "../errors.js";
 import { type Actor, createAssetService } from "./service.js";
-import { ownerAssetSchema, ownerTrustSchema, toOwnerAsset, toOwnerTrust } from "./view.js";
+import {
+  ownerAssetListItemSchema,
+  ownerAssetSchema,
+  ownerTrustSchema,
+  toOwnerAsset,
+  toOwnerTrust,
+} from "./view.js";
 
 const errorSchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
 const errors = {
@@ -83,7 +90,10 @@ export const assetRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx) =
           cursor: wbIdSchema.optional(),
         }),
         response: {
-          200: z.object({ items: z.array(ownerAssetSchema), nextCursor: z.string().nullable() }),
+          200: z.object({
+            items: z.array(ownerAssetListItemSchema),
+            nextCursor: z.string().nullable(),
+          }),
           401: errorSchema,
         },
       },
@@ -94,7 +104,15 @@ export const assetRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx) =
         request.query.limit,
         request.query.cursor,
       );
-      return { items: items.map(view), nextCursor };
+      return {
+        items: items.map(({ asset, thumbnailEvidenceId }) => ({
+          ...view(asset),
+          thumbnailPath: thumbnailEvidenceId
+            ? evidencePreviewPath(asset.wbId, thumbnailEvidenceId)
+            : null,
+        })),
+        nextCursor,
+      };
     },
   );
 

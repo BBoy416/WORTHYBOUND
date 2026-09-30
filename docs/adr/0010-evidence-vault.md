@@ -19,6 +19,7 @@ reveal where the owner lives.
 | `POST /evidence/uploads/:uploadId/complete`          | Checks the uploaded file and stores it as evidence |
 | `GET /assets/:wbId/evidence`                         | The asset's evidence                               |
 | `POST /assets/:wbId/evidence/:evidenceId/download`   | 5-minute download link                             |
+| `GET /assets/:wbId/evidence/:evidenceId/preview`     | Small private preview of a JPEG, PNG or WebP file  |
 | `POST /assets/:wbId/evidence/:evidenceId/visibility` | Makes a photo public or private again              |
 | `GET /passport/:wbId/evidence/:evidenceId`           | Public photo of a published passport; no sign-in   |
 
@@ -57,6 +58,14 @@ comments and colour profiles; the original stays private and keeps its hash. The
 copy with `Content-Security-Policy: default-src 'none'; sandbox`. Hiding the photo deletes the copy
 and records `EVIDENCE_VISIBILITY_CHANGED`. HEIC photos stay private (the image library cannot
 decode them).
+
+**Private previews.** JPEG, PNG and WebP evidence of any type (photos, receipts, certificates)
+gets a WebP preview of at most 480 × 480 pixels, re-encoded the same way as public copies. It is
+made on first request, kept at `previews/<asset id>/<evidence id>.webp`, and served only to the
+owner and the assigned verifier with `Content-Security-Policy: default-src 'none'; sandbox` and
+`Cache-Control: private`. The owner's asset list shows one photo per asset as its thumbnail: the
+first public photo, or else the first private one. Receipts and other documents cannot be public;
+sharing them with a buyer belongs to the transfer flow (ADR 0014).
 
 **Duplicates.** The same file twice on one asset is rejected (`409 duplicate_evidence`, also a
 unique index). The same file on another asset is accepted, linked to the earliest copy
