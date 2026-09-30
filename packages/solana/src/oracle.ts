@@ -97,7 +97,11 @@ export interface WorthyBoundOracle {
     buyer: string;
     statusAfter: AssetStatus;
     statusSeq: bigint;
+    /** Paid by the buyer to the seller in the same transaction; 0 for none. */
+    priceLamports: bigint;
   }): Promise<{ transaction: string; nonceAccount: string }>;
+  /** Lamports held by the account, 0 if it does not exist. */
+  getBalance(address: string): Promise<bigint>;
   /**
    * Adds the oracle's signature to the prepared transaction and sends it, or returns its
    * signature if it already landed. Throws TransferFailedError if it landed and failed.
@@ -192,7 +196,7 @@ export function createWorthyBoundOracle(
       );
     },
 
-    async prepareTransfer({ wbId, seller, buyer, statusAfter, statusSeq }) {
+    async prepareTransfer({ wbId, seller, buyer, statusAfter, statusSeq, priceLamports }) {
       const nonceAccount = await generateKeyPairSigner();
       const lamports = await connection.rpc
         .getMinimumBalanceForRentExemption(NONCE_ACCOUNT_SIZE)
@@ -221,8 +225,16 @@ export function createWorthyBoundOracle(
         statusSeq,
         nonceAccount: nonceAccount.address,
         nonce,
+        priceLamports,
       });
       return { transaction, nonceAccount: nonceAccount.address };
+    },
+
+    async getBalance(account) {
+      const { value } = await connection.rpc
+        .getBalance(account as Address, { commitment: "confirmed" })
+        .send();
+      return BigInt(value);
     },
 
     async sendTransfer({ transaction, signatures }) {

@@ -10,7 +10,7 @@ import {
   useAction,
   useLoad,
 } from "../components/ui.js";
-import { formatDateTime, shortAddress } from "../format.js";
+import { formatDateTime, formatSol, shortAddress, solToLamports } from "../format.js";
 import { Link } from "../router.js";
 import { useSession } from "../session.js";
 import type { OwnerAsset, Transfer } from "../types.js";
@@ -82,6 +82,7 @@ function TransferItem({ transfer: t, onChange }: { transfer: Transfer; onChange:
       onChange();
     });
   const seller = t.role === "SENDER";
+  const paid = t.priceLamports !== "0";
   const canCancel = (t.status === "PENDING" && seller) || (t.status === "ACCEPTED" && !sending(t));
 
   return (
@@ -97,7 +98,8 @@ function TransferItem({ transfer: t, onChange }: { transfer: Transfer; onChange:
         <span className="mono">
           {shortAddress(seller ? t.toWalletAddress : t.fromWalletAddress)}
         </span>{" "}
-        · Started {formatDateTime(t.createdAt)}
+        · {paid ? `Price ${formatSol(t.priceLamports)}` : "No payment"} · Started{" "}
+        {formatDateTime(t.createdAt)}
         {OPEN.includes(t.status) && !sending(t) && ` · Expires ${formatDateTime(t.expiresAt)}`}
       </div>
 
@@ -106,7 +108,8 @@ function TransferItem({ transfer: t, onChange }: { transfer: Transfer; onChange:
           <p className="small">Waiting for the buyer to accept.</p>
         ) : (
           <p className="small">
-            Accepting prepares a transaction that you and the seller both sign.{" "}
+            Accepting prepares a transaction that you and the seller both sign
+            {paid && `; signing it pays ${formatSol(t.priceLamports)} to the seller`}.{" "}
             <button className="small" disabled={busy} onClick={() => act("accept")}>
               Accept
             </button>{" "}
@@ -128,7 +131,11 @@ function TransferItem({ transfer: t, onChange }: { transfer: Transfer; onChange:
                 {busy ? "Check your wallet…" : "Sign with wallet"}
               </button>{" "}
               <span className="muted">
-                Your wallet signs the transfer only; WorthyBound pays the network fee.
+                {paid && !seller
+                  ? `Your wallet pays ${formatSol(t.priceLamports)} to the seller in the same transaction as the transfer: both happen or neither does. WorthyBound pays the network fee.`
+                  : paid
+                    ? `You receive ${formatSol(t.priceLamports)} in the same transaction as the transfer. WorthyBound pays the network fee.`
+                    : "Your wallet signs the transfer only; WorthyBound pays the network fee."}
               </span>
             </p>
           ) : !(t.signedBySeller && t.signedByBuyer) ? (
@@ -185,7 +192,9 @@ function TransferItem({ transfer: t, onChange }: { transfer: Transfer; onChange:
 /** On the asset page: starts a transfer of a tokenized asset, or points to the open one. */
 export function StartTransfer({ asset: a, onChange }: { asset: OwnerAsset; onChange: () => void }) {
   const [wallet, setWallet] = useState("");
+  const [price, setPrice] = useState("");
   const { busy, error, run } = useAction();
+  const priceLamports = price.trim() ? solToLamports(price) : "0";
   if (a.status === "TRANSFER_PENDING") {
     return (
       <p className="small">
@@ -198,8 +207,13 @@ export function StartTransfer({ asset: a, onChange }: { asset: OwnerAsset; onCha
       onSubmit={(event) => {
         event.preventDefault();
         void run(async () => {
-          await post("/transfers", { assetId: a.wbId, toWalletAddress: wallet.trim() });
+          await post("/transfers", {
+            assetId: a.wbId,
+            toWalletAddress: wallet.trim(),
+            ...(priceLamports && priceLamports !== "0" ? { priceLamports } : {}),
+          });
           setWallet("");
+          setPrice("");
           onChange();
         });
       }}
@@ -213,12 +227,24 @@ export function StartTransfer({ asset: a, onChange }: { asset: OwnerAsset; onCha
           required
         />
       </Field>
+      <Field label="Price in SOL (optional)">
+        <input
+          inputMode="decimal"
+          value={price}
+          onChange={(event) => setPrice(event.target.value)}
+          placeholder="e.g. 2.5; empty for no payment"
+        />
+      </Field>
+      {priceLamports === null && (
+        <p className="small error">Enter the price as a number, with at most 9 decimals.</p>
+      )}
       <p className="muted small">
-        The buyer must have signed in to WorthyBound with this wallet and verified their identity.
-        The item stays yours until the buyer accepts and both of you sign; the transfer expires
-        after 72 hours otherwise.
+        With a price, the buyer pays you in SOL in the same transaction that transfers the item, on
+        Solana devnet. The buyer must have signed in to WorthyBound with this wallet and verified
+        their identity. The item stays yours until the buyer accepts and both of you sign; the
+        transfer expires after 72 hours otherwise.
       </p>
-      <button className="small" disabled={busy || !wallet.trim()}>
+      <button className="small" disabled={busy || !wallet.trim() || priceLamports === null}>
         Start transfer
       </button>
       <ErrorText error={error} />

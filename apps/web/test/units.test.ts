@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { humanize, shortAddress } from "../src/format.js";
+import { formatSol, humanize, shortAddress, solToLamports } from "../src/format.js";
 import { match } from "../src/router.js";
 import { toBase58, toBase64 } from "../src/wallet.js";
 
@@ -33,5 +33,16 @@ describe("format", () => {
   });
   it("shortens addresses", () => {
     expect(shortAddress("4WFo2nZ5eqWqnstZupSt6oqq6tN2MTM4C2ARixHrWfmv")).toBe("4WFo…Wfmv");
+  });
+  it("converts between SOL and lamports exactly", () => {
+    expect(formatSol("2500000000")).toBe("2.5 SOL");
+    expect(formatSol("1")).toBe("0.000000001 SOL");
+    expect(formatSol("123000000000000000")).toBe("123000000 SOL");
+    expect(solToLamports("2.5")).toBe("2500000000");
+    expect(solToLamports(" 0.000000001 ")).toBe("1");
+    expect(solToLamports("10")).toBe("10000000000");
+    for (const bad of ["", "1.", ".5", "-1", "1e3", "1.0000000001", "abc"]) {
+      expect(solToLamports(bad), bad).toBeNull();
+    }
   });
 });

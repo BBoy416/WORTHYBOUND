@@ -333,6 +333,8 @@ export interface VerifierReports {
 
 export interface Transfer {
   id: string;
+  /** Paid by the buyer to the seller in the transfer transaction; "0" for none. */
+  priceLamports: string;
   /** The caller's side of the transfer. */
   role: "SENDER" | "RECIPIENT";
   status: TransferStatus;

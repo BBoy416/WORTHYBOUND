@@ -373,6 +373,7 @@ export function createTransferService({ prisma, now, oracle, log }: TransferServ
             fromUserId: actor.userId,
             toUserId: recipient.id,
             toWalletAddress: input.toWalletAddress,
+            priceLamports: BigInt(input.priceLamports),
             statusBefore: asset.status,
             expiresAt: new Date(at.getTime() + input.expiresInHours * 60 * 60_000),
             createdAt: at,
@@ -408,7 +409,11 @@ export function createTransferService({ prisma, now, oracle, log }: TransferServ
             action: "transfer.requested",
             targetType: "transfer_request",
             targetId: transfer.id,
-            metadata: { wbId: asset.wbId, recipientId: recipient.id },
+            metadata: {
+              wbId: asset.wbId,
+              recipientId: recipient.id,
+              priceLamports: input.priceLamports,
+            },
           },
           actor.fp,
         );
@@ -442,6 +447,7 @@ export function createTransferService({ prisma, now, oracle, log }: TransferServ
           buyer: transfer.toUser.walletAddress,
           statusAfter: transfer.statusBefore,
           statusSeq: BigInt(statusSeq),
+          priceLamports: transfer.priceLamports,
         });
       } catch (error) {
         log.warn(
@@ -561,6 +567,31 @@ export function createTransferService({ prisma, now, oracle, log }: TransferServ
           throw new ApiError(422, "invalid_signature", SIGNATURE_PROBLEMS[error.problem]);
         }
         throw error;
+      }
+      // Checked again on-chain; a buyer who cannot pay would only make the transfer fail there.
+      if (!seller && transfer.priceLamports > 0n) {
+        let balance: bigint;
+        try {
+          if (!oracle) throw new Error("no oracle");
+          balance = await oracle.getBalance(wallet);
+        } catch (error) {
+          log.warn(
+            { transferId: id, err: String((error as Error)?.message ?? error) },
+            "buyer balance check failed",
+          );
+          throw new ApiError(
+            503,
+            "chain_unavailable",
+            "Solana is not reachable right now; try again",
+          );
+        }
+        if (balance < transfer.priceLamports) {
+          throw new ApiError(
+            422,
+            "insufficient_funds",
+            "Your wallet does not hold enough SOL to pay the price",
+          );
+        }
       }
       const at = now();
       let queued = false;

@@ -5,6 +5,11 @@ export const transferRequestSchema = z.strictObject({
   assetId: wbIdSchema,
   toWalletAddress: solanaAddressSchema,
   expiresInHours: z.int().min(1).max(168).default(72),
+  /** Lamports as a decimal string, below 10^18 (1 billion SOL); "0" for no payment. */
+  priceLamports: z
+    .string()
+    .regex(/^(0|[1-9][0-9]{0,17})$/, "expected a whole number of lamports")
+    .default("0"),
 });
 export type TransferRequestInput = z.infer<typeof transferRequestSchema>;
 

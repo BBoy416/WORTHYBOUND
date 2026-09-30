@@ -65,7 +65,15 @@ money is regulated whether or not it moves on Solana. The preferred direction is
 payment provider (e.g. PayPal) that holds and releases the money, with WorthyBound acting only as
 the on-chain verifier: it records checks and releases the token when the provider confirms
 payment. A stablecoin escrow in the WorthyBound program remains an alternative. The choice needs
-legal advice before payments are built.
+legal advice before payments leave devnet.
+
+**Payments on devnet in SOL (2026-10-03).** Until a provider is chosen, payments are in SOL on
+devnet. The seller sets a price when starting a transfer (`priceLamports`, default 0 for none);
+the database keeps it fixed. The transfer transaction pays the price from the buyer to the seller
+(a System program transfer) before `transfer_asset`, so the payment and the transfer both happen
+or neither does; the program is unchanged. The buyer sees the price before accepting and when
+signing, and WorthyBound checks the buyer's balance before accepting the signature. This covers
+in-person transfers; escrow for shipped items is still to come.
 
 **Remaining fraud and its limits.**
 
@@ -84,6 +92,6 @@ legal advice before payments are built.
 - The Phase 10 spike must confirm that the program can hold the token frozen during escrow and
   release it together with the payment.
 - Professional verifiers are needed only for disputes and high-value items, not for every sale.
-- Needs guided capture (ADR 0013, in the web app since 2026-10-01) and a payment provider, which
-  does not exist yet.
+- Needs guided capture (ADR 0013, in the web app since 2026-10-01). Payments are in SOL on devnet
+  only; a payment provider does not exist yet.
 - Verifier-fitted physical tags need their own decision when introduced.

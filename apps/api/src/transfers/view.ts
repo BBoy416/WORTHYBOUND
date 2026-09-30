@@ -36,6 +36,8 @@ export const transferSchema = z.object({
   }),
   fromWalletAddress: z.string(),
   toWalletAddress: z.string(),
+  /** Paid by the buyer to the seller in the transfer transaction, as a decimal string; "0" for none. */
+  priceLamports: z.string(),
   /** Unsigned transaction (base64 wire bytes) to sign with the wallet, while accepted. */
   transaction: z.string().nullable(),
   signedBySeller: z.boolean(),
@@ -67,6 +69,7 @@ export function toTransfer(
     asset: t.asset,
     fromWalletAddress: t.fromUser.walletAddress,
     toWalletAddress: t.toWalletAddress,
+    priceLamports: t.priceLamports.toString(),
     transaction: signing ? t.transaction : null,
     signedBySeller: t.sellerSignature !== null,
     signedByBuyer: t.buyerSignature !== null,

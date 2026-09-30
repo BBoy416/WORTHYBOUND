@@ -94,6 +94,24 @@ export function createNonceAccountInstructions(input: {
   ];
 }
 
+/** System program Transfer: `lamports` from `from`, who signs, to `to`. */
+export function systemTransferInstruction(input: {
+  from: TransactionSigner;
+  to: Address;
+  lamports: bigint;
+}): Instruction {
+  const from: AccountSignerMeta = {
+    address: input.from.address,
+    role: AccountRole.WRITABLE_SIGNER,
+    signer: input.from,
+  };
+  return {
+    programAddress: SYSTEM_PROGRAM,
+    accounts: [from, { address: input.to, role: AccountRole.WRITABLE }],
+    data: concat(u32(2), u64(input.lamports)),
+  };
+}
+
 /** Authority and current value of an initialized nonce account. */
 export function readNonceAccount(data: Uint8Array): { authority: Address; nonce: Nonce } {
   // Versions::Current (1), State::Initialized (1), authority, durable nonce, fee calculator.
@@ -111,7 +129,8 @@ export function readNonceAccount(data: Uint8Array): { authority: Address; nonce:
 /**
  * The `transfer_asset` transaction, unsigned, as base64 wire bytes. It uses a durable nonce
  * instead of a recent blockhash, so seller and buyer can sign it hours apart; the oracle pays the
- * fees, advances the nonce and signs last (ADR 0002).
+ * fees, advances the nonce and signs last (ADR 0002). With a price, the buyer's payment to the
+ * seller is in the same transaction, so both happen or neither does (ADR 0014).
  */
 export async function buildTransferTransaction(input: {
   wbId: string;
@@ -122,12 +141,17 @@ export async function buildTransferTransaction(input: {
   statusSeq: bigint;
   nonceAccount: Address;
   nonce: string;
+  /** Paid by the buyer to the seller; none when 0 or omitted. */
+  priceLamports?: bigint;
 }): Promise<string> {
   const { record, coreAsset } = await chainAddresses(input.wbId);
+  const buyer = createNoopSigner(input.buyer);
+  const price = input.priceLamports ?? 0n;
+  if (price < 0n) throw new Error("price must not be negative");
   const instruction = await getTransferAssetInstructionAsync({
     oracle: createNoopSigner(input.oracle),
     seller: createNoopSigner(input.seller),
-    buyer: createNoopSigner(input.buyer),
+    buyer,
     assetRecord: record,
     coreAsset,
     statusAfter: toChainAssetStatus(input.statusAfter),
@@ -145,7 +169,16 @@ export async function buildTransferTransaction(input: {
         },
         m,
       ),
-    (m) => appendTransactionMessageInstructions([instruction], m),
+    (m) =>
+      appendTransactionMessageInstructions(
+        price > 0n
+          ? [
+              systemTransferInstruction({ from: buyer, to: input.seller, lamports: price }),
+              instruction,
+            ]
+          : [instruction],
+        m,
+      ),
   );
   const bytes = getTransactionEncoder().encode(compileTransaction(message));
   return Buffer.from(bytes).toString("base64");
