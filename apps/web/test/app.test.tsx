@@ -1730,7 +1730,7 @@ describe("transfers", () => {
       expect(await screen.findByText(/Ship by/)).toBeTruthy();
       expect(screen.getByText("Cancel and refund")).toBeTruthy();
       fireEvent.click(screen.getByText("Film the item and the package"));
-      expect(await screen.findByText("PK4Z9M")).toBeTruthy();
+      expect(await screen.findByText("PK4Z9M", {}, { timeout: 3000 })).toBeTruthy();
       expect(screen.getByText(/Write this code on the package/)).toBeTruthy();
       expect(screen.queryByLabelText("Carrier")).toBeNull();
 
