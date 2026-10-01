@@ -19,6 +19,7 @@ describe("web app on the API origin", () => {
     await mkdir(join(dir, "static"));
     await writeFile(join(dir, "index.html"), "<!doctype html><title>WorthyBound</title>");
     await writeFile(join(dir, "static", "index-abc123.js"), "console.log(1)");
+    await writeFile(join(dir, "static", "logo-hero-abc123.webp"), "webp");
     for (const file of ["favicon.png", "apple-touch-icon.png", "og-image.png"]) {
       await writeFile(join(dir, file), "png");
     }
@@ -83,6 +84,9 @@ describe("web app on the API origin", () => {
     expect(js.statusCode).toBe(200);
     expect(js.headers["content-type"]).toBe("text/javascript; charset=utf-8");
     expect(js.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
+    const image = await app.inject({ method: "GET", url: "/static/logo-hero-abc123.webp" });
+    expect(image.statusCode).toBe(200);
+    expect(image.headers["content-type"]).toBe("image/webp");
     for (const url of ["/favicon.png", "/apple-touch-icon.png", "/og-image.png"]) {
       const res = await app.inject({ method: "GET", url });
       expect(res.statusCode, url).toBe(200);
