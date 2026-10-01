@@ -13,7 +13,7 @@ services:
     # sleep when idle, which pauses the worker, and do not run preDeployCommand.
     plan: 0.5c-512mb
     numInstances: 1
-    branch: dev
+    branch: main
     autoDeployTrigger: checksPass
     buildCommand: >-
       corepack enable && pnpm install --frozen-lockfile &&
