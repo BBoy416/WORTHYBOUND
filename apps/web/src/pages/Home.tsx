@@ -1,5 +1,6 @@
 import { isWbId } from "@worthybound/shared";
 import { useState, type FormEvent } from "react";
+import heroMark from "../assets/logo-hero.webp";
 import { ErrorText } from "../components/ui.js";
 import { useRouter } from "../router.js";
 import { useSession } from "../session.js";
@@ -20,36 +21,41 @@ export function HomePage() {
   return (
     <div className="home">
       <section className="hero">
-        <p className="eyebrow">Digital identity for physical assets · Solana</p>
-        <h1>
-          Real assets. <span className="gold">Proven identity.</span>
-        </h1>
-        <p className="lead">
-          Give a watch, artwork or collectible a passport: evidence in a sealed vault, verification
-          by approved professionals, and a non-transferable token on Solana. Anyone can tokenize an
-          asset. Trust must be earned.
-        </p>
-        <form className="lookup" onSubmit={lookUp}>
-          <input
-            aria-label="WB ID"
-            placeholder="Check a passport: WB-7F93A281"
-            value={wbId}
-            onChange={(e) => setWbId(e.target.value)}
-          />
-          <button type="submit">Check</button>
-        </form>
-        <ErrorText error={error} />
-        {me && (
-          <p>
-            <a
-              className="button ghost"
-              href="/assets"
-              onClick={(e) => (e.preventDefault(), navigate("/assets"))}
-            >
-              Go to my assets
-            </a>
+        <div className="hero-text">
+          <p className="eyebrow">Digital identity for physical assets · Solana</p>
+          <h1>
+            Real assets. <span className="gold">Proven identity.</span>
+          </h1>
+          <p className="lead">
+            Give a watch, artwork or collectible a passport: evidence in a sealed vault,
+            verification by approved professionals, and a non-transferable token on Solana. Anyone
+            can tokenize an asset. Trust must be earned.
           </p>
-        )}
+          <form className="lookup" onSubmit={lookUp}>
+            <input
+              aria-label="WB ID"
+              placeholder="Check a passport: WB-7F93A281"
+              value={wbId}
+              onChange={(e) => setWbId(e.target.value)}
+            />
+            <button type="submit">Check</button>
+          </form>
+          <ErrorText error={error} />
+          {me && (
+            <p>
+              <a
+                className="button ghost"
+                href="/assets"
+                onClick={(e) => (e.preventDefault(), navigate("/assets"))}
+              >
+                Go to my assets
+              </a>
+            </p>
+          )}
+        </div>
+        <div className="hero-mark" aria-hidden="true">
+          <img src={heroMark} alt="" width={658} height={400} />
+        </div>
       </section>
       <section className="steps">
         {[
