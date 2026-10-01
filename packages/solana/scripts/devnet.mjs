@@ -1,10 +1,12 @@
 // Devnet operator commands (not run in CI). Build first: `pnpm --filter @worthybound/solana build`.
 //
 //   node scripts/devnet.mjs init  <admin keypair path> <oracle keypair path>
+//   node scripts/devnet.mjs set-oracle <admin keypair path> <new oracle address>
 //   node scripts/devnet.mjs smoke <oracle keypair path>
 //   node scripts/devnet.mjs escrow <oracle keypair path> [release|refund]
 //
 // `init` creates the program config once; the admin must be the program upgrade authority.
+// `set-oracle` points the config at another oracle key; only the admin can do it.
 // `smoke` registers a throwaway asset through the oracle client (twice, to check retries),
 // mirrors a Trust Score and a status (and a stale repeat), then sells it between two throwaway
 // wallets as the API does (ADR 0002, 0014): a durable nonce transaction that pays the price in SOL
@@ -38,6 +40,7 @@ import {
   fetchMaybeConfig,
   findConfigPda,
   getInitializeInstructionAsync,
+  getSetOracleInstructionAsync,
   loadKeypairSigner,
   MPL_CORE_PROGRAM_ADDRESS,
   NONCE_ACCOUNT_SIZE,
@@ -72,6 +75,26 @@ async function init(adminPath, oraclePath) {
     await getInitializeInstructionAsync({ admin, programData, oracle: oracle.address }),
   ]);
   console.log(`initialized config ${config}: admin ${admin.address}, oracle ${oracle.address}`);
+  console.log(explorerUrl("tx", signature));
+}
+
+/** Points the config at another oracle key, e.g. after the previous one was lost. */
+async function setOracle(adminPath, oracle) {
+  const admin = await loadKeypairSigner(adminPath);
+  const [config] = await findConfigPda();
+  const existing = await fetchMaybeConfig(connection.rpc, config);
+  if (!existing.exists) throw new Error(`config ${config} does not exist; run init first`);
+  if (existing.data.admin !== admin.address) {
+    throw new Error(`config ${config} has admin ${existing.data.admin}, not ${admin.address}`);
+  }
+  if (existing.data.oracle === oracle) {
+    console.log(`config ${config} already has oracle ${oracle}`);
+    return;
+  }
+  const signature = await sendInstructions(connection, admin, [
+    await getSetOracleInstructionAsync({ admin, oracle }),
+  ]);
+  console.log(`config ${config}: oracle ${existing.data.oracle} -> ${oracle}`);
   console.log(explorerUrl("tx", signature));
 }
 
@@ -402,11 +425,12 @@ async function escrow(oraclePath, only) {
 }
 
 if (command === "init" && args.length === 2) await init(args[0], args[1]);
+else if (command === "set-oracle" && args.length === 2) await setOracle(args[0], args[1]);
 else if (command === "smoke" && args.length === 1) await smoke(args[0]);
 else if (command === "escrow" && [1, 2].includes(args.length)) await escrow(args[0], args[1]);
 else {
   console.error(
-    "usage: devnet.mjs init <admin keypair> <oracle keypair> | smoke | escrow <oracle keypair>",
+    "usage: devnet.mjs init <admin keypair> <oracle keypair> | set-oracle <admin keypair> <oracle address> | smoke | escrow <oracle keypair>",
   );
   process.exit(2);
 }

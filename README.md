@@ -107,11 +107,12 @@ pnpm --filter @worthybound/solana test         # LiteSVM tests (skipped if the p
 anchor deploy --provider.cluster devnet        # deploy or upgrade (wallet in Anchor.toml)
 pnpm --filter @worthybound/solana build
 node packages/solana/scripts/devnet.mjs init <admin keypair> <oracle keypair>   # once
+node packages/solana/scripts/devnet.mjs set-oracle <admin keypair> <oracle address>
 node packages/solana/scripts/devnet.mjs smoke <oracle keypair>
 ```
 
 The program admin must be the upgrade authority. The oracle key only mirrors backend state and
-pays for it; keep it funded with devnet SOL.
+pays for it; keep it funded with devnet SOL. `set-oracle` replaces it, e.g. when it is lost.
 
 ## Deployment (demo)
 
