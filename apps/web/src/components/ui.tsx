@@ -81,6 +81,7 @@ const TONES: Record<string, string> = {
   PUBLIC: "ok",
   COMPLETED: "ok",
   PASSED: "ok",
+  MATCH: "ok",
   PENDING: "wait",
   INCONCLUSIVE: "wait",
   OPEN: "wait",
@@ -93,6 +94,7 @@ const TONES: Record<string, string> = {
   REVOKED: "bad",
   REJECTED: "bad",
   FAILED: "bad",
+  NO_MATCH: "bad",
   CONTRADICTED: "bad",
 };
 

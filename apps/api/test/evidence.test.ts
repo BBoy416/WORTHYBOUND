@@ -4,8 +4,9 @@ import type { Storage } from "@worthybound/storage";
 import type { FastifyInstance } from "fastify";
 import sharp from "sharp";
 import { CheckEngineError } from "@worthybound/automated-checks";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { grantAdmin } from "../src/cli/admin-grant.js";
+import { readAll } from "../src/evidence/inspect.js";
 import {
   type Clock,
   createTestDatabase,
@@ -57,6 +58,32 @@ const mediaFile = (brand: "mp42" | "qt  ") =>
     Buffer.from([0, 0, 0, 0]),
     Buffer.from(`${brand}isom`),
     randomBytes(64),
+  ]);
+
+const box = (type: string, ...contents: Buffer[]) => {
+  const body = Buffer.concat(contents);
+  const header = Buffer.alloc(8);
+  header.writeUInt32BE(8 + body.length);
+  header.write(type, 4, "latin1");
+  return Buffer.concat([header, body]);
+};
+
+/** A small MP4 whose user data holds a GPS location, as phones record it. */
+const videoWithLocation = () =>
+  Buffer.concat([
+    box("ftyp", Buffer.from("mp42\0\0\0\0mp42isom")),
+    box(
+      "moov",
+      box("mvhd", Buffer.alloc(100)),
+      box(
+        "trak",
+        box("tkhd", Buffer.alloc(84)),
+        box("udta", box("©xyz", Buffer.from("+46.2044+006.1432/"))),
+      ),
+      box("udta", box("©xyz", Buffer.from("+46.2044+006.1432/"))),
+      box("meta", Buffer.from("com.apple.quicktime.location.ISO6709")),
+    ),
+    box("mdat", randomBytes(256)),
   ]);
 
 interface Owner {
@@ -761,8 +788,6 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
           .json<{ items: { id: string; automatedCheck: Check }[] }>()
           .items.map((e) => [e.id, e.automatedCheck]),
       );
-    const consent = (who: Owner, wbId: string, enabled: boolean) =>
-      call(who, "PUT", `/assets/${wbId}/automated-checks`, { enabled });
     const trust = async (who: Owner, wbId: string) =>
       (await call(who, "GET", `/assets/${wbId}/trust`)).json<{
         score: number;
@@ -772,11 +797,15 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       }>();
     const run = () =>
       (app.automatedChecks as NonNullable<FastifyInstance["automatedChecks"]>).runOnce();
+    // Uploads in other tests queue checks too; each test counts only its own.
+    beforeEach(async () => {
+      while ((await run()) > 0);
+    });
     const passing = engine.evidence;
     const passportChecks = async (wbId: string) =>
       (await call(null, "GET", `/passport/${wbId}`)).json().passport.automatedChecks;
 
-    it("checks owner uploads only after the owner consents, without their metadata", async () => {
+    it("checks every owner upload, without its metadata", async () => {
       const alice = await owner();
       const wbId = await asset(alice, true);
       const photo = await added(alice, wbId, { body: await phonePhoto("#102030") });
@@ -790,27 +819,17 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         type: "OTHER",
         mimeType: "application/pdf",
       });
-      expect(await run()).toBe(0);
+      const pending = { status: "PENDING", problems: [], checkedAt: null };
       expect(await evidenceChecks(alice, wbId)).toEqual({
-        [photo.id]: null,
-        [receipt.id]: null,
+        [photo.id]: pending,
+        [receipt.id]: pending,
         [other.id]: null,
       });
       expect((await call(alice, "GET", `/assets/${wbId}/automated-checks`)).json()).toEqual({
         available: true,
-        enabled: false,
-        enabledAt: null,
       });
       const before = await trust(alice, wbId);
 
-      const enabled = await consent(alice, wbId, true);
-      expect(enabled.statusCode, enabled.body).toBe(200);
-      expect(enabled.json()).toMatchObject({ available: true, enabled: true });
-      expect((await evidenceChecks(alice, wbId))[photo.id]).toEqual({
-        status: "PENDING",
-        problems: [],
-        checkedAt: null,
-      });
       engine.evidenceCalls.length = 0;
       expect(await run()).toBe(2);
 
@@ -851,14 +870,12 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       engine.evidenceCalls.length = 0;
       expect(await run()).toBe(1);
       expect(engine.evidenceCalls).toHaveLength(1);
-      expect(await consent(alice, wbId, true)).toMatchObject({ statusCode: 200 });
       expect(await run()).toBe(0);
     });
 
     it("tells the owner the problem, keeps the details for admins and lowers the score", async () => {
       const alice = await owner();
       const wbId = await asset(alice, true);
-      await consent(alice, wbId, true);
       engine.evidence = async () => ({
         result: "FAILED",
         problems: ["SCREEN_OR_PRINT"],
@@ -928,9 +945,9 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       const alice = await owner();
       const body = await phonePhoto("#405060");
       await added(alice, await asset(alice, true), { body });
+      await run();
       const wbId = await asset(alice, true);
       const copy = await added(alice, wbId, { body });
-      await consent(alice, wbId, true);
       engine.evidenceCalls.length = 0;
       await run();
       expect(engine.evidenceCalls).toHaveLength(0);
@@ -944,6 +961,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       const alice = await owner();
       const original = await texturedPhoto(1);
       await added(alice, await asset(alice, true), { body: original });
+      await run();
       clock.advance(1_000);
       const wbId = await asset(alice, true);
       const copy = await added(alice, wbId, {
@@ -958,7 +976,6 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       expect(fingerprints.find((e) => e.id === plain.id)?.perceptualHash).toBeNull();
       expect(fingerprints.filter((e) => e.perceptualHash !== null)).toHaveLength(2);
 
-      await consent(alice, wbId, true);
       engine.evidenceCalls.length = 0;
       await run();
       expect(engine.evidenceCalls).toHaveLength(2);
@@ -993,7 +1010,6 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         type: "CERTIFICATE",
         mimeType: "application/pdf",
       });
-      await consent(alice, wbId, true);
       engine.evidenceCalls.length = 0;
       await run();
       expect(engine.evidenceCalls.map((c) => c.evidence.type)).toEqual(["CERTIFICATE"]);
@@ -1033,7 +1049,6 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
           type: "RECEIPT",
           mimeType: "application/pdf",
         });
-        await consent(alice, first, true);
         await run();
         clock.advance(1_000);
         const reused = await added(alice, second, {
@@ -1041,7 +1056,6 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
           type: "RECEIPT",
           mimeType: "application/pdf",
         });
-        await consent(alice, second, true);
         await run();
         expect((await evidenceChecks(alice, first))[kept.id]).toMatchObject({
           status: "PASSED",
@@ -1065,7 +1079,6 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
     it("retries outages later and gives up on errors that will not go away", async () => {
       const alice = await owner();
       const wbId = await asset(alice, true);
-      await consent(alice, wbId, true);
       const photo = await added(alice, wbId, { body: await phonePhoto("#506070") });
       engine.evidence = async () => {
         throw new CheckEngineError("service returned 503", true);
@@ -1090,31 +1103,27 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       expect(job).toMatchObject({ status: "FAILED", attempts: 2 });
     });
 
-    it("stops checking when consent is withdrawn and does not check verifier uploads", async () => {
+    it("does not check files of revoked assets and shows only the owner that checks run", async () => {
       const alice = await owner();
       const wbId = await asset(alice, true);
-      await consent(alice, wbId, true);
       const photo = await added(alice, wbId, { body: await phonePhoto("#607080") });
-      const off = await consent(alice, wbId, false);
-      expect(off.json()).toEqual({ available: true, enabled: false, enabledAt: null });
-      expect(await run()).toBe(0);
-      expect((await evidenceChecks(alice, wbId))[photo.id]).toBeNull();
-      expect(
-        (await db.prisma.auditLog.findMany({ where: { targetId: wbId } }))
-          .map((a) => a.action)
-          .filter((a) => a.startsWith("asset.automated_checks"))
-          .sort(),
-      ).toEqual(["asset.automated_checks_disabled", "asset.automated_checks_enabled"]);
+      await db.prisma.asset.update({ where: { wbId }, data: { status: "REVOKED" } });
+      engine.evidenceCalls.length = 0;
+      expect(await run()).toBe(1);
+      expect(engine.evidenceCalls).toHaveLength(0);
+      expect(await db.prisma.automatedCheck.count({ where: { evidenceId: photo.id } })).toBe(0);
 
       const bob = await owner();
-      expect((await consent(bob, wbId, true)).statusCode).toBe(404);
+      expect((await call(bob, "GET", `/assets/${wbId}/automated-checks`)).statusCode).toBe(404);
       expect((await call(null, "GET", `/assets/${wbId}/automated-checks`)).statusCode).toBe(401);
+      expect((await call(alice, "PUT", `/assets/${wbId}/automated-checks`, {})).statusCode).toBe(
+        404,
+      );
     });
 
     it("tells the check what each capture shot should show, and the code", async () => {
       const alice = await owner();
       const wbId = await asset(alice, true);
-      await consent(alice, wbId, true);
       const session = (await call(alice, "POST", `/assets/${wbId}/capture-sessions`)).json();
       const shot = (captureShot: string, seed: number) =>
         texturedPhoto(seed).then((body) =>
@@ -1294,6 +1303,591 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       expect(res.json().error.code).toBe("capture_limit_reached");
       clock.advance(24 * 60 * 60_000);
       expect((await start(alice, wbId)).statusCode).toBe(201);
+    });
+  });
+
+  describe("checks before buying", () => {
+    const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    const base58 = (bytes: Uint8Array) => {
+      let value = BigInt(`0x${Buffer.from(bytes).toString("hex") || "0"}`);
+      let text = "";
+      for (; value > 0n; value /= 58n) text = BASE58[Number(value % 58n)] + text;
+      for (const byte of bytes) {
+        if (byte !== 0) break;
+        text = `1${text}`;
+      }
+      return text;
+    };
+    interface Check {
+      id: string;
+      status: string;
+      asset: { wbId: string; status: string; transferBlocked: boolean };
+      owner: {
+        confirmed: boolean;
+        confirmedAt: string | null;
+        code: string | null;
+        codeExpiresAt: string | null;
+        message: string | null;
+      };
+      item: {
+        shots: { shot: string; receivedAt: string | null }[];
+        comparing: boolean;
+        result: string | null;
+        reason: string | null;
+        recordedPhotos: { path: string }[];
+      };
+    }
+    const startCheck = (who: Owner, wbId: string) =>
+      call(who, "POST", `/assets/${wbId}/purchase-checks`);
+    const getCheck = async (who: Owner, id: string) =>
+      (await call(who, "GET", `/purchase-checks/${id}`)).json<Check>();
+    /** Signs the code as shown to the buyer; `code` is sent as typed by the seller. */
+    const confirm = (who: Owner, wbId: string, code: string, signer: TestWallet = who.wallet) =>
+      call(who, "POST", `/assets/${wbId}/owner-confirmations`, {
+        code: code.toLowerCase(),
+        signature: base58(
+          signer.sign(`WorthyBound: I confirm to a buyer that I own ${wbId}.\nCode: ${code}`),
+        ),
+      });
+    const sendPhoto = (
+      who: Owner | null,
+      id: string,
+      shot: string,
+      body: Buffer,
+      type = "image/jpeg",
+    ) =>
+      app.inject({
+        method: "POST",
+        url: `/purchase-checks/${id}/photos/${shot}`,
+        payload: body,
+        headers: { "content-type": type },
+        cookies: who ? { wb_session: who.token } : {},
+      });
+    let seed = 500;
+    /** Every shot the check asks for; returns the check after the last one. */
+    const takeAll = async (who: Owner, check: Check) => {
+      let res;
+      for (const s of check.item.shots) {
+        res = await sendPhoto(who, check.id, s.shot, await texturedPhoto(seed++));
+        expect(res.statusCode, res.body).toBe(200);
+      }
+      return res?.json<Check>() as Check;
+    };
+    /** A published asset with a completed capture session. */
+    const recordedAsset = async (who: Owner) => {
+      const wbId = await asset(who, true);
+      const session = (await call(who, "POST", `/assets/${wbId}/capture-sessions`)).json<{
+        id: string;
+        shots: { shot: string }[];
+      }>();
+      const ids: string[] = [];
+      for (const { shot: captureShot } of session.shots) {
+        const { res } = await upload(who, wbId, {
+          body: await texturedPhoto(seed++),
+          captureSessionId: session.id,
+          captureShot,
+        });
+        expect(res.statusCode, res.body).toBe(201);
+        ids.push(res.json().id);
+      }
+      return { wbId, ids };
+    };
+    /** Runs every due job, including the checks of uploads made in other tests. */
+    const run = async () => {
+      const checks = app.automatedChecks as NonNullable<FastifyInstance["automatedChecks"]>;
+      while ((await checks.runOnce()) > 0);
+    };
+
+    it("confirms the current owner to the buyer without naming them", async () => {
+      const alice = await owner();
+      const bob = await owner();
+      const carol = await owner();
+      const wbId = await asset(alice, true);
+
+      const res = await startCheck(bob, wbId);
+      expect(res.statusCode, res.body).toBe(201);
+      expect(res.body).not.toContain(alice.wallet.address);
+      const check = res.json<Check>();
+      expect(check).toMatchObject({ status: "OPEN", owner: { confirmed: false } });
+      expect(check.owner.code).toMatch(/^[A-HJKMNP-Z2-9]{6}$/);
+      expect(check.owner.message).toBe(
+        `WorthyBound: I confirm to a buyer that I own ${wbId}.\nCode: ${check.owner.code}`,
+      );
+      expect(new Date(check.owner.codeExpiresAt as string).getTime() - clock.now().getTime()).toBe(
+        5 * 60_000,
+      );
+      expect(check.item.shots.map((s) => s.shot)).toEqual([
+        "DIAL",
+        "CASEBACK",
+        "CLASP",
+        "SERIAL",
+        "SIDE",
+      ]);
+      const again = await startCheck(bob, wbId);
+      expect(again.statusCode).toBe(200);
+      expect(again.json().id).toBe(check.id);
+
+      expect((await startCheck(alice, wbId)).json().error.code).toBe("own_asset");
+      expect((await startCheck(bob, await asset(alice))).statusCode).toBe(404);
+      expect((await startCheck(null as unknown as Owner, wbId)).statusCode).toBe(401);
+      expect((await call(carol, "GET", `/purchase-checks/${check.id}`)).statusCode).toBe(404);
+
+      const code = check.owner.code as string;
+      expect((await confirm(alice, wbId, code, carol.wallet)).json().error.code).toBe(
+        "invalid_signature",
+      );
+      expect((await confirm(alice, wbId, "ABCDEF")).json().error.code).toBe("invalid_code");
+      expect((await confirm(carol, wbId, code)).statusCode).toBe(404);
+      const confirmed = await confirm(alice, wbId, code);
+      expect(confirmed.statusCode, confirmed.body).toBe(200);
+      expect(confirmed.json()).toEqual({ confirmed: true, confirmedAt: clock.now().toISOString() });
+      expect((await getCheck(bob, check.id)).owner).toEqual({
+        confirmed: true,
+        confirmedAt: clock.now().toISOString(),
+        code: null,
+        codeExpiresAt: null,
+        message: null,
+        codeCheck: null,
+      });
+      expect((await confirm(alice, wbId, code)).json().error.code).toBe("invalid_code");
+      await expect(
+        db.prisma.purchaseCheck.update({
+          where: { id: check.id },
+          data: { ownerSignature: "1".repeat(88) },
+        }),
+      ).rejects.toThrow(/owner confirmation is final/);
+      expect(
+        await db.prisma.auditLog.count({
+          where: {
+            action: { in: ["purchase_check.started", "purchase_check.owner_confirmed"] },
+            targetId: wbId,
+          },
+        }),
+      ).toBe(2);
+
+      // A code is valid for 5 minutes; the buyer can ask for a new one.
+      const dave = await owner();
+      const late = (await startCheck(dave, wbId)).json<Check>();
+      clock.advance(5 * 60_000 + 1);
+      expect((await getCheck(dave, late.id)).owner.code).toBeNull();
+      expect((await confirm(alice, wbId, late.owner.code as string)).json().error.code).toBe(
+        "invalid_code",
+      );
+      const renewed = await call(dave, "POST", `/purchase-checks/${late.id}/owner-code`);
+      expect(renewed.statusCode, renewed.body).toBe(200);
+      const fresh = renewed.json<Check>().owner.code as string;
+      expect(fresh).toMatch(/^[A-HJKMNP-Z2-9]{6}$/);
+      expect((await confirm(alice, wbId, fresh)).statusCode).toBe(200);
+      expect((await getCheck(dave, late.id)).owner.confirmed).toBe(true);
+    });
+
+    it("compares the buyer's photos with the recorded ones", async () => {
+      const alice = await owner();
+      const bob = await owner();
+      const { wbId, ids } = await recordedAsset(alice);
+      const shown = await call(alice, "POST", `/assets/${wbId}/evidence/${ids[0]}/visibility`, {
+        visibility: "PUBLIC",
+      });
+      expect(shown.statusCode, shown.body).toBe(200);
+      await run();
+
+      const check = (await startCheck(bob, wbId)).json<Check>();
+      const first = await sendPhoto(bob, check.id, "DIAL", await phonePhoto("#224466"));
+      expect(first.statusCode, first.body).toBe(200);
+      expect(first.json<Check>().item.shots[0]?.receivedAt).toBe(clock.now().toISOString());
+      const stored = await call(bob, "GET", `/purchase-checks/${check.id}/photos/DIAL`);
+      expect(stored.statusCode).toBe(200);
+      expect(stored.headers["content-type"]).toBe("image/jpeg");
+      expect(stored.rawPayload.includes("SECRETCAM")).toBe(false);
+      expect((await sharp(stored.rawPayload).metadata()).exif).toBeUndefined();
+      expect(
+        (await call(alice, "GET", `/purchase-checks/${check.id}/photos/DIAL`)).statusCode,
+      ).toBe(404);
+
+      const code = async (res: Promise<{ json: () => { error: { code: string } } }>) =>
+        (await res).json().error.code;
+      expect(await code(sendPhoto(bob, check.id, "DIAL", await texturedPhoto(seed++)))).toBe(
+        "shot_taken",
+      );
+      expect(await code(sendPhoto(bob, check.id, "CODE", await texturedPhoto(seed++)))).toBe(
+        "shot_not_required",
+      );
+      expect(await code(sendPhoto(bob, check.id, "CLASP", pdf()))).toBe("not_a_photo");
+      expect(
+        (await sendPhoto(alice, check.id, "CLASP", await texturedPhoto(seed++))).statusCode,
+      ).toBe(404);
+      expect(
+        (await sendPhoto(null, check.id, "CLASP", await texturedPhoto(seed++))).statusCode,
+      ).toBe(401);
+
+      engine.matchCalls.length = 0;
+      let last;
+      for (const s of ["CASEBACK", "CLASP", "SERIAL", "SIDE"]) {
+        last = await sendPhoto(bob, check.id, s, await texturedPhoto(seed++));
+        expect(last.statusCode, last.body).toBe(200);
+      }
+      expect(last?.json<Check>().item).toMatchObject({ comparing: true, result: null });
+      await run();
+
+      expect(engine.matchCalls).toHaveLength(1);
+      const sent = engine.matchCalls[0];
+      expect(sent?.asset).toEqual({
+        category: "LUXURY_WATCH",
+        brand: "Rolex",
+        model: "Submariner",
+      });
+      expect(sent?.reference.map((r) => r.label)).toEqual([
+        "owner photo: DIAL",
+        "owner photo: CASEBACK",
+        "owner photo: CLASP",
+        "owner photo: SERIAL",
+        "owner photo: SIDE",
+      ]);
+      expect(sent?.candidate.map((c) => c.label)).toEqual([
+        "buyer photo: DIAL",
+        "buyer photo: CASEBACK",
+        "buyer photo: CLASP",
+        "buyer photo: SERIAL",
+        "buyer photo: SIDE",
+      ]);
+      const done = await getCheck(bob, check.id);
+      expect(done.status).toBe("COMPLETED");
+      expect(done.item).toMatchObject({ comparing: false, result: "MATCH", reason: null });
+      expect(done.item.recordedPhotos).toEqual([{ path: `/passport/${wbId}/evidence/${ids[0]}` }]);
+      expect(JSON.stringify(done)).not.toContain("scratches");
+      const row = await db.prisma.purchaseCheck.findUniqueOrThrow({ where: { id: check.id } });
+      expect(row).toMatchObject({
+        itemSummary: "The same scratches on the bezel.",
+        engine: "fake",
+        checkVersion: "item-match-v2",
+      });
+      expect(row.referenceEvidenceIds).toHaveLength(5);
+      await expect(
+        db.prisma.purchaseCheck.update({
+          where: { id: check.id },
+          data: { itemResult: "NO_MATCH" },
+        }),
+      ).rejects.toThrow(/status COMPLETED is final/);
+      expect(await code(sendPhoto(bob, check.id, "SIDE", await texturedPhoto(seed++)))).toBe(
+        "purchase_check_closed",
+      );
+    });
+
+    it("is inconclusive once revoked, without recorded photos, or when the comparison fails", async () => {
+      const bob = await owner();
+      const alice = await owner();
+      const matchCalls = engine.matchCalls.length;
+
+      const revoked = await recordedAsset(alice);
+      const first = (await startCheck(bob, revoked.wbId)).json<Check>();
+      await takeAll(bob, first);
+      await db.prisma.asset.update({ where: { wbId: revoked.wbId }, data: { status: "REVOKED" } });
+      await run();
+      expect((await getCheck(bob, first.id)).item).toMatchObject({
+        result: "INCONCLUSIVE",
+        reason: "The item's passport was revoked",
+      });
+
+      const bare = await asset(alice, true);
+      const second = (await startCheck(bob, bare)).json<Check>();
+      await takeAll(bob, second);
+      await run();
+      expect((await getCheck(bob, second.id)).item).toMatchObject({
+        result: "INCONCLUSIVE",
+        reason: "The item has no recorded photos to compare with",
+      });
+      expect(engine.matchCalls).toHaveLength(matchCalls);
+
+      const recorded = await recordedAsset(alice);
+      await run();
+      const third = (await startCheck(bob, recorded.wbId)).json<Check>();
+      await takeAll(bob, third);
+      const matching = engine.match;
+      engine.match = async () => {
+        throw new CheckEngineError("the model refused to answer", false);
+      };
+      try {
+        await run();
+      } finally {
+        engine.match = matching;
+      }
+      expect((await getCheck(bob, third.id)).item).toMatchObject({
+        result: "INCONCLUSIVE",
+        reason: "The photos could not be compared",
+      });
+    });
+
+    it("expires unfinished checks and limits checks per item per day", async () => {
+      const alice = await owner();
+      const bob = await owner();
+      const wbId = await asset(alice, true);
+      const check = (await startCheck(bob, wbId)).json<Check>();
+      clock.advance(60 * 60_000);
+      expect((await getCheck(bob, check.id)).status).toBe("EXPIRED");
+      const late = await sendPhoto(bob, check.id, "DIAL", await texturedPhoto(seed++));
+      expect(late.json().error.code).toBe("purchase_check_closed");
+      expect((await call(bob, "POST", `/purchase-checks/${check.id}/owner-code`)).statusCode).toBe(
+        409,
+      );
+
+      for (let i = 1; i < 10; i++) {
+        expect((await startCheck(bob, wbId)).statusCode).toBe(201);
+        clock.advance(60 * 60_000);
+      }
+      const limited = await startCheck(bob, wbId);
+      expect(limited.statusCode).toBe(429);
+      expect(limited.json().error.code).toBe("purchase_check_limit_reached");
+      clock.advance(24 * 60 * 60_000);
+      expect((await startCheck(bob, wbId)).statusCode).toBe(201);
+    });
+
+    describe("remotely", () => {
+      interface Request {
+        id: string;
+        code: string;
+        expiresAt: string;
+        filmed: boolean;
+        session: { id: string; code: string; shots: { shot: string }[]; expiresAt: string } | null;
+      }
+      const startRemote = (who: Owner, wbId: string) =>
+        call(who, "POST", `/assets/${wbId}/remote-checks`);
+      const requests = async (who: Owner, wbId: string) =>
+        (await call(who, "GET", `/assets/${wbId}/remote-checks`)).json<{ items: Request[] }>()
+          .items;
+      const film = (who: Owner, wbId: string, checkId: string) =>
+        call(who, "POST", `/assets/${wbId}/remote-checks/${checkId}/capture-session`);
+      /** Uploads a shot of the session: the video shot as a video, the others as photos. */
+      const shoot = async (who: Owner, wbId: string, sessionId: string, captureShot: string) =>
+        (
+          await upload(
+            who,
+            wbId,
+            captureShot === "VIDEO"
+              ? {
+                  body: videoWithLocation(),
+                  type: "VIDEO",
+                  mimeType: "video/mp4",
+                  captureSessionId: sessionId,
+                  captureShot,
+                }
+              : { body: await texturedPhoto(seed++), captureSessionId: sessionId, captureShot },
+          )
+        ).res;
+
+      it("lets the owner film the item with the buyer's code and compares the photos", async () => {
+        const alice = await owner();
+        const bob = await owner();
+        const { wbId } = await recordedAsset(alice);
+        await run();
+
+        const res = await startRemote(bob, wbId);
+        expect(res.statusCode, res.body).toBe(201);
+        expect(res.body).not.toContain(alice.wallet.address);
+        const check = res.json<Check & { kind: string; expiresAt: string }>();
+        expect(check).toMatchObject({
+          kind: "REMOTE",
+          status: "OPEN",
+          owner: { confirmed: false, message: null, codeCheck: null },
+          item: { videoAvailable: false, result: null },
+        });
+        const code = check.owner.code as string;
+        expect(code).toMatch(/^[A-HJKMNP-Z2-9]{6}$/);
+        expect(new Date(check.expiresAt).getTime() - clock.now().getTime()).toBe(24 * 3_600_000);
+        expect(check.owner.codeExpiresAt).toBe(check.expiresAt);
+        const shots = ["DIAL", "CASEBACK", "CLASP", "SERIAL", "SIDE", "CODE", "VIDEO"];
+        expect(check.item.shots.map((s) => s.shot)).toEqual(shots);
+        expect((await startRemote(bob, wbId)).json().id).toBe(check.id);
+        expect((await startRemote(alice, wbId)).json().error.code).toBe("own_asset");
+
+        // The buyer does not take photos, and the code is not signed.
+        const photo = await sendPhoto(bob, check.id, "DIAL", await texturedPhoto(seed++));
+        expect(photo.json().error.code).toBe("purchase_check_kind");
+        const renew = await call(bob, "POST", `/purchase-checks/${check.id}/owner-code`);
+        expect(renew.json().error.code).toBe("purchase_check_kind");
+        expect((await confirm(alice, wbId, code)).json().error.code).toBe("invalid_code");
+        expect((await call(bob, "POST", `/purchase-checks/${check.id}/video`)).statusCode).toBe(
+          404,
+        );
+
+        // The owner sees the request without the buyer, and films the item with the code.
+        const [request] = await requests(alice, wbId);
+        expect(request).toMatchObject({ id: check.id, code, filmed: false, session: null });
+        expect(JSON.stringify(request)).not.toContain(bob.wallet.address);
+        expect((await call(bob, "GET", `/assets/${wbId}/remote-checks`)).statusCode).toBe(404);
+        expect((await film(bob, wbId, check.id)).statusCode).toBe(404);
+        const started = await film(alice, wbId, check.id);
+        expect(started.statusCode, started.body).toBe(201);
+        const session = started.json<NonNullable<Request["session"]>>();
+        expect(session.code).toBe(code);
+        expect(session.shots.map((s) => s.shot)).toEqual(shots);
+        expect(new Date(session.expiresAt).getTime() - clock.now().getTime()).toBe(15 * 60_000);
+        expect((await film(alice, wbId, check.id)).json().id).toBe(session.id);
+        // The owner's own sessions are separate.
+        const own = await call(alice, "POST", `/assets/${wbId}/capture-sessions`);
+        expect(own.statusCode).toBe(201);
+        expect(own.json().id).not.toBe(session.id);
+
+        const wrongType = await requestUpload(alice, wbId, {
+          body: await texturedPhoto(seed++),
+          captureSessionId: session.id,
+          captureShot: "VIDEO",
+        });
+        expect(wrongType.statusCode).toBe(400);
+        for (const shot of shots.slice(0, -1)) {
+          expect((await shoot(alice, wbId, session.id, shot)).statusCode).toBe(201);
+        }
+        const progress = await getCheck(bob, check.id);
+        expect(progress.item.shots.filter((s) => s.receivedAt)).toHaveLength(6);
+        expect(progress.owner.confirmed).toBe(false);
+
+        const garbled = await upload(alice, wbId, {
+          body: mediaFile("mp42"),
+          type: "VIDEO",
+          mimeType: "video/mp4",
+          captureSessionId: session.id,
+          captureShot: "VIDEO",
+        });
+        expect(garbled.res.json().error.code).toBe("video_unreadable");
+
+        clock.advance(60_000);
+        engine.matchCalls.length = 0;
+        const video = await shoot(alice, wbId, session.id, "VIDEO");
+        expect(video.statusCode, video.body).toBe(201);
+        const filmed = await getCheck(bob, check.id);
+        expect(filmed).toMatchObject({
+          status: "OPEN",
+          owner: {
+            confirmed: true,
+            confirmedAt: clock.now().toISOString(),
+            code,
+            codeCheck: "PENDING",
+          },
+          item: { comparing: true, videoAvailable: true, result: null },
+        });
+        expect((await requests(alice, wbId))[0]).toMatchObject({ filmed: true });
+
+        const link = await call(bob, "POST", `/purchase-checks/${check.id}/video`);
+        expect(link.statusCode, link.body).toBe(200);
+        const downloaded = await fetch(link.json().url);
+        expect(downloaded.status).toBe(200);
+        expect(downloaded.headers.get("content-disposition")).toContain(
+          `remote-check-${check.id}.mp4`,
+        );
+        // The buyer's copy plays the same media without the location; the original is sealed.
+        const copy = Buffer.from(await downloaded.arrayBuffer());
+        const stored = await db.prisma.evidence.findUniqueOrThrow({
+          where: { id: video.json().id },
+        });
+        const original = await readAll(await storage.read(stored.storageKey));
+        expect(copy.length).toBe(original.length);
+        expect(original.includes("+46.2044")).toBe(true);
+        expect(copy.includes("+46.2044")).toBe(false);
+        expect(copy.includes("com.apple.quicktime")).toBe(false);
+        expect(copy.subarray(-256).equals(original.subarray(-256))).toBe(true);
+        expect((await call(alice, "POST", `/purchase-checks/${check.id}/video`)).statusCode).toBe(
+          404,
+        );
+
+        await run();
+        expect(engine.matchCalls).toHaveLength(1);
+        // Compared with the photos recorded before, not with the session filmed for the check.
+        const sent = engine.matchCalls[0];
+        expect(sent?.reference.map((r) => r.label)).toEqual([
+          "owner photo: DIAL",
+          "owner photo: CASEBACK",
+          "owner photo: CLASP",
+          "owner photo: SERIAL",
+          "owner photo: SIDE",
+        ]);
+        expect(sent?.candidate.map((c) => c.label)).toEqual([
+          "seller photo: DIAL",
+          "seller photo: CASEBACK",
+          "seller photo: CLASP",
+          "seller photo: SERIAL",
+          "seller photo: SIDE",
+        ]);
+        const row = await db.prisma.purchaseCheck.findUniqueOrThrow({ where: { id: check.id } });
+        const filmedSession = await db.prisma.evidence.findMany({
+          where: { captureSessionId: session.id },
+          select: { id: true },
+        });
+        expect(row.referenceEvidenceIds.some((id) => filmedSession.some((e) => e.id === id))).toBe(
+          false,
+        );
+        const compared = await getCheck(bob, check.id);
+        expect(compared.item).toMatchObject({
+          comparing: false,
+          result: "MATCH",
+          videoAvailable: true,
+        });
+        expect(compared.owner).toMatchObject({ codeCheck: "SHOWN" });
+        expect(await requests(alice, wbId)).toEqual([]);
+        expect(
+          await db.prisma.auditLog.count({
+            where: {
+              action: { in: ["purchase_check.filmed", "purchase_check.video_viewed"] },
+              targetId: check.id,
+            },
+          }),
+        ).toBe(2);
+        await expect(
+          db.prisma.purchaseCheck.update({
+            where: { id: check.id },
+            data: { ownerCode: "ABCDEF" },
+          }),
+        ).rejects.toThrow(/remote or receipt check code cannot be changed/);
+      });
+
+      it("does not count the shots toward the evidence limit", async () => {
+        const alice = await owner();
+        const wbId = await asset(alice, true);
+        for (let i = 0; i < 100; i++) {
+          const res = await requestUpload(alice, wbId, {
+            body: pdf(`${i}`),
+            type: "RECEIPT",
+            mimeType: "application/pdf",
+          });
+          expect(res.statusCode).toBe(201);
+        }
+        const check = (await startRemote(await owner(), wbId)).json<Check>();
+        const session = (await film(alice, wbId, check.id)).json<{ id: string }>();
+        const shot = await requestUpload(alice, wbId, {
+          body: await texturedPhoto(seed++),
+          captureSessionId: session.id,
+          captureShot: "DIAL",
+        });
+        expect(shot.statusCode, shot.body).toBe(201);
+        const res = await requestUpload(alice, wbId, {
+          body: pdf(),
+          type: "RECEIPT",
+          mimeType: "application/pdf",
+        });
+        expect(res.json().error.code).toBe("evidence_limit_reached");
+      });
+
+      it("expires when the owner does not film in time, and is limited per item per day", async () => {
+        const alice = await owner();
+        const bob = await owner();
+        const wbId = await asset(alice, true);
+        const check = (await startRemote(bob, wbId)).json<Check>();
+        clock.advance(24 * 3_600_000 - 5 * 60_000);
+        // A session ends with the check.
+        const session = (await film(alice, wbId, check.id)).json<{ expiresAt: string }>();
+        expect(session.expiresAt).toBe(new Date(clock.now().getTime() + 5 * 60_000).toISOString());
+        clock.advance(5 * 60_000);
+        expect((await getCheck(bob, check.id)).status).toBe("EXPIRED");
+        expect((await film(alice, wbId, check.id)).json().error.code).toBe("purchase_check_closed");
+        expect(await requests(alice, wbId)).toEqual([]);
+
+        for (let i = 0; i < 3; i++) {
+          expect((await startRemote(await owner(), wbId)).statusCode).toBe(201);
+        }
+        // An in-person check is separate from the buyer's remote one.
+        expect((await startCheck(bob, wbId)).statusCode).toBe(201);
+        const limited = await startRemote(await owner(), wbId);
+        expect(limited.statusCode).toBe(429);
+        expect(limited.json().error.code).toBe("purchase_check_limit_reached");
+      });
     });
   });
 });

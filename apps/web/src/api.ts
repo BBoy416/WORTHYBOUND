@@ -36,6 +36,23 @@ export async function api<T>(
 export const get = <T>(path: string) => api<T>("GET", path);
 export const post = <T>(path: string, body?: unknown, headers?: Record<string, string>) =>
   api<T>("POST", path, body, headers);
+/** Posts a file as the request body, e.g. a photo taken with the camera. */
+export async function postFile<T>(path: string, file: Blob): Promise<T> {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { accept: "application/json", "content-type": file.type || "image/jpeg" },
+    credentials: "same-origin",
+    body: file,
+  });
+  const text = await res.text();
+  const data: unknown = text ? JSON.parse(text) : null;
+  if (!res.ok) {
+    const error = (data as { error?: { code?: string; message?: string } } | null)?.error;
+    throw new ApiError(res.status, error?.code ?? "error", error?.message ?? res.statusText);
+  }
+  return data as T;
+}
+
 export const put = <T>(path: string, body?: unknown) => api<T>("PUT", path, body);
 export const del = <T>(path: string) => api<T>("DELETE", path);
 

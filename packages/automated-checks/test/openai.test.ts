@@ -4,6 +4,7 @@ import {
   CheckEngineError,
   createOpenAIEngine,
   decide,
+  decideMatch,
   DEFAULT_OPENAI_MODEL,
   type EvidenceCheckInput,
   imageEditorIn,
@@ -112,6 +113,19 @@ describe("decide", () => {
     expect(
       decide({ verdict: "PROBLEMS_FOUND", problems: ["REUSED_DOCUMENT"], confidence: 1 }),
     ).toEqual({ result: "INCONCLUSIVE", problems: [], confidence: 1 });
+  });
+});
+
+describe("decideMatch", () => {
+  it("matches or rules out only with enough confidence", () => {
+    expect(decideMatch({ verdict: "SAME_ITEM", confidence: 0.8 })).toEqual({
+      result: "MATCH",
+      confidence: 0.8,
+    });
+    expect(decideMatch({ verdict: "DIFFERENT_ITEM", confidence: 0.7 }).result).toBe("NO_MATCH");
+    expect(decideMatch({ verdict: "SAME_ITEM", confidence: 0.69 }).result).toBe("INCONCLUSIVE");
+    expect(decideMatch({ verdict: "CANNOT_TELL", confidence: 1 }).result).toBe("INCONCLUSIVE");
+    expect(decideMatch({ verdict: "SAME_ITEM", confidence: 3 }).confidence).toBe(1);
   });
 });
 
@@ -319,6 +333,53 @@ describe("OpenAI engine: evidence checks", () => {
     await expect(engine.checkEvidence(evidenceInput("image/jpeg"))).rejects.toMatchObject({
       retryable: true,
     });
+  });
+});
+
+describe("OpenAI engine: item comparison", () => {
+  const input = {
+    asset: { category: "LUXURY_WATCH" as const, brand: "Rolex", model: "Submariner" },
+    reference: [{ label: "verifier photo", data: new Uint8Array([1]) }],
+    candidate: [
+      { label: "DIAL", data: new Uint8Array([2]) },
+      { label: "CASEBACK", data: new Uint8Array([3]) },
+    ],
+  };
+
+  it("sends the reference photos, then the buyer's, and applies the decision rule", async () => {
+    const { fetch, calls } = fakeFetch(() => ({
+      json: completed({
+        verdict: "DIFFERENT_ITEM",
+        confidence: 0.85,
+        summary: "The bezel scratch is missing.",
+      }),
+    }));
+    const engine = createOpenAIEngine({ apiKey: "sk-test-match", fetch });
+    expect(await engine.compareItem(input)).toEqual({
+      result: "NO_MATCH",
+      confidence: 0.85,
+      summary: "The bezel scratch is missing.",
+      model: "gpt-6.1-sol-2026-08-01",
+    });
+    expect(calls[0]?.body).toMatchObject({
+      store: false,
+      text: { format: { type: "json_schema", strict: true, name: "item_match" } },
+    });
+    const content = (calls[0]?.body.input as { content: Record<string, string>[] }[])[0]?.content;
+    expect(content?.[0]?.text).toContain('"referencePhotos": [\n    "verifier photo"\n  ]');
+    expect(content?.slice(1).map((c) => c.image_url)).toEqual([
+      "data:image/jpeg;base64,AQ==",
+      "data:image/jpeg;base64,Ag==",
+      "data:image/jpeg;base64,Aw==",
+    ]);
+  });
+
+  it("rejects an unknown verdict", async () => {
+    const { fetch } = fakeFetch(() => ({
+      json: completed({ verdict: "PROBABLY", confidence: 1, summary: "" }),
+    }));
+    const engine = createOpenAIEngine({ apiKey: "sk-test-match", fetch });
+    await expect(engine.compareItem(input)).rejects.toMatchObject({ retryable: false });
   });
 });
 

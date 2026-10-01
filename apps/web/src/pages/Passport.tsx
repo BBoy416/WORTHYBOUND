@@ -2,6 +2,7 @@ import type { PublicPassport } from "@worthybound/shared";
 import { ApiError, get } from "../api.js";
 import { Badge, Card, ChainLink, Facts, Loading, TrustDial, useLoad } from "../components/ui.js";
 import { formatDate, formatDateTime, humanize } from "../format.js";
+import { StartPurchaseCheck } from "./PurchaseCheck.js";
 
 const WARNING: Partial<Record<string, string>> = {
   REPORTED_STOLEN:
@@ -175,6 +176,8 @@ export function PassportPage({ wbId }: { wbId: string }) {
           <p className="muted small">Private evidence is kept in the vault and never shown here.</p>
         </Card>
       </div>
+
+      {p.status !== "REVOKED" && <StartPurchaseCheck wbId={p.wbId} />}
 
       <Card title="Provenance">
         <ol className="timeline">

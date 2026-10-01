@@ -79,10 +79,12 @@ and per user per day, so the checks cannot be probed cheaply.
 against the identity document on the spot. WorthyBound still stores only status and reference.
 Reusable or zero-knowledge identity proofs can replace this later without changing the rest.
 
-**Privacy.** Private evidence is sent to a third-party service only with the owner's consent,
-given per asset before the first check, under a data processing agreement that forbids training
-on it and limits retention. Deterministic checks run on WorthyBound's own infrastructure. Check
-results are private; the passport shows only that automated checks passed, and when.
+**Privacy.** Private evidence is sent to a third-party service under a data processing agreement
+that forbids training on it and limits retention. The checks are part of the service, not an
+option: every owner upload is checked, and owners are told so on their asset page (amended
+2026-10-06; owners first gave consent per asset). Deterministic checks run on WorthyBound's own
+infrastructure. Check results are private; the passport shows only that automated checks passed,
+and when.
 
 ## Implementation (2026-09-30)
 
@@ -90,12 +92,12 @@ The first engine is OpenAI, behind the `CheckEngine` interface in `@worthybound/
 It is enabled by `OPENAI_API_KEY` (model: `OPENAI_MODEL`); without it the checks are unavailable.
 
 - **Evidence checks.** Each owner photo (JPEG, PNG, WebP) and PDF document, except type `OTHER`,
-  is checked once per check version, after the current owner consents for the asset. Photos are
-  re-encoded without metadata before they are sent; requests use the Responses API with
-  Structured Outputs and `store: false`. The model reports findings from a fixed list of problems
-  and a confidence; a fixed rule decides the result: `FAILED` only for a problem that suggests a
-  fake, `PASSED` only for a consistent file without problems, both at confidence 0.7 or more,
-  otherwise `INCONCLUSIVE`. Verifier uploads are never checked.
+  is checked once per check version, unless the asset is revoked. Photos are re-encoded without
+  metadata before they are sent; requests use the Responses API with Structured Outputs and
+  `store: false`. The model reports findings from a fixed list of problems and a confidence; a
+  fixed rule decides the result: `FAILED` only for a problem that suggests a fake, `PASSED` only
+  for a consistent file without problems, both at confidence 0.7 or more, otherwise
+  `INCONCLUSIVE`. Verifier uploads are never checked.
 - **Deterministic checks** (added in check version `evidence-check-v2`) run first and fail a file
   without calling the service:
   - exact copies of a file on another asset (`REUSED_FILE`);

@@ -27,6 +27,8 @@ const SYNC_KINDS: readonly ChainTransactionKind[] = [
   "UPDATE_ASSET_STATUS",
   "COMMIT_TRUST_SCORE",
   "TRANSFER_ASSET",
+  "ESCROW_PAYMENT",
+  "ESCROW_REFUND",
 ];
 
 /** Failed jobs are retried with growing delays, then left FAILED for an operator. */
@@ -75,6 +77,14 @@ export interface ChainSyncOptions {
   metadataUrl: (wbId: string) => string;
   /** Records a transfer confirmed on-chain, in the transaction that confirms its job. */
   completeTransfer: (tx: Tx, transferId: string, signature: string, at: Date) => Promise<void>;
+  /** Records escrow payments, refunds and failed releases (ADR 0014), in the job's transaction. */
+  escrow: {
+    paid(tx: Tx, transferId: string, signature: string | null, at: Date): Promise<void>;
+    refunded(tx: Tx, transferId: string, signature: string | null, at: Date): Promise<void>;
+    releaseFailed(tx: Tx, transferId: string, at: Date): Promise<void>;
+  };
+  /** Applies escrow deadlines that passed, before each run. */
+  escrowDeadlines: (at: Date) => Promise<unknown>;
 }
 
 export interface ChainSync {
@@ -95,7 +105,8 @@ type Outcome = { status: "CONFIRMED"; signature: string } | { status: "SUPERSEDE
  * recorded as SUPERSEDED. One worker per database: run a single API instance.
  */
 export function createChainSync(options: ChainSyncOptions): ChainSync {
-  const { prisma, oracle, now, log, metadataUrl, completeTransfer } = options;
+  const { prisma, oracle, now, log, metadataUrl, completeTransfer, escrow, escrowDeadlines } =
+    options;
   let running: Promise<number> | null = null;
   let timer: NodeJS.Timeout | null = null;
 
@@ -175,6 +186,8 @@ export function createChainSync(options: ChainSyncOptions): ChainSync {
     if (t.status !== "ACCEPTED" || !t.transaction || !t.sellerSignature || !t.buyerSignature) {
       return { status: "SUPERSEDED" };
     }
+    // An escrowed transfer is sent only once released.
+    if (t.delivery === "SHIPPED" && t.escrowStatus !== "RELEASING") return { status: "SUPERSEDED" };
     const signature = await oracle.sendTransfer({
       transaction: t.transaction,
       signatures: {
@@ -183,6 +196,34 @@ export function createChainSync(options: ChainSyncOptions): ChainSync {
       },
     });
     return { status: "CONFIRMED", signature };
+  }
+
+  /**
+   * Sends the buyer's signed payment into escrow. Sent even if the transfer ended meanwhile: the
+   * buyer signed it, and a payment that lands late is refunded.
+   */
+  async function escrowPayment(job: ChainTransaction): Promise<Outcome> {
+    const t = await prisma.transferRequest.findUniqueOrThrow({ where: { id: job.entityId } });
+    if (!t.paymentTransaction || !t.paymentSignature || t.escrowStatus !== "AWAITING_PAYMENT") {
+      return { status: "SUPERSEDED" };
+    }
+    const signature = await oracle.sendTransfer({
+      transaction: t.paymentTransaction,
+      signatures: { [t.toWalletAddress]: t.paymentSignature },
+    });
+    return { status: "CONFIRMED", signature };
+  }
+
+  /** Returns the escrowed price to the buyer; SUPERSEDED if the escrow no longer holds it. */
+  async function escrowRefund(job: ChainTransaction): Promise<Outcome> {
+    const t = await prisma.transferRequest.findUniqueOrThrow({ where: { id: job.entityId } });
+    if (t.escrowStatus !== "REFUNDING" || !t.nonceAccount) return { status: "SUPERSEDED" };
+    const signature = await oracle.refundEscrow({
+      escrowAccount: t.nonceAccount,
+      buyer: t.toWalletAddress,
+      priceLamports: t.priceLamports,
+    });
+    return signature ? { status: "CONFIRMED", signature } : { status: "SUPERSEDED" };
   }
 
   async function complete(job: ChainTransaction, outcome: Outcome): Promise<void> {
@@ -201,6 +242,15 @@ export function createChainSync(options: ChainSyncOptions): ChainSync {
       });
       if (job.kind === "TRANSFER_ASSET" && outcome.status === "CONFIRMED") {
         await completeTransfer(tx, job.entityId, outcome.signature, at);
+        return;
+      }
+      if (job.kind === "ESCROW_PAYMENT" && outcome.status === "CONFIRMED") {
+        await escrow.paid(tx, job.entityId, outcome.signature, at);
+        return;
+      }
+      if (job.kind === "ESCROW_REFUND") {
+        const signature = outcome.status === "CONFIRMED" ? outcome.signature : null;
+        await escrow.refunded(tx, job.entityId, signature, at);
         return;
       }
       if (job.kind !== "REGISTER_ASSET" || outcome.status !== "CONFIRMED") return;
@@ -228,13 +278,41 @@ export function createChainSync(options: ChainSyncOptions): ChainSync {
     });
   }
 
+  /**
+   * Gives up on a payment into escrow for good: advances its nonce so it can no longer land, then
+   * checks whether it landed anyway. Null if that could not be done now; the job is then retried.
+   */
+  async function resetPayment(job: ChainTransaction) {
+    const t = await prisma.transferRequest.findUniqueOrThrow({ where: { id: job.entityId } });
+    if (t.escrowStatus !== "AWAITING_PAYMENT" || !t.nonceAccount || !t.paymentNonceAccount) {
+      return { held: false as const, transaction: null };
+    }
+    try {
+      return await oracle.resetEscrowPayment({
+        buyer: t.toWalletAddress,
+        escrowAccount: t.nonceAccount,
+        paymentNonceAccount: t.paymentNonceAccount,
+        priceLamports: t.priceLamports,
+      });
+    } catch (error) {
+      log.warn({ jobId: job.id, err: String(error) }, "escrow payment reset failed");
+      return null;
+    }
+  }
+
   async function fail(job: ChainTransaction, error: unknown, final: boolean): Promise<void> {
-    const attempts = final ? MAX_CHAIN_ATTEMPTS : job.attempts + 1;
+    let attempts = final ? MAX_CHAIN_ATTEMPTS : job.attempts + 1;
     const message =
       error instanceof NotTokenizableError || error instanceof TransferFailedError
         ? error.message
         : String((error as Error)?.message ?? error).slice(0, 500);
     log.warn({ jobId: job.id, kind: job.kind, attempts, err: message }, "chain job failed");
+    // A signed payment stays valid until its nonce moves on, so it is given up only once reset.
+    const reset =
+      job.kind === "ESCROW_PAYMENT" && attempts >= MAX_CHAIN_ATTEMPTS
+        ? await resetPayment(job)
+        : undefined;
+    if (reset === null) attempts = MAX_CHAIN_ATTEMPTS - 1;
     await prisma.$transaction(async (tx) => {
       await tx.chainTransaction.update({
         where: { id: job.id },
@@ -245,6 +323,21 @@ export function createChainSync(options: ChainSyncOptions): ChainSync {
           where: { id: job.entityId },
           data: { tokenizationStatus: "FAILED", updatedAt: now() },
         });
+      }
+      if (reset?.held) {
+        await escrow.paid(tx, job.entityId, null, now());
+      } else if (reset) {
+        await tx.transferRequest.updateMany({
+          where: { id: job.entityId, escrowStatus: "AWAITING_PAYMENT" },
+          data: {
+            paymentSignature: null,
+            ...(reset.transaction ? { paymentTransaction: reset.transaction } : {}),
+            updatedAt: now(),
+          },
+        });
+      }
+      if (job.kind === "TRANSFER_ASSET" && attempts >= MAX_CHAIN_ATTEMPTS) {
+        await escrow.releaseFailed(tx, job.entityId, now());
       }
     });
   }
@@ -258,10 +351,19 @@ export function createChainSync(options: ChainSyncOptions): ChainSync {
             ? await updateStatus(job)
             : job.kind === "TRANSFER_ASSET"
               ? await transfer(job)
-              : await commitTrust(job);
+              : job.kind === "ESCROW_PAYMENT"
+                ? await escrowPayment(job)
+                : job.kind === "ESCROW_REFUND"
+                  ? await escrowRefund(job)
+                  : await commitTrust(job);
       await complete(job, outcome);
     } catch (error) {
-      if (error instanceof StaleChainUpdateError && job.kind !== "TRANSFER_ASSET") {
+      if (
+        error instanceof StaleChainUpdateError &&
+        job.kind !== "TRANSFER_ASSET" &&
+        job.kind !== "ESCROW_PAYMENT" &&
+        job.kind !== "ESCROW_REFUND"
+      ) {
         await complete(job, { status: "SUPERSEDED" });
         return;
       }
@@ -321,12 +423,15 @@ export function createChainSync(options: ChainSyncOptions): ChainSync {
         })
       ).map((j) => j.entityId),
     );
+    const paying = new Set(jobs.filter((j) => j.kind === "ESCROW_PAYMENT").map((j) => j.entityId));
     const ready = new Set(transfers.filter((t) => !waiting.has(t.assetId)).map((t) => t.id));
     const at = now().getTime();
     return jobs.filter(
       (j) =>
         (j.entityType === "TRANSFER_REQUEST"
-          ? ready.has(j.entityId)
+          ? ready.has(j.entityId) &&
+            // A refund waits until the payment into escrow is sent or given up.
+            !(j.kind === "ESCROW_REFUND" && paying.has(j.entityId))
           : // Status and score updates wait until the asset's registration is confirmed.
             j.kind === "REGISTER_ASSET" || tokenized.has(j.entityId)) &&
         (j.status === "PENDING" || j.updatedAt.getTime() + retryDelayMs(j.attempts) <= at),
@@ -336,6 +441,9 @@ export function createChainSync(options: ChainSyncOptions): ChainSync {
   async function runOnce(): Promise<number> {
     if (running) return running;
     running = (async () => {
+      await escrowDeadlines(now()).catch((error: unknown) =>
+        log.error({ err: error }, "escrow deadlines failed"),
+      );
       const attempted = new Set<string>();
       // Registrations enable an asset's other jobs, so look again after each pass.
       for (let pass = 0; pass < 3; pass++) {

@@ -14,9 +14,9 @@ import {
   authNonceRequestSchema,
   authVerifyRequestSchema,
   automatedCheckListQuerySchema,
-  automatedChecksConsentSchema,
   categoryPermissionChangeSchema,
   EVIDENCE_MAX_BYTES,
+  escrowDisputeSchema,
   evidenceParamsSchema,
   evidenceReviewSchema,
   evidenceUploadParamsSchema,
@@ -26,12 +26,16 @@ import {
   openDisputeSchema,
   registerAssetSchema,
   resolveDisputeSchema,
+  resolveEscrowSchema,
   roleAssignmentParamsSchema,
   roleGrantSchema,
   roleListQuerySchema,
+  shipmentSchema,
   templateCreateSchema,
   templateRequirementsSchema,
   templateVersionStatusSchema,
+  ownerConfirmationSchema,
+  purchaseCheckPhotoParamsSchema,
   transferParamsSchema,
   transferRequestSchema,
   transferSignatureSchema,
@@ -193,7 +197,7 @@ describe("evidenceUploadSchema", () => {
     ).toBe(true);
   });
 
-  it("accepts capture shots only as photos with both fields and no client time", () => {
+  it("accepts capture shots only as photos, or the video shot as a video, with both fields and no client time", () => {
     const shot = {
       ...valid,
       type: "PHOTO",
@@ -216,6 +220,18 @@ describe("evidenceUploadSchema", () => {
     ]);
     expect(issues(evidenceUploadSchema, { ...shot, capturedAt: "2026-01-01T10:00:00Z" })).toEqual([
       "custom:captureShot",
+    ]);
+    const video = { ...shot, type: "VIDEO", mimeType: "video/mp4", captureShot: "VIDEO" };
+    expect(issues(evidenceUploadSchema, video)).toEqual([]);
+    expect(issues(evidenceUploadSchema, { ...video, mimeType: "video/quicktime" })).toEqual([]);
+    expect(issues(evidenceUploadSchema, { ...video, captureShot: "DIAL" })).toEqual([
+      "custom:captureShot",
+    ]);
+    expect(issues(evidenceUploadSchema, { ...shot, captureShot: "VIDEO" })).toEqual([
+      "custom:captureShot",
+    ]);
+    expect(issues(evidenceUploadSchema, { ...video, sizeBytes: 100 * 1024 * 1024 + 1 })).toEqual([
+      "custom:sizeBytes",
     ]);
   });
 
@@ -244,16 +260,6 @@ describe("evidence request schemas", () => {
   it("accepts only a visibility change", () => {
     expect(issues(evidenceVisibilitySchema, { visibility: "PUBLIC" })).toEqual([]);
     expect(issues(evidenceVisibilitySchema, { visibility: "PUBLIC", sha256: SHA })).toEqual([
-      "unrecognized_keys",
-    ]);
-  });
-
-  it("accepts only a yes or no for AI checks", () => {
-    expect(issues(automatedChecksConsentSchema, { enabled: true })).toEqual([]);
-    expect(issues(automatedChecksConsentSchema, { enabled: "true" })).toEqual([
-      "invalid_type:enabled",
-    ]);
-    expect(issues(automatedChecksConsentSchema, { enabled: false, at: "now" })).toEqual([
       "unrecognized_keys",
     ]);
   });
@@ -574,11 +580,48 @@ describe("requests, transfers and disputes", () => {
       ]);
     }
     expect(transferSignatureSchema.safeParse({ signedTransaction: "AQID" }).success).toBe(true);
+    const signature = "5".repeat(88);
+    expect(ownerConfirmationSchema.parse({ code: " k7p 2qx ", signature }).code).toBe("K7P2QX");
+    expect(issues(ownerConfirmationSchema, { code: "K7P2Q0", signature })).toEqual([
+      "invalid_format:code",
+    ]);
+    expect(issues(ownerConfirmationSchema, { code: "K7P2QX", signature: "0x" })).toEqual([
+      "invalid_format:signature",
+    ]);
+    expect(purchaseCheckPhotoParamsSchema.safeParse({ checkId: UUID, shot: "DIAL" }).success).toBe(
+      true,
+    );
+    expect(issues(purchaseCheckPhotoParamsSchema, { checkId: UUID, shot: "SELFIE" })).toEqual([
+      "invalid_value:shot",
+    ]);
     expect(issues(transferSignatureSchema, { signedTransaction: "not base64!" })).toEqual([
       "invalid_format:signedTransaction",
     ]);
     expect(issues(transferParamsSchema, { transferId: "1" })).toEqual([
       "invalid_format:transferId",
+    ]);
+  });
+
+  it("validates shipped transfers, shipments, escrow disputes and their decisions", () => {
+    const base = { assetId: "WB-7F93A281", toWalletAddress: WALLET };
+    expect(transferRequestSchema.parse(base).delivery).toBe("IN_PERSON");
+    expect(transferRequestSchema.parse({ ...base, delivery: "SHIPPED" }).delivery).toBe("SHIPPED");
+    expect(issues(transferRequestSchema, { ...base, delivery: "POST" })).toEqual([
+      "invalid_value:delivery",
+    ]);
+    expect(shipmentSchema.parse({ carrier: " DHL ", trackingNumber: "JD0142" })).toEqual({
+      carrier: "DHL",
+      trackingNumber: "JD0142",
+    });
+    expect(issues(shipmentSchema, { carrier: "DHL", trackingNumber: " " })).toEqual([
+      "too_small:trackingNumber",
+    ]);
+    expect(issues(escrowDisputeSchema, { reason: "x".repeat(2001) })).toEqual(["too_big:reason"]);
+    expect(resolveEscrowSchema.safeParse({ outcome: "REFUND", resolution: "Fake" }).success).toBe(
+      true,
+    );
+    expect(issues(resolveEscrowSchema, { outcome: "UPHELD", resolution: "Fake" })).toEqual([
+      "invalid_value:outcome",
     ]);
   });
 

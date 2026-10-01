@@ -80,6 +80,28 @@ export const TRANSFER_STATUSES = [
 ] as const;
 export type TransferStatus = (typeof TRANSFER_STATUSES)[number];
 
+/** Handed over in person, or shipped with the payment in escrow (ADR 0014). */
+export const TRANSFER_DELIVERIES = ["IN_PERSON", "SHIPPED"] as const;
+export type TransferDelivery = (typeof TRANSFER_DELIVERIES)[number];
+
+/**
+ * Where a shipped transfer's escrow stands (ADR 0014): the buyer pays, the seller films the item
+ * and ships it, the buyer confirms delivery and checks the item; then the escrow is released to
+ * the seller with the token, or refunded to the buyer. DISPUTED waits for an administrator.
+ */
+export const ESCROW_STATUSES = [
+  "AWAITING_PAYMENT",
+  "PAID",
+  "SHIPPED",
+  "DELIVERED",
+  "DISPUTED",
+  "RELEASING",
+  "RELEASED",
+  "REFUNDING",
+  "REFUNDED",
+] as const;
+export type EscrowStatus = (typeof ESCROW_STATUSES)[number];
+
 /**
  * Who stands behind a proof.
  * OWNER: self-submitted. THIRD_PARTY: independent document from a known issuer
@@ -114,6 +136,20 @@ export type EvidenceUploadStatus = (typeof EVIDENCE_UPLOAD_STATUSES)[number];
 
 export const CAPTURE_SESSION_STATUSES = ["OPEN", "COMPLETED", "EXPIRED"] as const;
 export type CaptureSessionStatus = (typeof CAPTURE_SESSION_STATUSES)[number];
+
+export const PURCHASE_CHECK_STATUSES = ["OPEN", "COMPLETED", "EXPIRED"] as const;
+export type PurchaseCheckStatus = (typeof PURCHASE_CHECK_STATUSES)[number];
+
+/**
+ * In person, remotely with a video the seller films, or on receipt of a shipped item, compared
+ * with the seller's photos before shipping (ADR 0014).
+ */
+export const PURCHASE_CHECK_KINDS = ["IN_PERSON", "REMOTE", "RECEIPT"] as const;
+export type PurchaseCheckKind = (typeof PURCHASE_CHECK_KINDS)[number];
+
+/** Whether the item in front of a buyer matches the asset's recorded photos (ADR 0014). */
+export const ITEM_MATCH_RESULTS = ["MATCH", "NO_MATCH", "INCONCLUSIVE"] as const;
+export type ItemMatchResult = (typeof ITEM_MATCH_RESULTS)[number];
 
 export const REVIEW_STATUSES = ["PENDING", "ACCEPTED", "REJECTED"] as const;
 export type ReviewStatus = (typeof REVIEW_STATUSES)[number];
@@ -243,6 +279,8 @@ export const CHAIN_TRANSACTION_KINDS = [
   "COMMIT_TRUST_SCORE",
   "TRANSFER_ASSET",
   "UPDATE_ASSET_STATUS",
+  "ESCROW_PAYMENT",
+  "ESCROW_REFUND",
 ] as const;
 export type ChainTransactionKind = (typeof CHAIN_TRANSACTION_KINDS)[number];
 
@@ -269,7 +307,7 @@ export type ChainTransactionStatus = (typeof CHAIN_TRANSACTION_STATUSES)[number]
 export const AUTOMATED_CHECK_RESULTS = ["PASSED", "FAILED", "INCONCLUSIVE"] as const;
 export type AutomatedCheckResult = (typeof AUTOMATED_CHECK_RESULTS)[number];
 
-export const AUTOMATED_JOB_KINDS = ["EVIDENCE_CHECK", "VERIFIER_REPORT"] as const;
+export const AUTOMATED_JOB_KINDS = ["EVIDENCE_CHECK", "VERIFIER_REPORT", "ITEM_MATCH"] as const;
 export type AutomatedJobKind = (typeof AUTOMATED_JOB_KINDS)[number];
 
 export const AUTOMATED_JOB_STATUSES = ["PENDING", "COMPLETED", "FAILED"] as const;
@@ -294,11 +332,16 @@ export const DOMAIN_ENUMS = {
   VerificationLevel: VERIFICATION_LEVELS,
   OwnershipReason: OWNERSHIP_REASONS,
   TransferStatus: TRANSFER_STATUSES,
+  TransferDelivery: TRANSFER_DELIVERIES,
+  EscrowStatus: ESCROW_STATUSES,
   ProofSource: PROOF_SOURCES,
   EvidenceType: EVIDENCE_TYPES,
   EvidenceVisibility: EVIDENCE_VISIBILITIES,
   EvidenceUploadStatus: EVIDENCE_UPLOAD_STATUSES,
   CaptureSessionStatus: CAPTURE_SESSION_STATUSES,
+  PurchaseCheckStatus: PURCHASE_CHECK_STATUSES,
+  PurchaseCheckKind: PURCHASE_CHECK_KINDS,
+  ItemMatchResult: ITEM_MATCH_RESULTS,
   ReviewStatus: REVIEW_STATUSES,
   VerifierStatus: VERIFIER_STATUSES,
   VerifierEntityType: VERIFIER_ENTITY_TYPES,

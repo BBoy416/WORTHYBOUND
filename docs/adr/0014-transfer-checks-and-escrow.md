@@ -28,10 +28,47 @@ expire (ADR 0012).
 The buyer must be signed in; checks are rate limited and audited, so they cannot be used to probe
 other people's items. A result means "matches the recorded item", never a guarantee.
 
+**Checks before buying, in person (2026-10-04).** A signed-in buyer starts a check from the
+passport (`POST /assets/:wbId/purchase-checks`); it stays open 60 minutes, one per buyer and item,
+at most 10 per buyer and 10 per item per day. The check shows a 6-character code (valid 5 minutes,
+renewable) that the owner signs on their asset page (`POST /assets/:wbId/owner-confirmations`,
+text `WorthyBound: I confirm to a buyer that I own <WB ID>.\nCode: <code>`); the confirmation is
+final and names neither wallet nor person. The buyer photographs the item with the live camera,
+one photo per capture shot of the category without the code shot; photos are stored without
+metadata and shown only to the buyer. The recorded photos are the verifiers' photos and the owner's
+latest completed capture session (at most 8), compared by the AI check engine (ADR 0013); when
+the passport is revoked, without recorded photos, or when the comparison fails, the result is
+`INCONCLUSIVE` with the reason. The buyer sees recorded photos
+that are public on the passport; private ones are compared but never shown. The model's summary
+is stored for reviewers, not shown to the buyer. Checks are audited.
+
 **Check before buying, remotely.** The buyer requests a live check. WorthyBound gives the seller a
 one-time code that the buyer also sees; within 24 hours the seller films the item with the code
 in view, in a capture session. The buyer sees the result and the video. This proves the seller
 has the item now and that it matches the token.
+
+**Checks before buying, remotely (2026-10-05).** A signed-in buyer requests a remote check from
+the passport (`POST /assets/:wbId/remote-checks`); it stays open 24 hours, one per buyer and item,
+and counts toward the daily limits of checks, with at most 3 remote checks per item per day. The
+check has a 6-character code that the buyer sees throughout. The owner sees the open requests on
+their asset page, without the buyer (`GET /assets/:wbId/remote-checks`), and films the item in a
+capture session started from the request
+(`POST /assets/:wbId/remote-checks/:checkId/capture-session`): the session uses the check's code,
+ends with the check at the latest, and asks for the category's capture shots, including the code
+shot, then a `VIDEO` shot turning the item around with the code in view (MP4 or QuickTime, at
+most 100 MiB). These sessions are not counted in the owner's capture limits, and their shots are
+not counted in the limit of evidence files per asset. The owner's account filming the item shows
+the buyer "confirmed current owner"; no wallet signature is asked. When the session completes, the
+buyer can watch the video through a 5-minute link (`POST /purchase-checks/:checkId/video`) to a
+copy without its metadata boxes (`udta`, `meta`, `uuid`, turned into `free` boxes of the same
+size, so the video plays unchanged); the original stays sealed as evidence. The buyer also sees
+what the AI check found in the code photo (`owner.codeCheck`: the code shown, missing or
+different, the photo failed or was unclear, or the check is pending or unavailable), and the
+session's photos without the code shot are compared with the recorded photos as in person.
+Sessions filmed for a remote check are never recorded photos for other checks. The shots are
+evidence of the asset like any capture session. The web app records the video from the live
+camera (`MediaRecorder`) as MP4 without sound, for at most 60 seconds; browsers that cannot
+record MP4 are asked to use another. Checks are audited.
 
 **In-person transfer.** When the checks pass, the buyer pays and the program transfers the token
 in the same transaction (ADR 0002 steps 2-3). No escrow wait is needed; the buyer checked the item.
@@ -74,6 +111,35 @@ the database keeps it fixed. The transfer transaction pays the price from the bu
 or neither does; the program is unchanged. The buyer sees the price before accepting and when
 signing, and WorthyBound checks the buyer's balance before accepting the signature. This covers
 in-person transfers; escrow for shipped items is still to come.
+
+**Escrow on devnet in SOL (2026-10-07).** A shipped transfer (`delivery: "SHIPPED"`, with a
+price) is escrowed without a program change. When the buyer accepts, the oracle creates the
+transfer's durable nonce account, which also holds the escrow, and a second nonce account for the
+payment. Both parties sign the transfer, which pays the seller from the escrow account (a nonce
+withdrawal the oracle signs) together with `transfer_asset`; the buyer then signs the payment of
+the price into escrow (`POST /transfers/:id/payment`). A signed payment stays valid until the
+payment nonce advances, so the worker gives up on one it cannot confirm only after advancing that
+nonce; it then records the payment if the escrow holds the price, or asks the buyer to sign a new
+one. A refund returns the price and advances the escrow nonce, so the signed transfer can no
+longer run. Deadlines:
+
+- The seller films the item and the sealed package with the session's code
+  (`POST /transfers/:id/shipment-session`) and ships within 3 days of payment, or the buyer is
+  refunded. Until shipping, the seller can cancel with a refund.
+- The buyer confirms delivery within 21 days of shipping. Afterwards they can cancel with a
+  refund, or extend by 7 days up to 3 times. Without either, the sale is released 7 days after the
+  delivery period.
+- Confirming delivery starts a receipt check (`kind: "RECEIPT"`): within 48 hours the buyer
+  photographs the package with the seller's code, then the item. The photos are compared with the
+  seller's photos before shipping. A match releases the sale; no match holds it for an
+  administrator; otherwise it is released 7 days after delivery.
+- The buyer can report a problem until the release (`POST /transfers/:id/dispute`). An
+  administrator releases the sale or refunds the buyer (`POST /admin/transfers/:id/resolution`).
+  A transfer that could not be sent is held the same way and can only be refunded.
+
+Photos taken before shipping are not recorded photos for other checks and do not count toward the
+evidence limit. If the owner reports the item lost or stolen, a paid escrow is refunded before
+shipping and held for an administrator after.
 
 **Remaining fraud and its limits.**
 

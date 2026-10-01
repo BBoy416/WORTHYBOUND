@@ -2163,23 +2163,6 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
       );
     });
 
-    it("records consent with who and when together", async () => {
-      const a = await activeAsset();
-      await expectDbError(
-        db.prisma.asset.update({
-          where: { id: a.id },
-          data: { automatedChecksConsentById: a.ownerId },
-        }),
-        CHECK_VIOLATION,
-      );
-      await expect(
-        db.prisma.asset.update({
-          where: { id: a.id },
-          data: { automatedChecksConsentById: a.ownerId, automatedChecksConsentAt: new Date() },
-        }),
-      ).resolves.toMatchObject({ automatedChecksConsentById: a.ownerId });
-    });
-
     it("allows one pending job per file or application", async () => {
       const { e } = await evidenceOf();
       const job = { kind: "EVIDENCE_CHECK" as const, entityId: e.id };
@@ -2191,6 +2174,219 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
       await expect(db.prisma.automatedJob.create({ data: job })).resolves.toMatchObject({
         status: "PENDING",
       });
+    });
+  });
+
+  // ─── Escrowed transfers ──────────────────────────────────────────────────────
+
+  describe("escrowed transfers", () => {
+    const DAY = 86_400_000;
+    const later = (days: number) => new Date(Date.now() + days * DAY);
+    /** An accepted shipped transfer awaiting the buyer's payment. */
+    const shipped = async (fields: Prisma.TransferRequestUncheckedCreateInput | object = {}) => {
+      const a = await activeAsset();
+      const buyer = await user();
+      return db.prisma.transferRequest.create({
+        data: {
+          assetId: a.id,
+          fromUserId: a.ownerId,
+          toUserId: buyer.id,
+          toWalletAddress: buyer.walletAddress,
+          priceLamports: 2_000_000_000n,
+          delivery: "SHIPPED",
+          status: "ACCEPTED",
+          acceptedAt: new Date(),
+          escrowStatus: "AWAITING_PAYMENT",
+          expiresAt: later(3),
+          ...fields,
+        },
+      });
+    };
+    const paid = { escrowStatus: "PAID" as const, paidAt: new Date(), shipBy: later(3) };
+    const sent = {
+      ...paid,
+      escrowStatus: "SHIPPED" as const,
+      shippedAt: new Date(),
+      carrier: "DHL",
+      trackingNumber: "JD014",
+      deliveryDueAt: later(21),
+    };
+    const update = (id: string, data: Prisma.TransferRequestUncheckedUpdateInput) =>
+      db.prisma.transferRequest.update({ where: { id }, data });
+
+    it("keeps escrow to shipped transfers, from their acceptance", async () => {
+      await expectDbError(shipped({ delivery: "IN_PERSON" }), CHECK_VIOLATION);
+      await expectDbError(
+        shipped({ delivery: "IN_PERSON", escrowStatus: null, paidAt: new Date() }),
+        CHECK_VIOLATION,
+      );
+      await expectDbError(shipped({ escrowStatus: null }), CHECK_VIOLATION);
+      await expectDbError(shipped({ status: "PENDING", acceptedAt: null }), CHECK_VIOLATION);
+      await expect(
+        shipped({ status: "PENDING", acceptedAt: null, escrowStatus: null }),
+      ).resolves.toMatchObject({ delivery: "SHIPPED", escrowStatus: null });
+      await expect(shipped()).resolves.toMatchObject({ escrowStatus: "AWAITING_PAYMENT" });
+    });
+
+    it("records each escrow step with its details", async () => {
+      const t = await shipped();
+      await expectDbError(update(t.id, { escrowStatus: "PAID" }), CHECK_VIOLATION);
+      await expectDbError(
+        update(t.id, { escrowStatus: "PAID", paidAt: new Date() }),
+        CHECK_VIOLATION,
+      );
+      await update(t.id, paid);
+      await expectDbError(update(t.id, { ...sent, trackingNumber: null }), CHECK_VIOLATION);
+      await expectDbError(update(t.id, { ...sent, deliveryDueAt: null }), CHECK_VIOLATION);
+      await update(t.id, sent);
+      await expectDbError(
+        update(t.id, { escrowStatus: "DELIVERED", deliveredAt: new Date() }),
+        CHECK_VIOLATION,
+      );
+      await update(t.id, {
+        escrowStatus: "DELIVERED",
+        deliveredAt: new Date(),
+        releaseAt: later(7),
+      });
+      await expectDbError(
+        update(t.id, { escrowStatus: "DISPUTED", disputedAt: new Date() }),
+        CHECK_VIOLATION,
+      );
+      await expect(
+        update(t.id, {
+          escrowStatus: "DISPUTED",
+          disputedAt: new Date(),
+          disputeReason: "receipt_no_match",
+        }),
+      ).resolves.toMatchObject({ escrowStatus: "DISPUTED" });
+    });
+
+    it("releases only completed transfers and refunds only cancelled ones", async () => {
+      await expectDbError(shipped({ ...sent, escrowStatus: "RELEASED" }), CHECK_VIOLATION);
+      await expectDbError(shipped({ ...paid, escrowStatus: "REFUNDED" }), CHECK_VIOLATION);
+      await expect(
+        shipped({
+          ...paid,
+          escrowStatus: "REFUNDED",
+          status: "CANCELLED",
+          cancelledAt: new Date(),
+        }),
+      ).resolves.toMatchObject({ escrowStatus: "REFUNDED" });
+    });
+
+    it("allows at most three delivery extensions", async () => {
+      const t = await shipped(sent);
+      await update(t.id, { deliveryExtensions: 3 });
+      await expectDbError(update(t.id, { deliveryExtensions: 4 }), CHECK_VIOLATION);
+      await expectDbError(update(t.id, { deliveryExtensions: -1 }), CHECK_VIOLATION);
+    });
+
+    it("records who resolved a dispute, when and why together", async () => {
+      const t = await shipped({
+        ...paid,
+        escrowStatus: "DISPUTED",
+        disputedAt: new Date(),
+        disputeReason: "The box was crushed",
+      });
+      const by = await admin();
+      await expectDbError(
+        update(t.id, { resolvedById: by.id, resolvedAt: new Date() }),
+        CHECK_VIOLATION,
+      );
+      await expectDbError(
+        update(t.id, { resolution: "Refunded.", resolvedAt: new Date() }),
+        CHECK_VIOLATION,
+      );
+      await expect(
+        update(t.id, { resolvedById: by.id, resolvedAt: new Date(), resolution: "Refunded." }),
+      ).resolves.toMatchObject({ resolution: "Refunded." });
+    });
+
+    it("fixes the delivery, and a released or refunded escrow", async () => {
+      const t = await shipped();
+      await expectDbError(
+        update(t.id, { delivery: "IN_PERSON", escrowStatus: null }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      const refunded = await shipped({
+        ...paid,
+        escrowStatus: "REFUNDED",
+        status: "CANCELLED",
+        cancelledAt: new Date(),
+      });
+      await expectDbError(
+        update(refunded.id, { escrowStatus: "REFUNDING" }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      await expect(update(refunded.id, { resolution: null })).resolves.toBeDefined();
+    });
+
+    it("films a session for a remote check, a shipment or the owner, not two at once", async () => {
+      const t = await shipped(paid);
+      const a = await db.prisma.asset.findUniqueOrThrow({ where: { id: t.assetId } });
+      const check = await db.prisma.purchaseCheck.create({
+        data: {
+          assetId: a.id,
+          buyerId: t.toUserId as string,
+          kind: "REMOTE",
+          ownerCode: "K7P2QX",
+          ownerCodeExpiresAt: later(1),
+          shots: ["DIAL", "VIDEO"],
+          expiresAt: later(1),
+        },
+      });
+      const session = (fields: object) =>
+        db.prisma.captureSession.create({
+          data: {
+            assetId: a.id,
+            ownerId: a.ownerId,
+            code: "PK4Z9M",
+            shots: ["DIAL", "PACKAGE"],
+            expiresAt: new Date(Date.now() + 15 * 60_000),
+            ...fields,
+          },
+        });
+      await expectDbError(
+        session({ purchaseCheckId: check.id, transferRequestId: t.id }),
+        CHECK_VIOLATION,
+      );
+      const filmed = await session({ transferRequestId: t.id });
+      await expectDbError(
+        db.prisma.captureSession.update({
+          where: { id: filmed.id },
+          data: { transferRequestId: null },
+        }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+    });
+
+    it("links receipt checks, and only them, to a transfer", async () => {
+      const t = await shipped(sent);
+      const check = (fields: object) =>
+        db.prisma.purchaseCheck.create({
+          data: {
+            assetId: t.assetId,
+            buyerId: t.toUserId as string,
+            ownerCode: "PK4Z9M",
+            ownerCodeExpiresAt: later(1),
+            shots: ["PACKAGE", "DIAL"],
+            expiresAt: later(1),
+            ...fields,
+          },
+        });
+      await expectDbError(check({ kind: "RECEIPT" }), CHECK_VIOLATION);
+      await expectDbError(check({ kind: "IN_PERSON", transferRequestId: t.id }), CHECK_VIOLATION);
+      const receipt = await check({ kind: "RECEIPT", transferRequestId: t.id });
+      await expect(check({ kind: "RECEIPT", transferRequestId: t.id })).rejects.toMatchObject({
+        code: "P2002",
+      });
+      await expectDbError(
+        db.prisma.purchaseCheck.update({
+          where: { id: receipt.id },
+          data: { transferRequestId: null, kind: "IN_PERSON" },
+        }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
     });
   });
 });

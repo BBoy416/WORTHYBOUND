@@ -20,6 +20,9 @@ import {
 import { sendInstructions, type SolanaConnection } from "./rpc.js";
 import { toChainAssetStatus, toChainVerificationLevel } from "./status.js";
 import {
+  buildEscrowPaymentTransaction,
+  buildEscrowRefundTransaction,
+  buildNonceAdvanceTransaction,
   buildTransferTransaction,
   completeTransferTransaction,
   createNonceAccountInstructions,
@@ -89,7 +92,9 @@ export interface WorthyBoundOracle {
   }): Promise<Signature>;
   /**
    * Creates a durable nonce account for one transfer and returns the unsigned `transfer_asset`
-   * transaction (base64 wire bytes) for seller and buyer to sign.
+   * transaction (base64 wire bytes) for seller and buyer to sign. In escrow (ADR 0014), the nonce
+   * account also holds the buyer's payment until the transaction pays the seller from it, and a
+   * second nonce account is created for the payment, with a price.
    */
   prepareTransfer(input: {
     wbId: string;
@@ -97,9 +102,40 @@ export interface WorthyBoundOracle {
     buyer: string;
     statusAfter: AssetStatus;
     statusSeq: bigint;
-    /** Paid by the buyer to the seller in the same transaction; 0 for none. */
+    /** Paid by the buyer to the seller in the same transaction, or from escrow; 0 for none. */
     priceLamports: bigint;
-  }): Promise<{ transaction: string; nonceAccount: string }>;
+    escrow?: boolean;
+  }): Promise<{ transaction: string; nonceAccount: string; paymentNonceAccount: string | null }>;
+  /**
+   * The buyer's unsigned payment of the price into the escrow nonce account, with the payment
+   * nonce account's current nonce. Rebuilt after a payment that failed.
+   */
+  prepareEscrowPayment(input: {
+    buyer: string;
+    escrowAccount: string;
+    paymentNonceAccount: string;
+    priceLamports: bigint;
+  }): Promise<string>;
+  /**
+   * Gives up on a payment into escrow that was signed but not seen to land: advances the payment
+   * nonce, so it can no longer land, then tells whether the escrow holds the price. If not, returns
+   * a new unsigned payment for the buyer to sign.
+   */
+  resetEscrowPayment(input: {
+    buyer: string;
+    escrowAccount: string;
+    paymentNonceAccount: string;
+    priceLamports: bigint;
+  }): Promise<{ held: true } | { held: false; transaction: string }>;
+  /**
+   * Returns the escrowed price to the buyer and advances the escrow nonce, so the prepared
+   * transfer can no longer run. Null if the escrow no longer holds the price (already refunded).
+   */
+  refundEscrow(input: {
+    escrowAccount: string;
+    buyer: string;
+    priceLamports: bigint;
+  }): Promise<Signature | null>;
   /** Lamports held by the account, 0 if it does not exist. */
   getBalance(address: string): Promise<bigint>;
   /**
@@ -139,7 +175,18 @@ export function createWorthyBoundOracle(
     };
   };
 
-  return {
+  const rentExempt = async () =>
+    connection.rpc.getMinimumBalanceForRentExemption(NONCE_ACCOUNT_SIZE).send();
+
+  const readNonce = async (account: Address) => {
+    const info = await connection.rpc
+      .getAccountInfo(account, { encoding: "base64", commitment: "confirmed" })
+      .send();
+    if (!info.value) throw new Error(`nonce account ${account} not found`);
+    return readNonceAccount(Buffer.from(info.value.data[0], "base64"));
+  };
+
+  const client: WorthyBoundOracle = {
     oracleAddress: oracle.address,
     fetchRecord,
 
@@ -196,26 +243,25 @@ export function createWorthyBoundOracle(
       );
     },
 
-    async prepareTransfer({ wbId, seller, buyer, statusAfter, statusSeq, priceLamports }) {
+    async prepareTransfer(input) {
+      const { wbId, seller, buyer, statusAfter, statusSeq, priceLamports } = input;
+      const escrow = input.escrow === true;
       const nonceAccount = await generateKeyPairSigner();
-      const lamports = await connection.rpc
-        .getMinimumBalanceForRentExemption(NONCE_ACCOUNT_SIZE)
-        .send();
+      const paymentNonce = escrow && priceLamports > 0n ? await generateKeyPairSigner() : null;
+      const lamports = await rentExempt();
       await sendInstructions(
         connection,
         oracle,
-        createNonceAccountInstructions({
-          payer: oracle,
-          nonceAccount,
-          authority: oracle.address,
-          lamports,
-        }),
+        [nonceAccount, ...(paymentNonce ? [paymentNonce] : [])].flatMap((account) =>
+          createNonceAccountInstructions({
+            payer: oracle,
+            nonceAccount: account,
+            authority: oracle.address,
+            lamports,
+          }),
+        ),
       );
-      const account = await connection.rpc
-        .getAccountInfo(nonceAccount.address, { encoding: "base64", commitment: "confirmed" })
-        .send();
-      if (!account.value) throw new Error("nonce account not found after creation");
-      const { nonce } = readNonceAccount(Buffer.from(account.value.data[0], "base64"));
+      const { nonce } = await readNonce(nonceAccount.address);
       const transaction = await buildTransferTransaction({
         wbId,
         oracle: oracle.address,
@@ -226,8 +272,63 @@ export function createWorthyBoundOracle(
         nonceAccount: nonceAccount.address,
         nonce,
         priceLamports,
+        escrow,
       });
-      return { transaction, nonceAccount: nonceAccount.address };
+      return {
+        transaction,
+        nonceAccount: nonceAccount.address,
+        paymentNonceAccount: paymentNonce?.address ?? null,
+      };
+    },
+
+    async prepareEscrowPayment({ buyer, escrowAccount, paymentNonceAccount, priceLamports }) {
+      const { nonce } = await readNonce(paymentNonceAccount as Address);
+      return buildEscrowPaymentTransaction({
+        oracle: oracle.address,
+        buyer: buyer as Address,
+        escrowAccount: escrowAccount as Address,
+        paymentNonceAccount: paymentNonceAccount as Address,
+        nonce,
+        priceLamports,
+      });
+    },
+
+    async resetEscrowPayment(input) {
+      const paymentNonce = input.paymentNonceAccount as Address;
+      const { nonce } = await readNonce(paymentNonce);
+      await client.sendTransfer({
+        transaction: buildNonceAdvanceTransaction({
+          oracle: oracle.address,
+          nonceAccount: paymentNonce,
+          nonce,
+        }),
+        signatures: {},
+      });
+      const [{ value: balance }, rent] = await Promise.all([
+        connection.rpc
+          .getBalance(input.escrowAccount as Address, { commitment: "confirmed" })
+          .send(),
+        rentExempt(),
+      ]);
+      if (BigInt(balance) >= rent + input.priceLamports) return { held: true };
+      return { held: false, transaction: await client.prepareEscrowPayment(input) };
+    },
+
+    async refundEscrow({ escrowAccount, buyer, priceLamports }) {
+      const [{ nonce }, { value: balance }, rent] = await Promise.all([
+        readNonce(escrowAccount as Address),
+        connection.rpc.getBalance(escrowAccount as Address, { commitment: "confirmed" }).send(),
+        rentExempt(),
+      ]);
+      if (BigInt(balance) < rent + priceLamports) return null;
+      const transaction = buildEscrowRefundTransaction({
+        oracle: oracle.address,
+        buyer: buyer as Address,
+        escrowAccount: escrowAccount as Address,
+        nonce,
+        priceLamports,
+      });
+      return client.sendTransfer({ transaction, signatures: {} });
     },
 
     async getBalance(account) {
@@ -265,4 +366,5 @@ export function createWorthyBoundOracle(
       throw new Error("transfer transaction not confirmed yet");
     },
   };
+  return client;
 }

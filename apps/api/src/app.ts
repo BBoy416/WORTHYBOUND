@@ -25,8 +25,10 @@ import { ApiError } from "./errors.js";
 import { evidenceRoutes } from "./evidence/routes.js";
 import { metadataRoutes } from "./passport/metadata.js";
 import { passportRoutes } from "./passport/routes.js";
+import { purchaseCheckRoutes } from "./purchase-checks/routes.js";
 import { templateRoutes } from "./templates/routes.js";
 import { captureRoutes } from "./capture/routes.js";
+import { escrowChainHooks, runEscrowDeadlines } from "./transfers/escrow.js";
 import { completeTransfer } from "./transfers/service.js";
 import { transferRoutes } from "./transfers/routes.js";
 import { verificationRoutes } from "./verification/routes.js";
@@ -138,6 +140,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         log: app.log,
         metadataUrl: (wbId) => `${config.apiPublicUrl}/metadata/${wbId}`,
         completeTransfer,
+        escrow: escrowChainHooks,
+        escrowDeadlines: (at) => runEscrowDeadlines(prisma, at),
       })
     : null;
   app.decorate("chainSync", chainSync);
@@ -184,6 +188,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await app.register(checkRoutes, ctx);
   await app.register(transferRoutes, ctx);
   await app.register(captureRoutes, ctx);
+  await app.register(purchaseCheckRoutes, ctx);
   if (config.WEB_DIST_DIR) await registerWebApp(app, config.WEB_DIST_DIR);
   if (options.register) await options.register(app, ctx);
   return app;

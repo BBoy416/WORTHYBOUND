@@ -1,26 +1,34 @@
-import { generateKeyPairSync, randomUUID } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getAddressEncoder } from "@solana/addresses";
 import {
+  buildEscrowPaymentTransaction,
   buildTransferTransaction,
   chainAddresses,
   type ChainRecordState,
   completeTransferTransaction,
   loadKeypairSigner,
   StaleChainUpdateError,
+  TransferFailedError,
   type WorthyBoundOracle,
 } from "@worthybound/solana";
+import type { Storage } from "@worthybound/storage";
 import type { FastifyInstance } from "fastify";
+import sharp from "sharp";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_CHAIN_ATTEMPTS } from "../src/chain/sync.js";
+import { grantAdmin } from "../src/cli/admin-grant.js";
 import { recordKyc } from "../src/cli/kyc-record.js";
 import {
   type Clock,
   createTestDatabase,
+  createTestStorage,
+  fakeCheckEngine,
   signIn,
   TEST_DATABASE_URL,
+  TEST_STORAGE_AVAILABLE,
   testApp,
   testClock,
   TestWallet,
@@ -43,7 +51,9 @@ type Call =
       seq: bigint;
       price: bigint;
     }
-  | { kind: "transfer"; wbId: string; buyer: string };
+  | { kind: "transfer"; wbId: string; buyer: string }
+  | { kind: "payment" | "payment_reset"; buyer: string; price: bigint }
+  | { kind: "refund"; buyer: string; price: bigint };
 
 type Signer = Awaited<ReturnType<typeof loadKeypairSigner>>;
 
@@ -54,11 +64,34 @@ class FakeOracle implements WorthyBoundOracle {
   /** Prepared transfers by transaction, to apply when sent. */
   readonly #prepared = new Map<
     string,
-    { wbId: string; seller: string; buyer: string; status: string; seq: bigint }
+    {
+      wbId: string;
+      seller: string;
+      buyer: string;
+      status: string;
+      seq: bigint;
+      nonceAccount: string;
+      escrow: boolean;
+      price: bigint;
+    }
   >();
+  /** Prepared payments into escrow by transaction. */
+  readonly #payments = new Map<string, { buyer: string; escrow: string; price: bigint }>();
+  /** Escrow nonce accounts whose nonce moved on with a refund; their transfer cannot run. */
+  readonly #advanced = new Set<string>();
   failures = 0;
+  /** Makes the next sent payment land and fail, as when the buyer spent the SOL meanwhile. */
+  failNextPayment = false;
+  /**
+   * Payments are sent but never seen to confirm, as during an outage; they stay valid, and land
+   * with `landLostPayments`, until their payment nonce is advanced.
+   */
+  losePayments = false;
+  readonly #lost = new Set<string>();
   /** Lamports by wallet; wallets not listed hold 10 SOL. */
   readonly balances = new Map<string, bigint>();
+  /** Lamports held in escrow, by nonce account. */
+  readonly escrows = new Map<string, bigint>();
   #n = 0;
 
   constructor(readonly signer: Signer) {}
@@ -141,8 +174,76 @@ class FakeOracle implements WorthyBoundOracle {
       nonceAccount,
       nonce: new TestWallet().address,
     });
-    this.#prepared.set(transaction, { ...input, status: input.statusAfter, seq: input.statusSeq });
-    return { transaction, nonceAccount };
+    this.#prepared.set(transaction, {
+      ...input,
+      status: input.statusAfter,
+      seq: input.statusSeq,
+      nonceAccount,
+      escrow: input.escrow === true,
+      price: input.priceLamports,
+    });
+    const paymentNonceAccount =
+      input.escrow && input.priceLamports > 0n ? new TestWallet().address : null;
+    return { transaction, nonceAccount, paymentNonceAccount };
+  }
+
+  async prepareEscrowPayment(input: Parameters<WorthyBoundOracle["prepareEscrowPayment"]>[0]) {
+    this.#maybeFail();
+    const transaction = buildEscrowPaymentTransaction({
+      ...input,
+      oracle: this.oracleAddress,
+      buyer: input.buyer as Address,
+      escrowAccount: input.escrowAccount as Address,
+      paymentNonceAccount: input.paymentNonceAccount as Address,
+      nonce: new TestWallet().address,
+    });
+    this.#payments.set(transaction, {
+      buyer: input.buyer,
+      escrow: input.escrowAccount,
+      price: input.priceLamports,
+    });
+    return transaction;
+  }
+
+  /** Lands the payments that were sent and are still valid. */
+  landLostPayments() {
+    for (const transaction of this.#lost) {
+      const payment = this.#payments.get(transaction);
+      if (!payment) continue;
+      this.#payments.delete(transaction);
+      this.#credit(payment.buyer, -payment.price);
+      this.escrows.set(payment.escrow, (this.escrows.get(payment.escrow) ?? 0n) + payment.price);
+      this.calls.push({ kind: "payment", buyer: payment.buyer, price: payment.price });
+    }
+    this.#lost.clear();
+  }
+
+  async resetEscrowPayment(
+    input: Parameters<WorthyBoundOracle["resetEscrowPayment"]>[0],
+  ): ReturnType<WorthyBoundOracle["resetEscrowPayment"]> {
+    this.#maybeFail();
+    // Advancing the payment nonce invalidates every payment prepared for this escrow.
+    for (const [transaction, payment] of this.#payments) {
+      if (payment.escrow === input.escrowAccount) this.#payments.delete(transaction);
+    }
+    this.calls.push({ kind: "payment_reset", buyer: input.buyer, price: input.priceLamports });
+    if ((this.escrows.get(input.escrowAccount) ?? 0n) >= input.priceLamports) return { held: true };
+    return { held: false, transaction: await this.prepareEscrowPayment(input) };
+  }
+
+  async refundEscrow(input: Parameters<WorthyBoundOracle["refundEscrow"]>[0]) {
+    this.#maybeFail();
+    const held = this.escrows.get(input.escrowAccount) ?? 0n;
+    if (held < input.priceLamports) return null;
+    this.escrows.set(input.escrowAccount, held - input.priceLamports);
+    this.#credit(input.buyer, input.priceLamports);
+    this.#advanced.add(input.escrowAccount);
+    this.calls.push({ kind: "refund", buyer: input.buyer, price: input.priceLamports });
+    return this.#sign();
+  }
+
+  #credit(wallet: string, lamports: bigint) {
+    this.balances.set(wallet, (this.balances.get(wallet) ?? 10_000_000_000n) + lamports);
   }
 
   async getBalance(address: string) {
@@ -152,14 +253,38 @@ class FakeOracle implements WorthyBoundOracle {
 
   async sendTransfer(input: Parameters<WorthyBoundOracle["sendTransfer"]>[0]) {
     this.#maybeFail();
-    // Throws unless seller and buyer signed; the oracle signs last.
+    // Throws unless the parties signed; the oracle signs last.
     await completeTransferTransaction(input.transaction, input.signatures, this.signer);
+    const payment = this.#payments.get(input.transaction);
+    if (payment && this.losePayments) {
+      this.#lost.add(input.transaction);
+      throw new Error("transaction confirmation timed out");
+    }
+    if (payment) {
+      this.#payments.delete(input.transaction);
+      if (this.failNextPayment) {
+        this.failNextPayment = false;
+        throw new TransferFailedError("insufficient lamports");
+      }
+      this.#credit(payment.buyer, -payment.price);
+      this.escrows.set(payment.escrow, (this.escrows.get(payment.escrow) ?? 0n) + payment.price);
+      this.calls.push({ kind: "payment", buyer: payment.buyer, price: payment.price });
+      return this.#sign();
+    }
     const prepared = this.#prepared.get(input.transaction);
     const record = prepared && this.records.get(prepared.wbId);
     if (!prepared || !record) throw new Error("AccountNotInitialized");
     if (record.status !== "TRANSFER_PENDING") throw new Error("NotTransferPending");
     if (record.owner !== prepared.seller) throw new Error("NotOwner");
     if (prepared.seq <= record.statusSeq) throw new Error("StaleUpdate");
+    if (prepared.escrow) {
+      const held = this.escrows.get(prepared.nonceAccount) ?? 0n;
+      if (this.#advanced.has(prepared.nonceAccount) || held < prepared.price) {
+        throw new TransferFailedError("nonce has advanced");
+      }
+      this.escrows.set(prepared.nonceAccount, held - prepared.price);
+      this.#credit(prepared.seller, prepared.price);
+    }
     this.calls.push({ kind: "transfer", wbId: prepared.wbId, buyer: prepared.buyer });
     Object.assign(record, {
       owner: prepared.buyer as Address,
@@ -207,12 +332,20 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
   let oracle: FakeOracle;
   let clock: Clock;
   let kick: () => void;
+  let storage: Storage | undefined;
+  const engine = fakeCheckEngine();
 
   beforeAll(async () => {
     db = await createTestDatabase();
     oracle = new FakeOracle(await oracleSigner());
     clock = testClock();
-    app = await testApp(db.prisma, { oracle, now: clock.now });
+    // Escrowed transfers store the seller's and the buyer's photos.
+    storage = TEST_STORAGE_AVAILABLE ? await createTestStorage() : undefined;
+    app = await testApp(db.prisma, {
+      oracle,
+      now: clock.now,
+      ...(storage ? { storage, checkEngine: engine } : {}),
+    });
     offline = await testApp(db.prisma);
     // Jobs run when a test calls runOnce, so tests control the order.
     const sync = app.chainSync!;
@@ -223,6 +356,7 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
   afterAll(async () => {
     await app?.close();
     await offline?.close();
+    await storage?.deleteBucket();
     await db?.drop();
   });
 
@@ -843,6 +977,501 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
         closedReason: "cancelled_by_recipient",
       });
       expect(oracle.records.get(wbId)?.owner).toBe(alice.wallet.address);
+    });
+
+    describe.skipIf(!TEST_STORAGE_AVAILABLE)("shipped, with the price in escrow", () => {
+      const PRICE = 2_000_000_000n;
+      const DAY = 24 * 60 * 60_000;
+
+      interface Escrow {
+        status: string;
+        paymentTransaction: string | null;
+        awaitingYourPayment: boolean;
+        payment: { status: string } | null;
+        refund: { status: string } | null;
+        shipBy: string | null;
+        shipmentFilmed: boolean;
+        deliveryDueAt: string | null;
+        deliveryExtensions: number;
+        receiptCheckId: string | null;
+        releaseAt: string | null;
+        disputeReason: string | null;
+        resolution: string | null;
+      }
+      type Shipped = TransferView & { delivery: string; escrow: Escrow | null };
+
+      const run = () => app.chainSync!.runOnce();
+      const runChecks = () => app.automatedChecks!.runOnce();
+      const view = async (who: Owner, id: string) =>
+        (await call(who, "GET", `/transfers/${id}`)).json<Shipped>();
+      const row = (id: string) => db.prisma.transferRequest.findUniqueOrThrow({ where: { id } });
+      /** Signs in again after the clock moved past the sign-in session. */
+      const later = async (...who: Owner[]) => {
+        for (const w of who) {
+          const session = await signIn(app, w.wallet);
+          w.token = session;
+        }
+      };
+
+      let seed = 1;
+      /** A detailed JPEG; plain photos are too simple to compare. */
+      const photo = () => {
+        const size = 128;
+        const k = seed++;
+        const raw = Buffer.alloc(size * size * 3);
+        for (let i = 0; i < size * size; i++) {
+          const v = 128 + 120 * Math.sin((i % size) / (9 + k)) * Math.cos(i / size / (7 + k));
+          raw.fill(Math.round(v), i * 3, i * 3 + 3);
+        }
+        return sharp(raw, { raw: { width: size, height: size, channels: 3 } })
+          .jpeg()
+          .toBuffer();
+      };
+
+      /** Uploads a capture shot the way the browser does. */
+      const upload = async (who: Owner, wbId: string, sessionId: string, captureShot: string) => {
+        const body = await photo();
+        const req = await call(who, "POST", `/assets/${wbId}/evidence/uploads`, {
+          type: "PHOTO",
+          mimeType: "image/jpeg",
+          sizeBytes: body.length,
+          sha256: createHash("sha256").update(body).digest("hex"),
+          captureSessionId: sessionId,
+          captureShot,
+        });
+        expect(req.statusCode, req.body).toBe(201);
+        const { uploadId, upload: form } = req.json();
+        const put = await fetch(form.url, {
+          method: form.method,
+          headers: form.headers,
+          body: new Uint8Array(body),
+        });
+        expect(put.status).toBeLessThan(300);
+        const done = await call(who, "POST", `/evidence/uploads/${uploadId}/complete`);
+        expect(done.statusCode, done.body).toBe(201);
+      };
+
+      /** Starts, accepts and signs a shipped transfer, and sends the buyer's payment. */
+      const payInto = async (alice: Owner, bob: Owner, wbId: string) => {
+        const res = await call(alice, "POST", "/transfers", {
+          assetId: wbId,
+          toWalletAddress: bob.wallet.address,
+          priceLamports: PRICE.toString(),
+          delivery: "SHIPPED",
+        });
+        expect(res.statusCode, res.body).toBe(201);
+        const { id } = res.json<Shipped>();
+        const { transfer } = await act(bob, id, "accept");
+        await sign(bob, transfer);
+        await sign(alice, transfer);
+        const unpaid = await view(bob, id);
+        expect(unpaid.escrow).toMatchObject({
+          status: "AWAITING_PAYMENT",
+          awaitingYourPayment: true,
+        });
+        const pay = await act(bob, id, "payment", {
+          signedTransaction: walletSign(bob.wallet, unpaid.escrow?.paymentTransaction as string),
+        });
+        expect(pay.status, JSON.stringify(pay.body)).toBe(200);
+        return id;
+      };
+
+      /** Starts, accepts, signs and pays a shipped transfer; returns it once paid. */
+      const paid = async (alice: Owner, bob: Owner, wbId: string) => {
+        const id = await payInto(alice, bob, wbId);
+        await run();
+        const after = await view(bob, id);
+        expect(after.escrow?.status).toBe("PAID");
+        return after;
+      };
+
+      /** The seller films the item and the sealed package, and ships. */
+      const shipped = async (alice: Owner, wbId: string, id: string) => {
+        const started = await call(alice, "POST", `/transfers/${id}/shipment-session`);
+        expect(started.statusCode, started.body).toBe(201);
+        const session = started.json<{ id: string; code: string; shots: { shot: string }[] }>();
+        for (const { shot } of session.shots) await upload(alice, wbId, session.id, shot);
+        const res = await act(alice, id, "shipment", { carrier: "DHL", trackingNumber: "JD014" });
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        return session;
+      };
+
+      /** The buyer confirms delivery and photographs the package and the item. */
+      const received = async (bob: Owner, id: string) => {
+        const delivered = await act(bob, id, "delivered");
+        expect(delivered.status, JSON.stringify(delivered.body)).toBe(200);
+        const checkId = (delivered.transfer as Shipped).escrow?.receiptCheckId as string;
+        const check = (await call(bob, "GET", `/purchase-checks/${checkId}`)).json();
+        for (const { shot } of check.item.shots as { shot: string }[]) {
+          const res = await app.inject({
+            method: "POST",
+            url: `/purchase-checks/${checkId}/photos/${shot}`,
+            payload: await photo(),
+            headers: { "content-type": "image/jpeg" },
+            cookies: { wb_session: bob.token },
+          });
+          expect(res.statusCode, res.body).toBe(200);
+        }
+        return check;
+      };
+
+      it("holds the price in escrow until the buyer's photos match the seller's, then completes", async () => {
+        const alice = await owner();
+        const bob = await owner();
+        const wbId = await tokenized(alice);
+        const t = await paid(alice, bob, wbId);
+        expect(oracle.calls).toContainEqual({
+          kind: "payment",
+          buyer: bob.wallet.address,
+          price: PRICE,
+        });
+        expect(oracle.calls.filter((c) => c.kind === "transfer")).toEqual([]);
+        expect(t).toMatchObject({ status: "ACCEPTED", delivery: "SHIPPED", chain: null });
+        expect(new Date(t.escrow?.shipBy as string).getTime()).toBe(
+          clock.now().getTime() + 3 * DAY,
+        );
+        // The seller is not paid, and the token stays with them, until the buyer has the item.
+        expect(oracle.records.get(wbId)?.owner).toBe(alice.wallet.address);
+        expect((await assetRow(wbId)).status).toBe("TRANSFER_PENDING");
+
+        const notFilmed = await act(alice, t.id, "shipment", {
+          carrier: "DHL",
+          trackingNumber: "1",
+        });
+        expect(notFilmed.body.error.code).toBe("shipment_not_filmed");
+        const sessionPath = `/transfers/${t.id}/shipment-session`;
+        expect((await call(alice, "GET", sessionPath)).statusCode).toBe(404);
+        const session = await shipped(alice, wbId, t.id);
+        const filmed = await call(alice, "GET", sessionPath);
+        expect(filmed.json()).toMatchObject({ id: session.id, status: "COMPLETED" });
+        expect((await call(bob, "GET", sessionPath)).statusCode).toBe(404);
+        // Sessions before shipping are shown with the transfer, not in the asset's guided capture.
+        const own = await call(alice, "GET", `/assets/${wbId}/capture-sessions`);
+        expect(own.json().items.map((s: { id: string }) => s.id)).not.toContain(session.id);
+        expect(session.shots.map((s) => s.shot)).toEqual([
+          "DIAL",
+          "CASEBACK",
+          "CLASP",
+          "SERIAL",
+          "SIDE",
+          "CODE",
+          "PACKAGE",
+        ]);
+        // Shots before shipping are not recorded photos for later checks, nor counted as evidence.
+        const onShipment = await db.prisma.evidence.count({
+          where: { captureSession: { transferRequestId: t.id } },
+        });
+        expect(onShipment).toBe(7);
+        const forSeller = await view(alice, t.id);
+        expect(forSeller.escrow).toMatchObject({
+          status: "SHIPPED",
+          shipmentFilmed: true,
+          deliveryExtensions: 0,
+        });
+
+        const check = await received(bob, t.id);
+        expect(check).toMatchObject({ kind: "RECEIPT", owner: { code: session.code } });
+        expect(check.item.shots[0].shot).toBe("PACKAGE");
+        expect((await view(bob, t.id)).escrow?.status).toBe("DELIVERED");
+
+        engine.matchCalls.length = 0;
+        await runChecks();
+        const [match] = engine.matchCalls;
+        expect(match?.reference.map((r) => r.label)).toContain(
+          "seller photo before shipping: PACKAGE",
+        );
+        expect(match?.candidate.map((c) => c.label)).toContain("buyer photo: PACKAGE");
+        expect((await view(bob, t.id)).escrow?.status).toBe("RELEASING");
+
+        await run();
+        const done = await view(bob, t.id);
+        expect(done).toMatchObject({ status: "COMPLETED", chain: { status: "CONFIRMED" } });
+        expect(done.escrow?.status).toBe("RELEASED");
+        expect(oracle.records.get(wbId)?.owner).toBe(bob.wallet.address);
+        expect(oracle.balances.get(alice.wallet.address)).toBe(10_000_000_000n + PRICE);
+        expect((await assetRow(wbId)).status).toBe("ACTIVE");
+      });
+
+      it("refunds the buyer when the seller does not ship in time, or cancels before shipping", async () => {
+        const alice = await owner();
+        const bob = await owner();
+        const wbId = await tokenized(alice);
+        const late = await paid(alice, bob, wbId);
+        expect((await act(bob, late.id, "cancel")).body.error.code).toBe("escrow_state");
+
+        clock.advance(3 * DAY + 1);
+        await run();
+        const refunded = await view(bob, late.id);
+        expect(refunded).toMatchObject({ status: "CANCELLED", closedReason: "not_shipped" });
+        expect(refunded.escrow).toMatchObject({
+          status: "REFUNDED",
+          refund: { status: "CONFIRMED" },
+        });
+        expect(oracle.balances.get(bob.wallet.address)).toBe(10_000_000_000n);
+        expect((await assetRow(wbId)).status).toBe("ACTIVE");
+        await expect(
+          db.prisma.transferRequest.update({
+            where: { id: late.id },
+            data: { escrowStatus: "RELEASING" },
+          }),
+        ).rejects.toThrow(/escrow status REFUNDED is final/);
+
+        const second = await paid(alice, bob, wbId);
+        const cancelled = await act(alice, second.id, "cancel");
+        expect(cancelled.status, JSON.stringify(cancelled.body)).toBe(200);
+        expect((cancelled.transfer as Shipped).escrow?.status).toBe("REFUNDING");
+        await run();
+        expect(await view(alice, second.id)).toMatchObject({
+          status: "CANCELLED",
+          closedReason: "cancelled_by_sender",
+        });
+        expect(oracle.calls.filter((c) => c.kind === "refund")).toHaveLength(2);
+      });
+
+      it("holds a sale whose photos do not match for an administrator, who refunds or releases it", async () => {
+        const alice = await owner();
+        const bob = await owner();
+        const admin = await owner();
+        await grantAdmin(db.prisma, admin.wallet.address);
+        const wbId = await tokenized(alice);
+        const t = await paid(alice, bob, wbId);
+        await shipped(alice, wbId, t.id);
+        await received(bob, t.id);
+        const matching = engine.match;
+        engine.match = async () => ({
+          result: "NO_MATCH",
+          summary: "Different scratches.",
+          confidence: 0.8,
+          model: "fake-model-1",
+        });
+        try {
+          await runChecks();
+        } finally {
+          engine.match = matching;
+        }
+        expect((await view(bob, t.id)).escrow).toMatchObject({
+          status: "DISPUTED",
+          disputeReason: "receipt_no_match",
+        });
+        // Past the release date, a disputed sale stays held.
+        clock.advance(8 * DAY);
+        await later(alice, bob, admin);
+        await run();
+        expect((await view(bob, t.id)).escrow?.status).toBe("DISPUTED");
+
+        expect((await call(bob, "GET", "/admin/transfers/disputes")).statusCode).toBe(403);
+        const list = await call(admin, "GET", "/admin/transfers/disputes");
+        expect(list.statusCode, list.body).toBe(200);
+        expect(list.json().items.map((i: { id: string }) => i.id)).toContain(t.id);
+        const resolved = await call(admin, "POST", `/admin/transfers/${t.id}/resolution`, {
+          outcome: "REFUND",
+          resolution: "The item returned to the seller matches their photos.",
+        });
+        expect(resolved.statusCode, resolved.body).toBe(200);
+        await run();
+        expect(await view(bob, t.id)).toMatchObject({
+          status: "CANCELLED",
+          closedReason: "refunded_by_admin",
+          escrow: { status: "REFUNDED", resolution: expect.stringContaining("returned") },
+        });
+
+        // A problem reported by the buyer, released by an administrator.
+        const next = await paid(alice, bob, wbId);
+        await shipped(alice, wbId, next.id);
+        const reported = await act(bob, next.id, "dispute", { reason: "The box was crushed" });
+        expect((reported.transfer as Shipped).escrow?.status).toBe("DISPUTED");
+        const again = await call(admin, "POST", `/admin/transfers/${next.id}/resolution`, {
+          outcome: "RELEASE",
+          resolution: "The item was undamaged.",
+        });
+        expect(again.statusCode, again.body).toBe(200);
+        await run();
+        expect((await view(bob, next.id)).status).toBe("COMPLETED");
+        expect(oracle.records.get(wbId)?.owner).toBe(bob.wallet.address);
+      });
+
+      it("releases the sale after the release date, and lets the buyer extend or cancel a late delivery", async () => {
+        const alice = await owner();
+        const bob = await owner();
+        const wbId = await tokenized(alice);
+        const t = await paid(alice, bob, wbId);
+        await shipped(alice, wbId, t.id);
+        await act(bob, t.id, "delivered");
+        clock.advance(7 * DAY + 1);
+        await later(alice, bob);
+        await run();
+        await run();
+        expect(await view(bob, t.id)).toMatchObject({
+          status: "COMPLETED",
+          escrow: { status: "RELEASED" },
+        });
+
+        const carol = await owner();
+        const late = await paid(bob, carol, wbId);
+        await shipped(bob, wbId, late.id);
+        expect((await act(carol, late.id, "cancel")).body.error.code).toBe("escrow_state");
+        for (let i = 1; i <= 3; i++) {
+          const extended = await act(carol, late.id, "extend");
+          expect((extended.transfer as Shipped).escrow?.deliveryExtensions).toBe(i);
+        }
+        expect((await act(carol, late.id, "extend")).body.error.code).toBe(
+          "delivery_extension_limit",
+        );
+        clock.advance((21 + 3 * 7) * DAY + 1);
+        await later(bob, carol);
+        const overdue = await act(carol, late.id, "cancel");
+        expect(overdue.status, JSON.stringify(overdue.body)).toBe(200);
+        await run();
+        expect(await view(carol, late.id)).toMatchObject({
+          status: "CANCELLED",
+          closedReason: "delivery_overdue",
+          escrow: { status: "REFUNDED" },
+        });
+        expect(oracle.records.get(wbId)?.owner).toBe(bob.wallet.address);
+      });
+
+      it("needs a price, both signatures and funds before paying, and asks again after a failed payment", async () => {
+        const alice = await owner();
+        const bob = await owner();
+        const wbId = await tokenized(alice);
+        const free = await call(alice, "POST", "/transfers", {
+          assetId: wbId,
+          toWalletAddress: bob.wallet.address,
+          delivery: "SHIPPED",
+        });
+        expect(free.statusCode).toBe(422);
+        expect(free.json().error.code).toBe("escrow_needs_price");
+
+        const res = await call(alice, "POST", "/transfers", {
+          assetId: wbId,
+          toWalletAddress: bob.wallet.address,
+          priceLamports: PRICE.toString(),
+          delivery: "SHIPPED",
+        });
+        const { id } = res.json<Shipped>();
+        const { transfer } = await act(bob, id, "accept");
+        expect(oracle.calls).toContainEqual(
+          expect.objectContaining({ kind: "prepare", price: PRICE }),
+        );
+        const payment = (await db.prisma.transferRequest.findUniqueOrThrow({ where: { id } }))
+          .paymentTransaction as string;
+        const signed = () => ({ signedTransaction: walletSign(bob.wallet, payment) });
+        expect((await act(bob, id, "payment", signed())).body.error.code).toBe(
+          "transfer_not_signed",
+        );
+        // The buyer's balance is checked when paying, not when signing the transfer.
+        oracle.balances.set(bob.wallet.address, 0n);
+        expect((await sign(bob, transfer)).transfer.signedByBuyer).toBe(true);
+        await sign(alice, transfer);
+        expect((await run()) >= 0).toBe(true);
+        expect(oracle.calls.filter((c) => c.kind === "transfer")).toEqual([]);
+        expect((await act(bob, id, "payment", signed())).body.error.code).toBe(
+          "insufficient_funds",
+        );
+        expect((await act(alice, id, "payment", signed())).status).toBe(404);
+        expect((await act(bob, id, "delivered")).body.error.code).toBe("transfer_changed");
+
+        oracle.balances.delete(bob.wallet.address);
+        oracle.failNextPayment = true;
+        expect((await act(bob, id, "payment", signed())).status).toBe(200);
+        expect((await act(bob, id, "cancel")).body.error.code).toBe("payment_in_progress");
+        await run();
+        const retry = await view(bob, id);
+        expect(retry.escrow).toMatchObject({
+          status: "AWAITING_PAYMENT",
+          awaitingYourPayment: true,
+          payment: { status: "FAILED" },
+        });
+        expect(retry.escrow?.paymentTransaction).not.toBe(payment);
+        const again = await act(bob, id, "payment", {
+          signedTransaction: walletSign(bob.wallet, retry.escrow?.paymentTransaction as string),
+        });
+        expect(again.status, JSON.stringify(again.body)).toBe(200);
+        await run();
+        expect((await view(bob, id)).escrow?.status).toBe("PAID");
+        expect((await row(id)).paidAt).not.toBeNull();
+
+        const inPerson = (await start(alice, await tokenized(alice), bob)).json<TransferView>();
+        expect((await act(bob, inPerson.id, "delivered")).body.error.code).toBe(
+          "not_shipped_transfer",
+        );
+      });
+
+      it("gives up on a payment not seen to land only once it can no longer land", async () => {
+        const alice = await owner();
+        const bob = await owner();
+        /** Every attempt at sending the payment, due one after the other. */
+        const retries = async () => {
+          for (let i = 0; i < MAX_CHAIN_ATTEMPTS; i++) {
+            await run();
+            clock.advance(10 * 60_000);
+          }
+        };
+        const resets = () => oracle.calls.filter((c) => c.kind === "payment_reset").length;
+        oracle.losePayments = true;
+        try {
+          // Never landed: the buyer signs a new payment, and the old one cannot land any more.
+          const lost = await payInto(alice, bob, await tokenized(alice));
+          await run();
+          expect((await view(bob, lost)).escrow).toMatchObject({
+            status: "AWAITING_PAYMENT",
+            awaitingYourPayment: false,
+            payment: { status: "PENDING" },
+          });
+          expect((await act(bob, lost, "cancel")).body.error.code).toBe("payment_in_progress");
+          const before = resets();
+          await retries();
+          expect(resets()).toBe(before + 1);
+          const retry = await view(bob, lost);
+          expect(retry.escrow).toMatchObject({
+            status: "AWAITING_PAYMENT",
+            awaitingYourPayment: true,
+            payment: { status: "FAILED" },
+          });
+          oracle.landLostPayments();
+          oracle.losePayments = false;
+          const again = await act(bob, lost, "payment", {
+            signedTransaction: walletSign(bob.wallet, retry.escrow?.paymentTransaction as string),
+          });
+          expect(again.status, JSON.stringify(again.body)).toBe(200);
+          await run();
+          expect((await view(bob, lost)).escrow?.status).toBe("PAID");
+          expect(oracle.balances.get(bob.wallet.address)).toBe(10_000_000_000n - PRICE);
+
+          // Landed unseen: recorded as paid without asking the buyer again. The reset waits while
+          // Solana cannot be reached.
+          oracle.losePayments = true;
+          const carol = await owner();
+          const unseen = await payInto(alice, carol, await tokenized(alice));
+          for (let i = 0; i < MAX_CHAIN_ATTEMPTS - 1; i++) {
+            await run();
+            oracle.landLostPayments();
+            clock.advance(10 * 60_000);
+          }
+          oracle.failures = 2;
+          await run();
+          expect(await row(unseen)).toMatchObject({
+            escrowStatus: "AWAITING_PAYMENT",
+            paymentSignature: expect.any(String),
+          });
+          expect(
+            await db.prisma.chainTransaction.findFirstOrThrow({ where: { entityId: unseen } }),
+          ).toMatchObject({ status: "FAILED", attempts: MAX_CHAIN_ATTEMPTS - 1 });
+          clock.advance(10 * 60_000);
+          await run();
+          const found = await view(carol, unseen);
+          expect(found.escrow).toMatchObject({ status: "PAID", awaitingYourPayment: false });
+          expect(oracle.balances.get(carol.wallet.address)).toBe(10_000_000_000n - PRICE);
+          expect(
+            await db.prisma.auditLog.findFirst({
+              where: { targetId: unseen, action: "transfer.escrow_paid" },
+            }),
+          ).toMatchObject({ metadata: { signature: null } });
+        } finally {
+          oracle.losePayments = false;
+          oracle.landLostPayments();
+        }
+      });
     });
   });
 

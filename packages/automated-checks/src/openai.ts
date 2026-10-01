@@ -1,9 +1,12 @@
 import { VERIFIER_REPORT_RECOMMENDATIONS } from "@worthybound/shared";
-import { decide, type ModelFinding } from "./decide.js";
+import { decide, decideMatch, type MatchFinding, type ModelFinding } from "./decide.js";
 import {
   EVIDENCE_INSTRUCTIONS,
   EVIDENCE_SCHEMA,
   evidencePrompt,
+  MATCH_INSTRUCTIONS,
+  MATCH_SCHEMA,
+  matchPrompt,
   REPORT_INSTRUCTIONS,
   REPORT_SCHEMA,
   reportPrompt,
@@ -13,6 +16,8 @@ import {
   CheckEngineError,
   type EvidenceCheckInput,
   type EvidenceCheckOutcome,
+  type ItemMatchInput,
+  type ItemMatchOutcome,
   type VerifierApplicationInput,
   type VerifierReportOutcome,
 } from "./types.js";
@@ -160,6 +165,41 @@ export function createOpenAIEngine(options: OpenAIEngineOptions): CheckEngine {
         ...decided,
         summary: text(o.summary, "summary"),
         documentNumber: documentNumber || null,
+        model: used,
+      };
+    },
+
+    async compareItem(input: ItemMatchInput): Promise<ItemMatchOutcome> {
+      const image = (p: { data: Uint8Array }) => ({
+        type: "input_image",
+        image_url: `data:image/jpeg;base64,${Buffer.from(p.data).toString("base64")}`,
+        detail: "high",
+      });
+      const { output, model: used } = await respond({
+        instructions: MATCH_INSTRUCTIONS,
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: matchPrompt(input) },
+              ...input.reference.map(image),
+              ...input.candidate.map(image),
+            ],
+          },
+        ],
+        text: format("item_match", MATCH_SCHEMA),
+      });
+      const o = output as Record<string, unknown>;
+      const verdict = o.verdict as MatchFinding["verdict"];
+      if (!["SAME_ITEM", "DIFFERENT_ITEM", "CANNOT_TELL"].includes(verdict)) {
+        throw new CheckEngineError("invalid verdict", false);
+      }
+      return {
+        ...decideMatch({
+          verdict,
+          confidence: typeof o.confidence === "number" ? o.confidence : 0,
+        }),
+        summary: text(o.summary, "summary"),
         model: used,
       };
     },

@@ -25,11 +25,21 @@ export const CAPTURE_SHOTS = [
   "INTERIOR",
   "VIN",
   "CODE",
+  "VIDEO",
+  "PACKAGE",
 ] as const;
 export type CaptureShot = (typeof CAPTURE_SHOTS)[number];
 
 /** The shot of the item next to the session's code written on paper. */
 export const CAPTURE_CODE_SHOT = "CODE" satisfies CaptureShot;
+/** A video of the item with the code in view; asked only by remote checks (ADR 0014). */
+export const CAPTURE_VIDEO_SHOT = "VIDEO" satisfies CaptureShot;
+/** The sealed package of a shipped item with the code written on it (ADR 0014). */
+export const CAPTURE_PACKAGE_SHOT = "PACKAGE" satisfies CaptureShot;
+/** Shots that show the session's code, checked for it. */
+export const CAPTURE_SHOTS_WITH_CODE: readonly CaptureShot[] = ["CODE", "PACKAGE"];
+/** Largest video accepted for the video shot, a short clip. */
+export const CAPTURE_VIDEO_MAX_BYTES = 100 * 1024 * 1024;
 
 /** Shots required in a capture session, per category; the code shot comes last. */
 export const CAPTURE_SHOTS_BY_CATEGORY: Record<AssetCategory, readonly CaptureShot[]> = {
@@ -58,4 +68,6 @@ export const CAPTURE_SHOT_INSTRUCTIONS: Record<CaptureShot, string> = {
   INTERIOR: "The interior",
   VIN: "The VIN plate, close enough to read",
   CODE: "The item next to the code written on paper",
+  VIDEO: "A short video turning the item around, with the code on paper in view",
+  PACKAGE: "The sealed package, with the code written on it",
 };

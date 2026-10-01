@@ -6,6 +6,8 @@ import type {
   CheckEngine,
   EvidenceCheckInput,
   EvidenceCheckOutcome,
+  ItemMatchInput,
+  ItemMatchOutcome,
   VerifierApplicationInput,
   VerifierReportOutcome,
 } from "@worthybound/automated-checks";
@@ -158,20 +160,27 @@ export function testApp(
 }
 
 /**
- * A check engine that records its inputs and answers with `evidence` and `report`, which tests
- * may replace or make throw.
+ * A check engine that records its inputs and answers with `evidence`, `match` and `report`, which
+ * tests may replace or make throw.
  */
 export function fakeCheckEngine() {
   const engine = {
     id: "fake",
     evidenceCalls: [] as EvidenceCheckInput[],
     reportCalls: [] as VerifierApplicationInput[],
+    matchCalls: [] as ItemMatchInput[],
     evidence: async (_input: EvidenceCheckInput): Promise<EvidenceCheckOutcome> => ({
       result: "PASSED",
       problems: [],
       summary: "Consistent with the description.",
       confidence: 0.9,
       documentNumber: null,
+      model: "fake-model-1",
+    }),
+    match: async (_input: ItemMatchInput): Promise<ItemMatchOutcome> => ({
+      result: "MATCH",
+      summary: "The same scratches on the bezel.",
+      confidence: 0.9,
       model: "fake-model-1",
     }),
     report: async (_input: VerifierApplicationInput): Promise<VerifierReportOutcome> => ({
@@ -186,6 +195,10 @@ export function fakeCheckEngine() {
     checkEvidence(input: EvidenceCheckInput): Promise<EvidenceCheckOutcome> {
       engine.evidenceCalls.push(input);
       return engine.evidence(input);
+    },
+    compareItem(input: ItemMatchInput): Promise<ItemMatchOutcome> {
+      engine.matchCalls.push(input);
+      return engine.match(input);
     },
     reportOnVerifier(input: VerifierApplicationInput): Promise<VerifierReportOutcome> {
       engine.reportCalls.push(input);

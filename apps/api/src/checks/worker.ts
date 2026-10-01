@@ -6,6 +6,7 @@ import {
   CHECK_VERSION,
   type EvidenceCheckOutcome,
   imageEditorIn,
+  ITEM_MATCH_VERSION,
   normalizeDocumentNumber,
   type PdfMetadata,
   readPdfMetadata,
@@ -16,14 +17,18 @@ import type { Asset, AutomatedJob, Evidence, PrismaClient } from "@worthybound/d
 import {
   CAPTURE_CODE_SHOT,
   CAPTURE_SHOT_INSTRUCTIONS,
+  CAPTURE_SHOTS_WITH_CODE,
   type CaptureShot,
   type CheckProblem,
+  MAX_REFERENCE_PHOTOS,
 } from "@worthybound/shared";
 import type { Storage } from "@worthybound/storage";
 import { canonicalJson, sha256Hex } from "@worthybound/trust-engine";
 import type { FastifyBaseLogger } from "fastify";
 import { writeAudit } from "../audit.js";
 import { checkImage, perceptualHash, readAll } from "../evidence/inspect.js";
+import { recordInconclusive, referencePhotos } from "../purchase-checks/service.js";
+import { receiptChecked } from "../transfers/escrow.js";
 import { recordTrust } from "../trust/record.js";
 import { checksAllowed, isCheckedEvidence } from "./queue.js";
 
@@ -98,10 +103,10 @@ function describePdf(m: PdfMetadata): string {
 }
 
 /**
- * Runs queued AI checks of owner evidence and reports on verifier applications (ADR 0013).
- * Results are stored append-only; each evidence result recomputes the asset's Trust Score. A
- * report never changes the application: reviewers decide. One worker per database, like chain
- * sync.
+ * Runs queued AI checks of owner evidence, reports on verifier applications (ADR 0013) and
+ * comparisons of a buyer's photos with an item's recorded photos (ADR 0014). Results are stored
+ * append-only; each evidence result recomputes the asset's Trust Score. A report never changes
+ * the application: reviewers decide. One worker per database, like chain sync.
  */
 export function createAutomatedChecks(options: AutomatedChecksOptions): AutomatedChecks {
   const { prisma, storage, engine, now, log } = options;
@@ -191,8 +196,9 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
           ? {
               shot: evidence.captureShot as CaptureShot,
               instruction: CAPTURE_SHOT_INSTRUCTIONS[evidence.captureShot as CaptureShot],
-              code:
-                evidence.captureShot === CAPTURE_CODE_SHOT ? evidence.captureSession.code : null,
+              code: CAPTURE_SHOTS_WITH_CODE.includes(evidence.captureShot as CaptureShot)
+                ? evidence.captureSession.code
+                : null,
             }
           : null,
       file: {
@@ -245,7 +251,7 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
       },
     });
     if (!evidence || !isCheckedEvidence(evidence)) throw new Skipped("evidence_not_checkable");
-    if (!checksAllowed(evidence.asset)) throw new Skipped("no_consent");
+    if (!checksAllowed(evidence.asset)) throw new Skipped("asset_revoked");
     if (evidence.automatedChecks.length > 0) return;
 
     const outcome = evidence.duplicateOfId
@@ -361,6 +367,153 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
     });
   }
 
+  /** A stored evidence photo, checked against its hash and without its metadata. */
+  async function evidencePhoto(e: Evidence): Promise<Buffer | null> {
+    const stored = await readAll(await storage.read(e.storageKey));
+    if (createHash("sha256").update(stored).digest("hex") !== e.sha256) {
+      log.warn({ evidenceId: e.id }, "stored evidence does not match its hash");
+      return null;
+    }
+    return checkImage(stored).catch(() => null);
+  }
+
+  /**
+   * Compares a buyer's photos, or for a remote check the photos the seller took in the check's
+   * capture session, with the item's recorded photos. A receipt check compares the buyer's photos
+   * of the delivered package and item with the seller's photos before shipping, and its result
+   * releases or holds the escrow.
+   */
+  async function matchItem(job: AutomatedJob): Promise<void> {
+    const check = await prisma.purchaseCheck.findUnique({
+      where: { id: job.entityId },
+      include: { asset: true, photos: true },
+    });
+    if (!check?.photosCompletedAt) throw new Skipped("purchase_check_not_ready");
+    if (check.status !== "OPEN") return;
+    const finish = (reason: "ASSET_REVOKED" | "NO_REFERENCE_PHOTOS") =>
+      prisma.$transaction(async (tx) => {
+        await recordInconclusive(tx, check.id, reason, now());
+        await tx.automatedJob.update({
+          where: { id: job.id },
+          data: { status: "COMPLETED", attempts: { increment: 1 }, updatedAt: now() },
+        });
+      });
+    if (!checksAllowed(check.asset)) return finish("ASSET_REVOKED");
+
+    const reference: { id: string; label: string; data: Buffer }[] = [];
+    const recorded =
+      check.kind === "RECEIPT"
+        ? await shipmentPhotos(check.transferRequestId)
+        : await referencePhotos(prisma, check.assetId);
+    for (const e of recorded) {
+      const data = await evidencePhoto(e);
+      if (!data) continue;
+      const label =
+        check.kind === "RECEIPT"
+          ? `seller photo before shipping: ${e.captureShot}`
+          : e.source === "VERIFIER"
+            ? "verifier photo"
+            : `owner photo: ${e.captureShot}`;
+      reference.push({ id: e.id, label, data });
+    }
+    if (reference.length === 0) return finish("NO_REFERENCE_PHOTOS");
+
+    const order = new Map(check.shots.map((s, i) => [s, i]));
+    const candidate = [];
+    if (check.kind === "REMOTE") {
+      const filmed = await prisma.evidence.findMany({
+        where: {
+          type: "PHOTO",
+          captureShot: { not: CAPTURE_CODE_SHOT },
+          captureSession: { purchaseCheckId: check.id, status: "COMPLETED" },
+        },
+      });
+      for (const e of filmed.sort(
+        (a, b) => (order.get(a.captureShot ?? "") ?? 0) - (order.get(b.captureShot ?? "") ?? 0),
+      )) {
+        const data = await evidencePhoto(e);
+        if (data) candidate.push({ label: `seller photo: ${e.captureShot}`, data });
+      }
+      if (candidate.length === 0) throw new Skipped("remote_check_photos_unreadable");
+    } else {
+      for (const p of [...check.photos].sort(
+        (a, b) => (order.get(a.shot) ?? 0) - (order.get(b.shot) ?? 0),
+      )) {
+        candidate.push({
+          label: `buyer photo: ${p.shot}`,
+          data: await readAll(await storage.read(p.storageKey)),
+        });
+      }
+    }
+    const outcome = await engine.compareItem({
+      asset: { category: check.asset.category, brand: check.asset.brand, model: check.asset.model },
+      reference: reference.map(({ label, data }) => ({ label, data })),
+      candidate,
+    });
+    const at = now();
+    await prisma.$transaction(async (tx) => {
+      await tx.purchaseCheck.update({
+        where: { id: check.id },
+        data: {
+          status: "COMPLETED",
+          itemResult: outcome.result,
+          itemSummary: outcome.summary,
+          itemConfidence: outcome.confidence,
+          engine: engine.id,
+          model: outcome.model,
+          checkVersion: ITEM_MATCH_VERSION,
+          referenceEvidenceIds: reference.map((r) => r.id),
+          itemCheckedAt: at,
+          updatedAt: at,
+        },
+      });
+      await tx.automatedJob.update({
+        where: { id: job.id },
+        data: { status: "COMPLETED", attempts: { increment: 1 }, lastError: null, updatedAt: at },
+      });
+      await writeAudit(
+        tx,
+        {
+          actorId: null,
+          action: "purchase_check.item_checked",
+          targetType: "purchase_check",
+          targetId: check.id,
+          metadata: {
+            result: outcome.result,
+            references: reference.length,
+            engine: engine.id,
+            model: outcome.model,
+          },
+        },
+        null,
+      );
+      if (check.kind === "RECEIPT" && check.transferRequestId) {
+        await receiptChecked(tx, check.transferRequestId, outcome.result, at);
+      }
+    });
+  }
+
+  /** The seller's photos of the item and the sealed package before shipping, in shot order. */
+  async function shipmentPhotos(transferRequestId: string | null) {
+    const session = transferRequestId
+      ? await prisma.captureSession.findFirst({
+          where: { transferRequestId, status: "COMPLETED" },
+          orderBy: [{ completedAt: "desc" }, { id: "desc" }],
+          select: { id: true, shots: true },
+        })
+      : null;
+    if (!session) return [];
+    const photos = await prisma.evidence.findMany({
+      where: { captureSessionId: session.id, type: "PHOTO", mimeType: { startsWith: "image/" } },
+    });
+    return photos
+      .sort(
+        (a, b) =>
+          session.shots.indexOf(a.captureShot ?? "") - session.shots.indexOf(b.captureShot ?? ""),
+      )
+      .slice(0, MAX_REFERENCE_PHOTOS);
+  }
+
   async function fail(job: AutomatedJob, error: unknown): Promise<void> {
     const attempts = job.attempts + 1;
     const final =
@@ -370,21 +523,33 @@ export function createAutomatedChecks(options: AutomatedChecksOptions): Automate
     const message = String((error as Error)?.message ?? error).slice(0, 500);
     log.warn({ jobId: job.id, kind: job.kind, attempts, err: message }, "automated check failed");
     const at = now();
-    await prisma.automatedJob.update({
-      where: { id: job.id },
-      data: {
-        status: final ? "FAILED" : "PENDING",
-        attempts,
-        lastError: message,
-        runAfter: final ? job.runAfter : new Date(at.getTime() + retryDelayMs(attempts)),
-        updatedAt: at,
-      },
+    await prisma.$transaction(async (tx) => {
+      await tx.automatedJob.update({
+        where: { id: job.id },
+        data: {
+          status: final ? "FAILED" : "PENDING",
+          attempts,
+          lastError: message,
+          runAfter: final ? job.runAfter : new Date(at.getTime() + retryDelayMs(attempts)),
+          updatedAt: at,
+        },
+      });
+      // A buyer waiting for a comparison that cannot be made gets an inconclusive result.
+      if (!final || job.kind !== "ITEM_MATCH") return;
+      const check = await tx.purchaseCheck.findUnique({
+        where: { id: job.entityId },
+        select: { status: true, photosCompletedAt: true },
+      });
+      if (check?.status === "OPEN" && check.photosCompletedAt) {
+        await recordInconclusive(tx, job.entityId, "CHECK_FAILED", at);
+      }
     });
   }
 
   async function process(job: AutomatedJob): Promise<void> {
     try {
       if (job.kind === "EVIDENCE_CHECK") await checkEvidence(job);
+      else if (job.kind === "ITEM_MATCH") await matchItem(job);
       else await reportOnVerifier(job);
       // Jobs with nothing left to do (already checked) are closed without a new result.
       await prisma.automatedJob.updateMany({

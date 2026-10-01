@@ -96,6 +96,25 @@ enum TransferStatus {
   EXPIRED
 }
 
+enum TransferDelivery {
+  IN_PERSON
+  /// Shipped, with the payment in escrow until the buyer received and checked the item (ADR 0014).
+  SHIPPED
+}
+
+enum EscrowStatus {
+  AWAITING_PAYMENT
+  PAID
+  SHIPPED
+  DELIVERED
+  /// The buyer reported a problem or the item did not match; an administrator decides.
+  DISPUTED
+  RELEASING
+  RELEASED
+  REFUNDING
+  REFUNDED
+}
+
 enum ProofSource {
   OWNER
   THIRD_PARTY
@@ -256,6 +275,10 @@ enum ChainTransactionKind {
   COMMIT_TRUST_SCORE
   TRANSFER_ASSET
   UPDATE_ASSET_STATUS
+  /// The buyer's payment into a shipped transfer's escrow (ADR 0014).
+  ESCROW_PAYMENT
+  /// The return of a shipped transfer's escrow to the buyer.
+  ESCROW_REFUND
 }
 
 enum ChainEntityType {
@@ -286,6 +309,7 @@ enum AutomatedCheckResult {
 enum AutomatedJobKind {
   EVIDENCE_CHECK
   VERIFIER_REPORT
+  ITEM_MATCH
 }
 
 enum AutomatedJobStatus {
@@ -323,10 +347,13 @@ model User {
   ownerships                Ownership[]
   transfersSent             TransferRequest[]                 @relation("TransferFrom")
   transfersReceived         TransferRequest[]                 @relation("TransferTo")
+  transfersResolved         TransferRequest[]                 @relation("TransferResolvedBy")
   evidenceUploaded          Evidence[]                        @relation("EvidenceUploader")
   evidenceReviewed          Evidence[]                        @relation("EvidenceReviewer")
   evidenceUploads           EvidenceUpload[]
   captureSessions           CaptureSession[]
+  purchaseChecks            PurchaseCheck[]                   @relation("PurchaseCheckBuyer")
+  ownerConfirmations        PurchaseCheck[]                   @relation("PurchaseCheckOwner")
   verifier                  Verifier?                         @relation("VerifierUser")
   verifiersApproved         Verifier[]                        @relation("VerifierApprover")
   permissionsApproved       VerifierCategoryPermission[]
@@ -343,7 +370,6 @@ model User {
   provenanceEvents          ProvenanceEvent[]
   auditLogs                 AuditLog[]
   idempotencyKeys           IdempotencyKey[]
-  automatedChecksConsents   Asset[]                           @relation("AutomatedChecksConsent")
   verifierReportsRequested  VerifierApplicationReport[]
   automatedJobsRequested    AutomatedJob[]
 
@@ -425,28 +451,24 @@ model Asset {
   verificationLevel           VerificationLevel  @default(UNVERIFIED)
   /// Set once when the owner publishes the passport. Identity fields are locked from then on.
   publishedAt                 DateTime?          @db.Timestamptz(3)
-  /// Who agreed to send this asset's private evidence to the AI check service, and when. Checks
-  /// run only while this is the current owner (ADR 0013).
-  automatedChecksConsentById  String?            @db.Uuid
-  automatedChecksConsentAt    DateTime?          @db.Timestamptz(3)
   createdAt                   DateTime           @default(now()) @db.Timestamptz(3)
   updatedAt                   DateTime           @updatedAt @db.Timestamptz(3)
 
-  owner                  User                  @relation(fields: [ownerId], references: [id], onDelete: Restrict)
-  automatedChecksConsent User?                 @relation("AutomatedChecksConsent", fields: [automatedChecksConsentById], references: [id], onDelete: Restrict)
-  statusEvents           AssetStatusEvent[]
-  ownerships             Ownership[]
-  transferRequests       TransferRequest[]
-  evidence               Evidence[]
-  evidenceUploads        EvidenceUpload[]
-  captureSessions        CaptureSession[]
-  evidenceCommitments    EvidenceCommitment[]
-  verificationRequests   VerificationRequest[]
-  attestations           Attestation[]
-  disputes               Dispute[]
-  trustScoreSnapshots    TrustScoreSnapshot[]
-  provenanceEvents       ProvenanceEvent[]
-  automatedChecks        AutomatedCheck[]
+  owner                User                  @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  statusEvents         AssetStatusEvent[]
+  ownerships           Ownership[]
+  transferRequests     TransferRequest[]
+  evidence             Evidence[]
+  evidenceUploads      EvidenceUpload[]
+  captureSessions      CaptureSession[]
+  purchaseChecks       PurchaseCheck[]
+  evidenceCommitments  EvidenceCommitment[]
+  verificationRequests VerificationRequest[]
+  attestations         Attestation[]
+  disputes             Dispute[]
+  trustScoreSnapshots  TrustScoreSnapshot[]
+  provenanceEvents     ProvenanceEvent[]
+  automatedChecks      AutomatedCheck[]
 
   @@index([ownerId])
   @@index([serialFingerprint])
@@ -519,12 +541,47 @@ model TransferRequest {
   createdAt       DateTime       @default(now()) @db.Timestamptz(3)
   updatedAt       DateTime       @updatedAt @db.Timestamptz(3)
 
-  asset     Asset      @relation(fields: [assetId], references: [id], onDelete: Restrict)
-  fromUser  User       @relation("TransferFrom", fields: [fromUserId], references: [id], onDelete: Restrict)
-  toUser    User?      @relation("TransferTo", fields: [toUserId], references: [id], onDelete: Restrict)
-  ownership Ownership?
+  // ─── Escrow of a shipped transfer (ADR 0014) ───
+  delivery            TransferDelivery @default(IN_PERSON)
+  /// Set when the recipient accepts a shipped transfer. The escrow is held in `nonceAccount`.
+  escrowStatus        EscrowStatus?
+  /// Durable nonce account of the buyer's payment transaction, with a price.
+  paymentNonceAccount String?
+  /// Unsigned payment of the price into escrow (base64 wire bytes), and the buyer's signature.
+  paymentTransaction  String?
+  paymentSignature    String?
+  paidAt              DateTime?        @db.Timestamptz(3)
+  /// The seller films the item and the sealed package, and ships, before this.
+  shipBy              DateTime?        @db.Timestamptz(3)
+  shippedAt           DateTime?        @db.Timestamptz(3)
+  carrier             String?
+  trackingNumber      String?
+  /// The buyer confirms delivery before this, or can then cancel or extend it.
+  deliveryDueAt       DateTime?        @db.Timestamptz(3)
+  deliveryExtensions  Int              @default(0)
+  deliveredAt         DateTime?        @db.Timestamptz(3)
+  /// The sale is released to the seller at this time unless the buyer reported a problem.
+  releaseAt           DateTime?        @db.Timestamptz(3)
+  disputedAt          DateTime?        @db.Timestamptz(3)
+  /// What the buyer reported, or `receipt_no_match`.
+  disputeReason       String?
+  /// The administrator who decided a dispute, and their note.
+  resolvedById        String?          @db.Uuid
+  resolution          String?
+  resolvedAt          DateTime?        @db.Timestamptz(3)
+
+  asset           Asset            @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  fromUser        User             @relation("TransferFrom", fields: [fromUserId], references: [id], onDelete: Restrict)
+  toUser          User?            @relation("TransferTo", fields: [toUserId], references: [id], onDelete: Restrict)
+  resolvedBy      User?            @relation("TransferResolvedBy", fields: [resolvedById], references: [id], onDelete: Restrict)
+  ownership       Ownership?
+  /// The seller's capture sessions of the item and the sealed package before shipping.
+  captureSessions CaptureSession[]
+  /// The buyer's photos of the package and the item on receipt.
+  receiptCheck    PurchaseCheck?
 
   @@index([assetId, status])
+  @@index([escrowStatus])
   @@map("transfer_requests")
 }
 
@@ -556,7 +613,8 @@ model Evidence {
   reviewReason          String?
   /// Set on evidence added by the verifier assigned to this request (source VERIFIER).
   verificationRequestId String?            @db.Uuid
-  /// Set on photos taken in a capture session (ADR 0013), with the shot they are.
+  /// Set on photos taken in a capture session (ADR 0013), with the shot they are; the VIDEO shot
+  /// of a remote check's session is a video (ADR 0014).
   captureSessionId      String?            @db.Uuid
   captureShot           String?
   originalFilename      String?
@@ -638,27 +696,131 @@ enum CaptureSessionStatus {
 
 /// A timed photo session (ADR 0013): the owner photographs the required shots with the app's
 /// camera, one of them next to the one-time code written on paper, while the code is valid.
+/// A session for a remote check uses the check's code and adds a video (ADR 0014).
 model CaptureSession {
-  id          String               @id @default(uuid(7)) @db.Uuid
-  assetId     String               @db.Uuid
-  ownerId     String               @db.Uuid
-  code        String
+  id                String               @id @default(uuid(7)) @db.Uuid
+  assetId           String               @db.Uuid
+  ownerId           String               @db.Uuid
+  /// The remote check the seller films the item for; null for the owner's own sessions.
+  purchaseCheckId   String?              @db.Uuid
+  /// The shipped transfer the seller films the item and the sealed package for.
+  transferRequestId String?              @db.Uuid
+  code              String
   /// Shots required for the asset's category when the session started (CAPTURE_SHOTS).
-  shots       String[]
-  status      CaptureSessionStatus @default(OPEN)
-  expiresAt   DateTime             @db.Timestamptz(3)
-  completedAt DateTime?            @db.Timestamptz(3)
-  createdAt   DateTime             @default(now()) @db.Timestamptz(3)
-  updatedAt   DateTime             @updatedAt @db.Timestamptz(3)
+  shots             String[]
+  status            CaptureSessionStatus @default(OPEN)
+  expiresAt         DateTime             @db.Timestamptz(3)
+  completedAt       DateTime?            @db.Timestamptz(3)
+  createdAt         DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime             @updatedAt @db.Timestamptz(3)
 
-  asset    Asset            @relation(fields: [assetId], references: [id], onDelete: Restrict)
-  owner    User             @relation(fields: [ownerId], references: [id], onDelete: Restrict)
-  evidence Evidence[]
-  uploads  EvidenceUpload[]
+  asset           Asset            @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  owner           User             @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  purchaseCheck   PurchaseCheck?   @relation(fields: [purchaseCheckId], references: [id], onDelete: Restrict)
+  transferRequest TransferRequest? @relation(fields: [transferRequestId], references: [id], onDelete: Restrict)
+  evidence        Evidence[]
+  uploads         EvidenceUpload[]
 
   @@index([assetId, createdAt])
   @@index([ownerId, createdAt])
+  @@index([purchaseCheckId])
+  @@index([transferRequestId])
   @@map("capture_sessions")
+}
+
+enum PurchaseCheckStatus {
+  OPEN
+  /// The item check has a result.
+  COMPLETED
+  /// The buyer did not take every photo in time.
+  EXPIRED
+}
+
+enum ItemMatchResult {
+  MATCH
+  NO_MATCH
+  INCONCLUSIVE
+}
+
+enum PurchaseCheckKind {
+  IN_PERSON
+  /// The seller films the item with the check's code in a capture session.
+  REMOTE
+  /// The buyer photographs a shipped item on receipt; compared with the seller's photos before
+  /// shipping.
+  RECEIPT
+}
+
+/// A buyer's check of an item before buying (ADR 0014). In person, the seller signs the buyer's
+/// one-time code with the owner's wallet, and the buyer photographs the item. Remotely, the seller
+/// films the item with the code in view in a capture session. The photos are compared with the
+/// asset's recorded photos. The buyer never learns the seller's wallet or identity.
+model PurchaseCheck {
+  id                   String              @id @default(uuid(7)) @db.Uuid
+  assetId              String              @db.Uuid
+  buyerId              String              @db.Uuid
+  kind                 PurchaseCheckKind   @default(IN_PERSON)
+  /// One-time code the seller signs (ownerConfirmationMessage); replaced when it expires.
+  /// For a remote check, the code the seller shows in the video, valid until the check expires.
+  ownerCode            String
+  ownerCodeExpiresAt   DateTime            @db.Timestamptz(3)
+  /// The owner who signed the code, their signature (base58) and when.
+  ownerConfirmedById   String?             @db.Uuid
+  ownerSignature       String?
+  ownerConfirmedAt     DateTime?           @db.Timestamptz(3)
+  /// Shots the buyer takes (purchaseCheckShots) when the check started; for a remote check, the
+  /// shots the seller takes (remoteCheckShots).
+  shots                String[]
+  status               PurchaseCheckStatus @default(OPEN)
+  /// When the last photo arrived (or the seller's session completed) and the comparison was
+  /// queued.
+  photosCompletedAt    DateTime?           @db.Timestamptz(3)
+  itemResult           ItemMatchResult?
+  /// Why the result is INCONCLUSIVE without a comparison (ITEM_MATCH_REASONS).
+  itemReason           String?
+  /// Comparison details, for administrators only.
+  itemSummary          String?
+  itemConfidence       Float?
+  engine               String?
+  model                String?
+  checkVersion         String?
+  /// Recorded photos the buyer's photos were compared with.
+  referenceEvidenceIds String[]
+  itemCheckedAt        DateTime?           @db.Timestamptz(3)
+  /// The shipped transfer a receipt check belongs to.
+  transferRequestId    String?             @unique @db.Uuid
+  expiresAt            DateTime            @db.Timestamptz(3)
+  createdAt            DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime            @updatedAt @db.Timestamptz(3)
+
+  asset            Asset                @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  buyer            User                 @relation("PurchaseCheckBuyer", fields: [buyerId], references: [id], onDelete: Restrict)
+  ownerConfirmedBy User?                @relation("PurchaseCheckOwner", fields: [ownerConfirmedById], references: [id], onDelete: Restrict)
+  transferRequest  TransferRequest?     @relation(fields: [transferRequestId], references: [id], onDelete: Restrict)
+  photos           PurchaseCheckPhoto[]
+  captureSessions  CaptureSession[]
+
+  @@index([assetId, createdAt])
+  @@index([buyerId, createdAt])
+  @@map("purchase_checks")
+}
+
+/// Append-only. A photo the buyer took with the app's camera during a purchase check. Kept
+/// private: never evidence of the asset, and shown only to the buyer.
+model PurchaseCheckPhoto {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  checkId    String   @db.Uuid
+  shot       String
+  /// Private object-storage key of the metadata-free JPEG.
+  storageKey String   @unique
+  sha256     String
+  sizeBytes  Int
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  check PurchaseCheck @relation(fields: [checkId], references: [id], onDelete: Restrict)
+
+  @@unique([checkId, shot])
+  @@map("purchase_check_photos")
 }
 
 /// Append-only. Merkle root over a batch of evidence hashes, anchored on-chain.
@@ -1071,7 +1233,7 @@ model VerifierApplicationReport {
 model AutomatedJob {
   id            String             @id @default(uuid(7)) @db.Uuid
   kind          AutomatedJobKind
-  /// Evidence (EVIDENCE_CHECK) or verifier (VERIFIER_REPORT).
+  /// Evidence (EVIDENCE_CHECK), verifier (VERIFIER_REPORT) or purchase check (ITEM_MATCH).
   entityId      String             @db.Uuid
   status        AutomatedJobStatus @default(PENDING)
   attempts      Int                @default(0)

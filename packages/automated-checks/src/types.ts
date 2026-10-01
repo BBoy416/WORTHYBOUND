@@ -5,12 +5,15 @@ import type {
   CheckProblem,
   EvidenceType,
   ItemCondition,
+  ItemMatchResult,
   VerifierEntityType,
   VerifierReportRecommendation,
 } from "@worthybound/shared";
 
 /** Version of the evidence checks, prompt and decision rule; stored with every result. */
 export const CHECK_VERSION = "evidence-check-v3";
+/** Version of the item comparison prompt and decision rule; stored with every result. */
+export const ITEM_MATCH_VERSION = "item-match-v2";
 /** Version of the verifier application report prompt; stored with every report. */
 export const REPORT_VERSION = "verifier-report-v1";
 
@@ -66,6 +69,32 @@ export interface EvidenceCheckOutcome {
   model: string;
 }
 
+/** A photo prepared by the caller: an oriented JPEG without metadata. */
+export interface CheckPhoto {
+  /** What the photo shows, e.g. a capture shot or `verifier photo`. */
+  label: string;
+  data: Uint8Array;
+}
+
+export interface ItemMatchInput {
+  asset: { category: AssetCategory; brand: string | null; model: string | null };
+  /** The asset's recorded photos: the verifier's and the latest capture session's. */
+  reference: CheckPhoto[];
+  /**
+   * Photos a buyer just took of the item in front of them, or the seller took for a remote check
+   * (ADR 0014).
+   */
+  candidate: CheckPhoto[];
+}
+
+export interface ItemMatchOutcome {
+  result: ItemMatchResult;
+  /** Details for administrators only. */
+  summary: string;
+  confidence: number;
+  model: string;
+}
+
 export interface VerifierApplicationInput {
   entityType: VerifierEntityType;
   businessName: string | null;
@@ -93,6 +122,8 @@ export interface CheckEngine {
   /** Stored as the engine of every result, e.g. `openai`. */
   readonly id: string;
   checkEvidence(input: EvidenceCheckInput): Promise<EvidenceCheckOutcome>;
+  /** Whether the candidate photos show the same physical item as the reference photos. */
+  compareItem(input: ItemMatchInput): Promise<ItemMatchOutcome>;
   reportOnVerifier(input: VerifierApplicationInput): Promise<VerifierReportOutcome>;
 }
 

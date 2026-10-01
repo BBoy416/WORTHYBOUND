@@ -12,15 +12,21 @@ import type {
   ChainTransactionStatus,
   CheckProblem,
   ClaimType,
+  EscrowStatus,
   EvidenceType,
   EvidenceVisibility,
   IdentityStatus,
   ItemCondition,
+  ItemMatchResult,
   ProofSource,
+  PurchaseCheckKind,
+  PurchaseCheckStatus,
+  RemoteCodeResult,
   ReviewStatus,
   Role,
   TemplateVersionStatus,
   TokenizationStatus,
+  TransferDelivery,
   TransferStatus,
   VerificationLevel,
   VerificationRequestStatus,
@@ -124,11 +130,58 @@ export interface CaptureSession {
   createdAt: string;
 }
 
+/** A buyer's check before buying (`/purchase-checks/:id`); never names the seller. */
+export interface PurchaseCheck {
+  id: string;
+  kind: PurchaseCheckKind;
+  status: PurchaseCheckStatus;
+  asset: {
+    wbId: string;
+    category: AssetCategory;
+    brand: string | null;
+    model: string | null;
+    status: AssetStatus;
+    verificationLevel: VerificationLevel;
+    transferBlocked: boolean;
+  };
+  owner: {
+    confirmed: boolean;
+    confirmedAt: string | null;
+    /** For the seller to sign, while valid and not yet signed; remotely, the code to film. */
+    code: string | null;
+    codeExpiresAt: string | null;
+    message: string | null;
+    /** Remotely, once filmed: what the AI check found in the seller's code photo. */
+    codeCheck: RemoteCodeResult | null;
+  };
+  item: {
+    shots: { shot: CaptureShot; instruction: string; receivedAt: string | null }[];
+    comparing: boolean;
+    /** The seller's video for a remote check can be watched. */
+    videoAvailable: boolean;
+    result: ItemMatchResult | null;
+    reason: string | null;
+    checkedAt: string | null;
+    recordedPhotos: { path: string }[];
+  };
+  expiresAt: string;
+  createdAt: string;
+}
+
+/** A buyer's open remote check, for the owner (`/assets/:wbId/remote-checks`); never names them. */
+export interface RemoteCheckRequest {
+  id: string;
+  /** Written on paper and kept in view while filming. */
+  code: string;
+  expiresAt: string;
+  filmed: boolean;
+  session: CaptureSession | null;
+  createdAt: string;
+}
+
 /** `GET /assets/:wbId/automated-checks`. */
-export interface AutomatedChecksConsent {
+export interface AutomatedChecksAvailability {
   available: boolean;
-  enabled: boolean;
-  enabledAt: string | null;
 }
 
 export interface TemplateSummary {
@@ -342,6 +395,10 @@ export interface Transfer {
   asset: { wbId: string; category: AssetCategory; brand: string | null; model: string | null };
   fromWalletAddress: string;
   toWalletAddress: string;
+  /** Handed over in person, or shipped with the price in escrow. */
+  delivery: TransferDelivery;
+  /** Null for transfers in person, and until a shipped transfer is accepted. */
+  escrow: TransferEscrow | null;
   /** Unsigned transaction (base64) to sign with the wallet, while accepted. */
   transaction: string | null;
   signedBySeller: boolean;
@@ -354,3 +411,35 @@ export interface Transfer {
   cancelledAt: string | null;
   createdAt: string;
 }
+
+type ChainJob = { status: ChainTransactionStatus; signature: string | null } | null;
+
+/** A shipped transfer's escrow (ADR 0014). */
+export interface TransferEscrow {
+  status: EscrowStatus;
+  /** Payment into escrow (base64) for the buyer to sign, once both signed the transfer. */
+  paymentTransaction: string | null;
+  awaitingYourPayment: boolean;
+  payment: ChainJob;
+  refund: ChainJob;
+  paidAt: string | null;
+  shipBy: string | null;
+  shipmentSessionId: string | null;
+  shipmentFilmed: boolean;
+  shippedAt: string | null;
+  carrier: string | null;
+  trackingNumber: string | null;
+  deliveryDueAt: string | null;
+  deliveryExtensions: number;
+  deliveredAt: string | null;
+  /** The buyer's photos of the package and the item (`/checks/:id`). */
+  receiptCheckId: string | null;
+  releaseAt: string | null;
+  disputedAt: string | null;
+  disputeReason: string | null;
+  resolution: string | null;
+  resolvedAt: string | null;
+}
+
+/** `GET /admin/transfers/disputes`: both parties, nothing to sign. */
+export type AdminTransfer = Omit<Transfer, "role" | "transaction" | "awaitingYourSignature">;
