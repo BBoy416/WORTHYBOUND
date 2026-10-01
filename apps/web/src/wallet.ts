@@ -17,9 +17,27 @@ export function walletProvider(): SolanaProvider | null {
   return window.phantom?.solana ?? window.solana ?? null;
 }
 
+/** Phones and tablets, where wallets are apps and no provider is injected in the browser. */
+function isMobile(): boolean {
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
+/** Reopens the current page in Phantom's in-app browser, which does inject a provider. */
+function openInPhantom(): void {
+  const target = encodeURIComponent(window.location.href);
+  const ref = encodeURIComponent(window.location.origin);
+  window.location.href = `https://phantom.app/ul/browse/${target}?ref=${ref}`;
+}
+
 export async function connectWallet(): Promise<{ provider: SolanaProvider; address: string }> {
   const provider = walletProvider();
-  if (!provider) throw new Error("No Solana wallet found. Install Phantom and reload the page.");
+  if (!provider) {
+    if (isMobile()) {
+      openInPhantom();
+      throw new Error("Opening Phantom. Continue in the Phantom app.");
+    }
+    throw new Error("No Solana wallet found. Install Phantom and reload the page.");
+  }
   const { publicKey } = await provider.connect();
   return { provider, address: publicKey.toString() };
 }

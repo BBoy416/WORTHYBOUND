@@ -28,8 +28,9 @@ export function HomePage() {
           </h1>
           <p className="lead">
             Give a watch, artwork or collectible a passport: evidence in a sealed vault,
-            verification by approved professionals, and a non-transferable token on Solana. Anyone
-            can tokenize an asset. Trust must be earned.
+            verification by approved professionals, and a token on Solana that transfers only
+            through WorthyBound's verified transfer process. Anyone can tokenize an asset. Trust
+            must be earned.
           </p>
           <form className="lookup" onSubmit={lookUp}>
             <input
