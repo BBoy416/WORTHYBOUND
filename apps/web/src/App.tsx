@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import solanaWordmark from "./assets/solana-wordmark.svg?no-inline";
 import { ErrorText, Loading, useAction } from "./components/ui.js";
 import { Logo } from "./components/Logo.js";
 import { shortAddress } from "./format.js";
@@ -163,9 +162,6 @@ export function App() {
           verification; it does not guarantee authenticity, ownership, legal title or value.
         </p>
         <p className="muted tiny">WorthyBound · Solana devnet</p>
-        <p className="muted tiny powered-by">
-          Powered by <img src={solanaWordmark} height={14} alt="Solana" />
-        </p>
       </footer>
     </>
   );

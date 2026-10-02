@@ -1,6 +1,7 @@
 import { isWbId } from "@worthybound/shared";
 import { useState, type FormEvent } from "react";
 import heroMark from "../assets/logo-hero.webp";
+import solanaWordmark from "../assets/solana-wordmark.svg?no-inline";
 import { ErrorText } from "../components/ui.js";
 import { useRouter } from "../router.js";
 import { useSession } from "../session.js";
@@ -42,6 +43,9 @@ export function HomePage() {
             <button type="submit">Check</button>
           </form>
           <ErrorText error={error} />
+          <p className="muted tiny powered-by">
+            Powered by <img src={solanaWordmark} height={14} alt="Solana" />
+          </p>
           {me && (
             <p>
               <a
