@@ -664,6 +664,17 @@ legend {
   max-width: 760px;
   margin: 0.3rem auto;
 }
+.powered-by {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+.powered-by img {
+  height: 14px;
+  width: auto;
+  opacity: 0.7;
+}
 
 @media (max-width: 760px) {
   .hero {
