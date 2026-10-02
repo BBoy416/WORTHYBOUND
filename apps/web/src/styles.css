@@ -440,6 +440,17 @@ legend {
   margin: 1.5rem 0 0.5rem;
   max-width: 520px;
 }
+.powered-by {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.75rem 0;
+}
+.powered-by img {
+  height: 14px;
+  width: auto;
+  opacity: 0.7;
+}
 .steps {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -663,17 +674,6 @@ legend {
 .footer p {
   max-width: 760px;
   margin: 0.3rem auto;
-}
-.powered-by {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.4rem;
-}
-.powered-by img {
-  height: 14px;
-  width: auto;
-  opacity: 0.7;
 }
 
 @media (max-width: 760px) {
