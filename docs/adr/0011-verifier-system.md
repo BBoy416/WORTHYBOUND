@@ -79,9 +79,8 @@ minute and public profiles to 120 per IP per minute.
 
 - No verifier can be approved until the operator records a KYC result; a provider integration
   replaces `kyc:record` later.
-- Suspending or revoking a verifier does not yet re-evaluate assets already `VERIFIED`; Phase 9
-  connects verifier status to template evaluation and the Trust Score. No attestations exist
-  before Phase 8.
+- Suspending or revoking a verifier re-evaluates every asset they attested: the Trust Score is
+  recomputed and `VERIFIED` returns to `ACTIVE` where no template is met any more (ADR 0015).
 - Verifiers adding and reviewing evidence needs a verifier assigned to the asset, so it comes with
   verification requests in Phase 8. The verifier counters and on-chain verifier registration
   (`chainVerifierAddress`) are not used yet. Phase 8 adds requests, evidence review and signed
