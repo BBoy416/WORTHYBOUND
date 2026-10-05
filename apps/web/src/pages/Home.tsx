@@ -28,10 +28,12 @@ export function HomePage() {
             Real assets. <span className="gold">Proven identity.</span>
           </h1>
           <p className="lead">
-            Give a watch, artwork or collectible a passport: evidence in a sealed vault,
-            verification by approved professionals, and a token on Solana that transfers only
-            through WorthyBound's verified transfer process. Anyone can tokenize an asset. Trust
-            must be earned.
+            Give a watch, artwork, piece of jewelry, collectible or car a public passport. Seal its
+            evidence in a vault, tokenize it on Solana once your identity is verified, and have
+            approved professionals review it online or in person to raise its Trust Score. Buyers
+            check the passport and the item before paying, and the token changes hands only through
+            WorthyBound's controlled transfer. A token is not proof of authenticity: trust must be
+            earned.
           </p>
           <form className="lookup" onSubmit={lookUp}>
             <input
@@ -68,14 +70,17 @@ export function HomePage() {
             "Register",
             "Describe the item. Its serial is fingerprinted so it cannot be registered twice.",
           ],
-          ["Prove", "Add photos, receipts and certificates. Every file is hashed and sealed."],
           [
-            "Verify",
-            "An approved professional inspects it and signs an attestation with their wallet.",
+            "Prove",
+            "Add live camera photos, receipts and certificates. Every file is hashed, sealed and checked automatically.",
           ],
           [
             "Tokenize",
-            "The asset is minted on Solana, frozen, and moves only through WorthyBound.",
+            "Once your identity is verified, the asset is minted on Solana, frozen, and moves only through WorthyBound.",
+          ],
+          [
+            "Verify (optional)",
+            "An approved professional inspects it online or in person and signs an attestation with their wallet. This raises the Trust Score.",
           ],
         ].map(([title, text], i) => (
           <div key={title} className="step">
