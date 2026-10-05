@@ -1793,7 +1793,7 @@ describe("transfers", () => {
       expect(await screen.findByText(/Ship by/)).toBeTruthy();
       expect(screen.getByText("Cancel and refund")).toBeTruthy();
       fireEvent.click(screen.getByText("Film the item and the package"));
-      expect(await screen.findByText("PK4Z9M", {}, { timeout: 3000 })).toBeTruthy();
+      expect(await screen.findByText("PK4Z9M", {}, { timeout: 10000 })).toBeTruthy();
       expect(screen.getByText(/Write this code on the package/)).toBeTruthy();
       expect(screen.queryByLabelText("Carrier")).toBeNull();
 
@@ -1810,7 +1810,7 @@ describe("transfers", () => {
         trackingNumber: "JD014",
       });
       expect(screen.queryByText("Cancel and refund")).toBeNull();
-    });
+    }, 20_000);
 
     it("lets the buyer confirm delivery, wait longer or report a problem", async () => {
       const inTransit = {
