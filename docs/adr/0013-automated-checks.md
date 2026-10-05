@@ -142,8 +142,10 @@ It is enabled by `OPENAI_API_KEY` (model: `OPENAI_MODEL`); without it the checks
 - Check version `evidence-check-v3` tells the check what each shot should show and, for the code
   shot, the code: a missing or unreadable code is `CAPTURE_CODE_MISSING` (inconclusive), a
   different code `CAPTURE_CODE_MISMATCH` (fails the file). Files checked under an earlier version
-  are checked again once. The Trust Score does not yet treat captured photos differently from
-  other owner photos.
+  are checked again once.
+- **Captured photos in the Trust Score** (2026-10-05). A passed check of a photo from a completed
+  session weighs 1.5 times as much as other owner photos (`capturedMultiplier`); photos from an
+  expired session count as ordinary photos. Engine `1.3.0`, weights `weights-2026.4`.
 
 ## Consequences
 

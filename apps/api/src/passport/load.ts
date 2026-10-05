@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from "@worthybound/database";
 import { type PassportSource, verifierPublicName } from "@worthybound/shared";
+import { notUpheld, OPEN_DISPUTE_STATUSES } from "../disputes/view.js";
 import { CHECK_PROOF_PREFIX } from "../trust/record.js";
 
 /**
@@ -56,88 +57,105 @@ export async function loadPassportSource(
   if (!asset?.publishedAt) return null;
   const { id, ...publicAsset } = asset;
 
-  const [trust, custody, transferCount, evidence, commitments, attestations, provenance, chain] =
-    await Promise.all([
-      prisma.trustScoreSnapshot.findFirst({
-        where: { assetId: id },
-        orderBy: [{ computedAt: "desc" }, { id: "desc" }],
-        select: {
-          score: true,
-          computedAt: true,
-          engineVersion: true,
-          weightsVersion: true,
-          factors: true,
-          deductions: true,
-        },
-      }),
-      prisma.ownership.findFirst({
-        where: { assetId: id, endedAt: null },
-        select: { startedAt: true },
-      }),
-      prisma.ownership.count({ where: { assetId: id, reason: "TRANSFER" } }),
-      prisma.evidence.findMany({
-        where: { assetId: id, visibility: "PUBLIC", reviewStatus: { not: "REJECTED" } },
-        select: {
-          id: true,
-          type: true,
-          source: true,
-          visibility: true,
-          reviewStatus: true,
-          sha256: true,
-          mimeType: true,
-          capturedAt: true,
-          createdAt: true,
-        },
-      }),
-      prisma.evidenceCommitment.findMany({
-        where: { assetId: id },
-        select: { merkleRoot: true, evidenceCount: true, createdAt: true },
-      }),
-      prisma.attestation.findMany({
-        where: { assetId: id },
-        select: {
-          id: true,
-          claimType: true,
-          result: true,
-          method: true,
-          assuranceLevel: true,
-          conditionGrade: true,
-          status: true,
-          issuedAt: true,
-          expiresAt: true,
-          signedPayloadHash: true,
-          signature: true,
-          chainAttestationAddress: true,
-          verifier: { select: { id: true, businessName: true, entityType: true, status: true } },
-        },
-      }),
-      prisma.provenanceEvent.findMany({
-        where: { assetId: id },
-        orderBy: { sequence: "asc" },
-        select: { sequence: true, type: true, occurredAt: true, hash: true, prevHash: true },
-      }),
-      prisma.chainTransaction.findMany({
-        where: {
-          status: { in: ["CONFIRMED", "FINALIZED"] },
-          OR: [
-            { entityType: "ASSET", entityId: id },
-            {
-              entityType: "TRANSFER_REQUEST",
-              entityId: {
-                in: (
-                  await prisma.transferRequest.findMany({
-                    where: { assetId: id, status: "COMPLETED" },
-                    select: { id: true },
-                  })
-                ).map((t) => t.id),
-              },
+  const [
+    trust,
+    custody,
+    transferCount,
+    openDisputes,
+    evidence,
+    commitments,
+    attestations,
+    provenance,
+    chain,
+  ] = await Promise.all([
+    prisma.trustScoreSnapshot.findFirst({
+      where: { assetId: id },
+      orderBy: [{ computedAt: "desc" }, { id: "desc" }],
+      select: {
+        score: true,
+        computedAt: true,
+        engineVersion: true,
+        weightsVersion: true,
+        factors: true,
+        deductions: true,
+      },
+    }),
+    prisma.ownership.findFirst({
+      where: { assetId: id, endedAt: null },
+      select: { startedAt: true },
+    }),
+    prisma.ownership.count({ where: { assetId: id, reason: "TRANSFER" } }),
+    prisma.dispute.count({
+      where: { assetId: id, status: { in: [...OPEN_DISPUTE_STATUSES] } },
+    }),
+    prisma.evidence.findMany({
+      where: {
+        assetId: id,
+        visibility: "PUBLIC",
+        reviewStatus: { not: "REJECTED" },
+        ...notUpheld,
+      },
+      select: {
+        id: true,
+        type: true,
+        source: true,
+        visibility: true,
+        reviewStatus: true,
+        sha256: true,
+        mimeType: true,
+        capturedAt: true,
+        createdAt: true,
+      },
+    }),
+    prisma.evidenceCommitment.findMany({
+      where: { assetId: id },
+      select: { merkleRoot: true, evidenceCount: true, createdAt: true },
+    }),
+    prisma.attestation.findMany({
+      where: { assetId: id },
+      select: {
+        id: true,
+        claimType: true,
+        result: true,
+        method: true,
+        assuranceLevel: true,
+        conditionGrade: true,
+        status: true,
+        issuedAt: true,
+        expiresAt: true,
+        signedPayloadHash: true,
+        signature: true,
+        chainAttestationAddress: true,
+        verifier: { select: { id: true, businessName: true, entityType: true, status: true } },
+      },
+    }),
+    prisma.provenanceEvent.findMany({
+      where: { assetId: id },
+      orderBy: { sequence: "asc" },
+      select: { sequence: true, type: true, occurredAt: true, hash: true, prevHash: true },
+    }),
+    prisma.chainTransaction.findMany({
+      where: {
+        status: { in: ["CONFIRMED", "FINALIZED"] },
+        OR: [
+          { entityType: "ASSET", entityId: id },
+          {
+            entityType: "TRANSFER_REQUEST",
+            entityId: {
+              in: (
+                await prisma.transferRequest.findMany({
+                  where: { assetId: id, status: "COMPLETED" },
+                  select: { id: true },
+                })
+              ).map((t) => t.id),
             },
-          ],
-        },
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-        select: { kind: true, cluster: true, status: true, signature: true, confirmedAt: true },
-      }),
-    ]);
+          },
+        ],
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: { kind: true, cluster: true, status: true, signature: true, confirmedAt: true },
+    }),
+  ]);
 
   return {
     asset: publicAsset,
@@ -149,6 +167,7 @@ export async function loadPassportSource(
     },
     automatedChecks: trust ? await passedAutomatedChecks(prisma, trust) : null,
     custody: { currentSince: custody?.startedAt ?? null, transferCount },
+    openDisputes,
     evidence,
     evidenceCommitments: commitments,
     attestations: attestations.map(({ verifier, ...a }) => ({

@@ -36,6 +36,7 @@ import { Link } from "../router.js";
 import { useSession } from "../session.js";
 import type {
   AdminCheck,
+  AdminDispute,
   AdminTransfer,
   AdminTemplate,
   AdminTemplateVersion,
@@ -45,7 +46,7 @@ import type {
   VerifierSummary,
 } from "../types.js";
 
-type Tab = "verifiers" | "templates" | "roles" | "checks" | "disputes";
+type Tab = "verifiers" | "templates" | "roles" | "checks" | "disputes" | "escrow";
 
 const ACTION_LABELS: Record<string, string> = {
   UNDER_REVIEW: "Start review",
@@ -81,6 +82,9 @@ export function AdminPage({ tab }: { tab: Tab }) {
               AI checks
             </TabLink>
             <TabLink to="/admin/disputes" active={current === "disputes"}>
+              Disputes
+            </TabLink>
+            <TabLink to="/admin/escrow" active={current === "escrow"}>
               Escrow disputes
             </TabLink>
           </nav>
@@ -91,6 +95,7 @@ export function AdminPage({ tab }: { tab: Tab }) {
       {current === "roles" && <RolesTab />}
       {current === "checks" && <ChecksTab />}
       {current === "disputes" && <DisputesTab />}
+      {current === "escrow" && <EscrowTab />}
     </div>
   );
 }
@@ -854,6 +859,150 @@ function ChecksTab() {
   );
 }
 
+// ─── Disputes ─────────────────────────────────────────────────────────────────
+
+const DISPUTE_FILTERS = ["OPEN", "UNDER_REVIEW", "UPHELD", "REJECTED", "WITHDRAWN"] as const;
+const ASSET_OUTCOMES = ["ACTIVE", "REVERIFICATION_REQUIRED", "REVOKED"] as const;
+
+/** Reports about items, attestations and photos: review, then uphold or reject (ADR 0017). */
+function DisputesTab() {
+  const [status, setStatus] = useState<string>("");
+  const list = useLoad(
+    () => get<{ items: AdminDispute[] }>(`/admin/disputes${status ? `?status=${status}` : ""}`),
+    [status],
+  );
+  return (
+    <Card title="Disputes">
+      <p className="muted small">
+        Open disputes lower the item's Trust Score. Holding the item marks it DISPUTED, which blocks
+        transfers and cancels an open one. Upholding a dispute about an attestation revokes it;
+        about a photo, removes it from the passport and the score. You cannot review or decide a
+        dispute you opened.
+      </p>
+      <Field label="Status">
+        <select value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="">Open and under review</option>
+          {DISPUTE_FILTERS.map((s) => (
+            <option key={s} value={s}>
+              {humanize(s)}
+            </option>
+          ))}
+        </select>
+      </Field>
+      {!list.data ? (
+        <Loading error={list.error} />
+      ) : list.data.items.length === 0 ? (
+        <p className="muted">No disputes.</p>
+      ) : (
+        <ul className="list">
+          {list.data.items.map((d) => (
+            <DisputeItem key={d.id} dispute={d} onChange={list.reload} />
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+function DisputeItem({ dispute: d, onChange }: { dispute: AdminDispute; onChange: () => void }) {
+  const [hold, setHold] = useState(false);
+  const [resolution, setResolution] = useState("");
+  const [assetStatus, setAssetStatus] = useState("");
+  const { busy, error, run } = useAction();
+  const review = () =>
+    void run(async () => {
+      await post(`/admin/disputes/${d.id}/review`, { holdAsset: hold });
+      onChange();
+    });
+  const decide = (outcome: "UPHELD" | "REJECTED") =>
+    void run(async () => {
+      await post(`/admin/disputes/${d.id}/resolution`, {
+        outcome,
+        resolution: resolution.trim(),
+        ...(d.holdsAsset && assetStatus ? { assetStatus } : {}),
+      });
+      setResolution("");
+      onChange();
+    });
+  return (
+    <li>
+      <div>
+        <strong>{d.reason}</strong> <Badge value={d.status} />
+      </div>
+      <div className="muted small">
+        <Link to={`/passport/${d.asset.wbId}`}>
+          {d.asset.brand ?? "Unnamed"} {d.asset.model}
+        </Link>{" "}
+        <span className="mono">{d.asset.wbId}</span> · <Badge value={d.asset.status} /> · Reported
+        by <span className="mono">{shortAddress(d.openedByWalletAddress)}</span>{" "}
+        {formatDateTime(d.createdAt)}
+      </div>
+      <p className="small">
+        {d.attestation
+          ? `About the ${humanize(d.attestation.claimType).toLowerCase()} attestation (${humanize(d.attestation.result).toLowerCase()}, ${humanize(d.attestation.status).toLowerCase()}) by ${d.attestation.verifier.publicName ?? "a verifier"}`
+          : d.evidence
+            ? `About a ${d.evidence.visibility.toLowerCase()} ${humanize(d.evidence.type).toLowerCase()} (${d.evidence.mimeType})`
+            : "About the item"}
+        {d.holdsAsset &&
+          ` · Item held; it was ${humanize(d.assetStatusBefore ?? "").toLowerCase()} before`}
+      </p>
+      {d.details && <p className="small">{d.details}</p>}
+      {d.resolution && (
+        <p className="small">
+          Decision: {d.resolution} ({formatDateTime(d.resolvedAt)})
+        </p>
+      )}
+      {d.status === "OPEN" && (
+        <div className="actions">
+          <label className="small">
+            <input type="checkbox" checked={hold} onChange={(e) => setHold(e.target.checked)} />{" "}
+            Hold the item (blocks transfers)
+          </label>
+          <button className="small" disabled={busy} onClick={review}>
+            Start review
+          </button>
+        </div>
+      )}
+      {d.status === "UNDER_REVIEW" && (
+        <>
+          <Field label="Decision, shown to the person who reported">
+            <textarea value={resolution} onChange={(e) => setResolution(e.target.value)} />
+          </Field>
+          {d.holdsAsset && (
+            <Field label="Item status afterwards">
+              <select value={assetStatus} onChange={(e) => setAssetStatus(e.target.value)}>
+                <option value="">As before the hold</option>
+                {ASSET_OUTCOMES.map((s) => (
+                  <option key={s} value={s}>
+                    {humanize(s)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
+          <div className="actions">
+            <button
+              className="small danger"
+              disabled={busy || !resolution.trim()}
+              onClick={() => decide("UPHELD")}
+            >
+              Uphold
+            </button>
+            <button
+              className="small ghost"
+              disabled={busy || !resolution.trim()}
+              onClick={() => decide("REJECTED")}
+            >
+              Reject
+            </button>
+          </div>
+        </>
+      )}
+      <ErrorText error={error} />
+    </li>
+  );
+}
+
 // ─── Escrow disputes ──────────────────────────────────────────────────────────
 
 const HELD_REASONS: Record<string, string> = {
@@ -865,7 +1014,7 @@ const HELD_REASONS: Record<string, string> = {
 };
 
 /** Shipped sales held in escrow: pay the seller or refund the buyer (ADR 0014). */
-function DisputesTab() {
+function EscrowTab() {
   const list = useLoad(() => get<{ items: AdminTransfer[] }>("/admin/transfers/disputes"), []);
   return (
     <Card title="Escrow disputes">
@@ -880,7 +1029,7 @@ function DisputesTab() {
       ) : (
         <ul className="list">
           {list.data.items.map((t) => (
-            <DisputeItem key={t.id} transfer={t} onChange={list.reload} />
+            <EscrowItem key={t.id} transfer={t} onChange={list.reload} />
           ))}
         </ul>
       )}
@@ -888,7 +1037,7 @@ function DisputesTab() {
   );
 }
 
-function DisputeItem({ transfer: t, onChange }: { transfer: AdminTransfer; onChange: () => void }) {
+function EscrowItem({ transfer: t, onChange }: { transfer: AdminTransfer; onChange: () => void }) {
   const [resolution, setResolution] = useState("");
   const { busy, error, run } = useAction();
   const e = t.escrow;

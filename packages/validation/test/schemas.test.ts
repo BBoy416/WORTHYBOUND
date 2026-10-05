@@ -23,9 +23,11 @@ import {
   evidenceUploadSchema,
   evidenceVisibilitySchema,
   idempotencyKeySchema,
+  disputeListQuerySchema,
   openDisputeSchema,
   registerAssetSchema,
   resolveDisputeSchema,
+  reviewDisputeSchema,
   resolveEscrowSchema,
   roleAssignmentParamsSchema,
   roleGrantSchema,
@@ -640,6 +642,11 @@ describe("requests, transfers and disputes", () => {
     expect(issues(resolveDisputeSchema, { outcome: "UPHELD", resolution: " " })).toEqual([
       "too_small:resolution",
     ]);
+    expect(
+      issues(resolveDisputeSchema, { outcome: "UPHELD", resolution: "x", assetStatus: "VERIFIED" }),
+    ).toEqual(["invalid_value:assetStatus"]);
+    expect(reviewDisputeSchema.parse({})).toEqual({ holdAsset: false });
+    expect(issues(disputeListQuerySchema, { status: "CLOSED" })).toEqual(["invalid_value:status"]);
   });
 });
 

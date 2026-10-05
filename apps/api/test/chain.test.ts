@@ -983,6 +983,41 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
       expect((await assetRow(wbId)).status).toBe("REPORTED_STOLEN");
     });
 
+    it("is cancelled when an administrator holds the asset for a dispute (ADR 0017)", async () => {
+      const alice = await owner();
+      const bob = await owner();
+      const admin = await owner();
+      await grantAdmin(db.prisma, admin.wallet.address);
+      const wbId = await tokenized(alice);
+      const { id } = (await start(alice, wbId, bob)).json<TransferView>();
+      const opened = await call(bob, "POST", "/disputes", {
+        assetId: wbId,
+        reason: "The seller's photos are of another watch",
+      });
+      expect(opened.statusCode, opened.body).toBe(201);
+      const disputeId = opened.json<{ id: string }>().id;
+      const held = await call(admin, "POST", `/admin/disputes/${disputeId}/review`, {
+        holdAsset: true,
+      });
+      expect(held.statusCode, held.body).toBe(200);
+      expect(held.json()).toMatchObject({ assetStatusBefore: "TRANSFER_PENDING" });
+      expect((await call(bob, "GET", `/transfers/${id}`)).json()).toMatchObject({
+        status: "CANCELLED",
+        closedReason: "asset_disputed",
+      });
+      expect((await assetRow(wbId)).status).toBe("DISPUTED");
+      expect((await start(alice, wbId, bob, false)).json().error.code).toBe("not_transferable");
+
+      const decided = await call(admin, "POST", `/admin/disputes/${disputeId}/resolution`, {
+        outcome: "REJECTED",
+        resolution: "The photos match the item.",
+      });
+      expect(decided.statusCode, decided.body).toBe(200);
+      expect((await assetRow(wbId)).status).toBe("ACTIVE");
+      await app.chainSync?.runOnce();
+      expect(oracle.records.get(wbId)).toMatchObject({ status: "ACTIVE" });
+    });
+
     it("cannot be cancelled while the signed transaction is being sent, unless sending gave up", async () => {
       const alice = await owner();
       const bob = await owner();

@@ -1,7 +1,21 @@
 import type { PublicPassport } from "@worthybound/shared";
-import { ApiError, get } from "../api.js";
-import { Badge, Card, ChainLink, Facts, Loading, TrustDial, useLoad } from "../components/ui.js";
+import { useState, type FormEvent } from "react";
+import { ApiError, get, post } from "../api.js";
+import {
+  Badge,
+  Card,
+  ChainLink,
+  ErrorText,
+  Facts,
+  Field,
+  Loading,
+  TrustDial,
+  useAction,
+  useLoad,
+} from "../components/ui.js";
 import { formatDate, formatDateTime, humanize } from "../format.js";
+import { useSession } from "../session.js";
+import type { Dispute } from "../types.js";
 import { StartPurchaseCheck } from "./PurchaseCheck.js";
 
 const WARNING: Partial<Record<string, string>> = {
@@ -58,6 +72,15 @@ export function PassportPage({ wbId }: { wbId: string }) {
             )}
           </div>
           {p.description && <p>{p.description}</p>}
+          {p.openDisputes > 0 && (
+            <p className="small">
+              <Badge
+                value="DISPUTED"
+                label={`${p.openDisputes} open dispute${p.openDisputes === 1 ? "" : "s"}`}
+              />{" "}
+              WorthyBound is reviewing reports about this item.
+            </p>
+          )}
         </div>
         <div className="hero-score">
           <TrustDial score={p.trust?.score ?? null} />
@@ -178,6 +201,7 @@ export function PassportPage({ wbId }: { wbId: string }) {
       </div>
 
       {p.status !== "REVOKED" && <StartPurchaseCheck wbId={p.wbId} />}
+      {p.status !== "REVOKED" && <ReportProblem passport={p} />}
 
       <Card title="Provenance">
         <ol className="timeline">
@@ -191,5 +215,124 @@ export function PassportPage({ wbId }: { wbId: string }) {
         </ol>
       </Card>
     </div>
+  );
+}
+
+const DISPUTE_STATUS_TEXT: Record<Dispute["status"], string> = {
+  OPEN: "Waiting for review",
+  UNDER_REVIEW: "Being reviewed",
+  UPHELD: "Upheld",
+  REJECTED: "Rejected",
+  WITHDRAWN: "Withdrawn",
+};
+
+/** Reporting a problem with the item, an attestation or a public photo (ADR 0017). */
+function ReportProblem({ passport: p }: { passport: PublicPassport }) {
+  const { me } = useSession();
+  const mine = useLoad(
+    () =>
+      me
+        ? get<{ items: Dispute[] }>("/disputes").then((r) =>
+            r.items.filter((d) => d.asset.wbId === p.wbId),
+          )
+        : Promise.resolve([]),
+    [me?.user.id, p.wbId],
+  );
+  const [target, setTarget] = useState("");
+  const [reason, setReason] = useState("");
+  const [details, setDetails] = useState("");
+  const { busy, error, run } = useAction();
+  const photos = p.publicEvidence.filter((e) => e.mimeType.startsWith("image/"));
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    void run(async () => {
+      const [kind, id] = target.split(":");
+      await post<Dispute>("/disputes", {
+        assetId: p.wbId,
+        ...(kind === "attestation" ? { attestationId: id } : {}),
+        ...(kind === "evidence" ? { evidenceId: id } : {}),
+        reason: reason.trim(),
+        ...(details.trim() ? { details: details.trim() } : {}),
+      });
+      setReason("");
+      setDetails("");
+      mine.reload();
+    });
+  };
+  const withdraw = (id: string) =>
+    void run(async () => {
+      await post<Dispute>(`/disputes/${id}/withdraw`);
+      mine.reload();
+    });
+
+  return (
+    <Card title="Report a problem">
+      <p className="small">
+        Think this item, an attestation or a photo is wrong? Tell WorthyBound. An administrator
+        reviews every report; while it is open, the Trust Score counts it. Your identity and your
+        report stay private.
+      </p>
+      {!me ? (
+        <p className="muted small">Connect your wallet to report a problem.</p>
+      ) : me.user.identityStatus !== "VERIFIED" ? (
+        <p className="muted small">Verify your identity to report a problem.</p>
+      ) : (
+        <form onSubmit={submit}>
+          <Field label="About">
+            <select value={target} onChange={(e) => setTarget(e.target.value)}>
+              <option value="">The item</option>
+              {p.attestations.map((a) => (
+                <option key={a.id} value={`attestation:${a.id}`}>
+                  {humanize(a.claimType)} by {a.verifier.publicName ?? "approved verifier"},{" "}
+                  {formatDate(a.issuedAt)}
+                </option>
+              ))}
+              {photos.map((e, i) => (
+                <option key={e.evidenceId} value={`evidence:${e.evidenceId}`}>
+                  Photo {i + 1}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="What is wrong">
+            <input value={reason} maxLength={200} onChange={(e) => setReason(e.target.value)} />
+          </Field>
+          <Field label="Details (optional)">
+            <textarea
+              value={details}
+              maxLength={5000}
+              onChange={(e) => setDetails(e.target.value)}
+            />
+          </Field>
+          <button type="submit" disabled={busy || !reason.trim()}>
+            Report
+          </button>
+        </form>
+      )}
+      {mine.data && mine.data.length > 0 && (
+        <ul className="list">
+          {mine.data.map((d) => (
+            <li key={d.id}>
+              <div>
+                <strong>{d.reason}</strong>{" "}
+                <Badge value={d.status} label={DISPUTE_STATUS_TEXT[d.status]} />
+              </div>
+              <div className="muted small">
+                Reported {formatDateTime(d.createdAt)}
+                {d.resolvedAt && ` · decided ${formatDateTime(d.resolvedAt)}`}
+              </div>
+              {d.resolution && <p className="small">{d.resolution}</p>}
+              {d.status === "OPEN" && (
+                <button className="small ghost" disabled={busy} onClick={() => withdraw(d.id)}>
+                  Withdraw
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <ErrorText error={error ?? mine.error} />
+    </Card>
   );
 }

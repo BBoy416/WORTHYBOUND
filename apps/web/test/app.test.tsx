@@ -3,8 +3,10 @@ import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CaptureShot } from "@worthybound/shared";
 import type {
+  AdminDispute,
   AdminTransfer,
   CaptureSession,
+  Dispute,
   OwnerAsset,
   OwnerEvidence,
   PurchaseCheck,
@@ -40,6 +42,7 @@ const passport = (overrides: Partial<PublicPassport> = {}): PublicPassport => ({
     chainRecordAddress: "5stfBCcoD9mpW3514ycoKZBQ4Xzav3KpbZHTC9AUGMem",
   },
   custody: { currentSince: "2026-09-29T10:00:00.000Z", transferCount: 0 },
+  openDisputes: 0,
   publicEvidence: [],
   evidenceCommitments: [],
   attestations: [
@@ -185,6 +188,66 @@ describe("public passport", () => {
     });
     renderAt(`/passport/${WB}`);
     expect((await screen.findByRole("alert")).textContent).toMatch(/reported stolen/i);
+  });
+
+  it("lets a verified user report a problem with an attestation and withdraw it", async () => {
+    let mine: Dispute[] = [];
+    const dispute: Dispute = {
+      id: "0199a000-0000-7000-8000-0000000000e1",
+      status: "OPEN",
+      asset: { wbId: WB, brand: "Rolex", model: "Submariner" },
+      target: { kind: "ATTESTATION", id: "a1" },
+      reason: "Serial does not match",
+      details: null,
+      resolution: null,
+      createdAt: "2026-10-05T10:00:00.000Z",
+      reviewedAt: null,
+      resolvedAt: null,
+    };
+    const calls = mockFetch({
+      "GET /auth/me": { json: me() },
+      [`GET /passport/${WB}`]: { json: { passport: passport({ openDisputes: 2 }), url: "" } },
+      "GET /disputes": () => ({ json: { items: mine } }),
+      "POST /disputes": () => {
+        mine = [dispute];
+        return { status: 201, json: dispute };
+      },
+      [`POST /disputes/${dispute.id}/withdraw`]: () => {
+        mine = [{ ...dispute, status: "WITHDRAWN", resolvedAt: "2026-10-05T11:00:00.000Z" }];
+        return { json: mine[0] };
+      },
+    });
+    renderAt(`/passport/${WB}`);
+    expect(await screen.findByText("2 open disputes")).toBeTruthy();
+    fireEvent.change(await screen.findByLabelText("About"), {
+      target: { value: "attestation:a1" },
+    });
+    fireEvent.change(screen.getByLabelText("What is wrong"), {
+      target: { value: " Serial does not match " },
+    });
+    fireEvent.click(screen.getByText("Report"));
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === "POST" && c.url.endsWith("/disputes"))?.body).toEqual({
+        assetId: WB,
+        attestationId: "a1",
+        reason: "Serial does not match",
+      }),
+    );
+    expect(await screen.findByText("Waiting for review")).toBeTruthy();
+    fireEvent.click(screen.getByText("Withdraw"));
+    expect(await screen.findByText("Withdrawn")).toBeTruthy();
+    expect(screen.queryByText("Withdraw")).toBeNull();
+  });
+
+  it("asks for a verified identity before reporting a problem", async () => {
+    mockFetch({
+      "GET /auth/me": { json: me(["USER"], "UNVERIFIED") },
+      [`GET /passport/${WB}`]: { json: { passport: passport(), url: "" } },
+      "GET /disputes": { json: { items: [] } },
+    });
+    renderAt(`/passport/${WB}`);
+    expect(await screen.findByText("Verify your identity to report a problem.")).toBeTruthy();
+    expect(screen.queryByLabelText("What is wrong")).toBeNull();
   });
 
   it("says when there is no passport", async () => {
@@ -1841,6 +1904,71 @@ describe("transfers", () => {
       expect(screen.getByText("5REF…wxyz ↗")).toBeTruthy();
     });
 
+    it("lets an administrator hold an item for review, then uphold the dispute", async () => {
+      const open: AdminDispute = {
+        id: "0199a000-0000-7000-8000-0000000000f1",
+        status: "OPEN",
+        asset: { wbId: WB, brand: "Rolex", model: "Submariner", status: "VERIFIED" },
+        target: { kind: "ATTESTATION", id: "a1" },
+        reason: "Serial does not match",
+        details: "The caseback serial differs.",
+        resolution: null,
+        createdAt: "2026-10-05T10:00:00.000Z",
+        reviewedAt: null,
+        resolvedAt: null,
+        openedByWalletAddress: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
+        attestation: {
+          claimType: "AUTHENTICATION",
+          result: "CONFIRMED",
+          status: "ACTIVE",
+          verifier: { id: "v1", publicName: "Geneva Watch Lab" },
+        },
+        evidence: null,
+        holdsAsset: false,
+        assetStatusBefore: null,
+      };
+      let current = open;
+      const calls = mockFetch({
+        "GET /auth/me": { json: me(["USER", "ADMIN"]) },
+        "GET /admin/disputes": () => ({ json: { items: [current] } }),
+        [`POST /admin/disputes/${open.id}/review`]: () => {
+          current = {
+            ...open,
+            status: "UNDER_REVIEW",
+            holdsAsset: true,
+            assetStatusBefore: "VERIFIED",
+            asset: { ...open.asset, status: "DISPUTED" },
+          };
+          return { json: current };
+        },
+        [`POST /admin/disputes/${open.id}/resolution`]: () => ({ json: current }),
+      });
+      renderAt("/admin/disputes");
+      expect(
+        await screen.findByText(/authentication attestation .* by Geneva Watch Lab/),
+      ).toBeTruthy();
+      expect(screen.getByText("The caseback serial differs.")).toBeTruthy();
+      fireEvent.click(screen.getByLabelText(/Hold the item/));
+      fireEvent.click(screen.getByText("Start review"));
+      await waitFor(() =>
+        expect(calls.find((c) => c.url.endsWith("/review"))?.body).toEqual({ holdAsset: true }),
+      );
+      fireEvent.change(await screen.findByLabelText("Decision, shown to the person who reported"), {
+        target: { value: "The serial does not match." },
+      });
+      fireEvent.change(screen.getByLabelText("Item status afterwards"), {
+        target: { value: "REVOKED" },
+      });
+      fireEvent.click(screen.getByText("Uphold"));
+      await waitFor(() =>
+        expect(calls.find((c) => c.url.endsWith("/resolution"))?.body).toEqual({
+          outcome: "UPHELD",
+          resolution: "The serial does not match.",
+          assetStatus: "REVOKED",
+        }),
+      );
+    });
+
     it("lets an administrator pay the seller or refund the buyer of a held sale", async () => {
       const held = (id: string, disputeReason: string): AdminTransfer =>
         shipped(
@@ -1854,7 +1982,7 @@ describe("transfers", () => {
         "GET /admin/transfers/disputes": { json: { items: [noMatch, failed] } },
         [`POST /admin/transfers/${noMatch.id}/resolution`]: { json: noMatch },
       });
-      renderAt("/admin/disputes");
+      renderAt("/admin/escrow");
       expect(await screen.findByText(/do not match the seller's photos/)).toBeTruthy();
       expect(screen.getByText(/only a refund is possible/)).toBeTruthy();
       expect(screen.getAllByText("Pay the seller")).toHaveLength(1);

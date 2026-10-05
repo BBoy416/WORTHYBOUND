@@ -342,6 +342,22 @@ describe("computeTrust: automated checks (ADR 0013)", () => {
     expect(many.score).toBe(DEFAULT_WEIGHTS.caps.automatedChecksPassed);
   });
 
+  it("counts checked photos from a completed guided capture 1.5 times", () => {
+    const checks = (captured: boolean) =>
+      Array.from({ length: 4 }, () => proof({ type: "PHOTO", source: "AUTOMATED", captured }));
+    const uploaded = computeTrust(inputs({ proofs: checks(false) }));
+    const captured = computeTrust(inputs({ proofs: checks(true) }));
+    const points = (r: typeof uploaded) =>
+      r.factors.filter((f) => f.detail?.source === "AUTOMATED").reduce((a, f) => a + f.points, 0);
+    expect(points(captured)).toBeCloseTo(points(uploaded) * DEFAULT_WEIGHTS.capturedMultiplier, 1);
+    expect(captured.factors.find((f) => f.detail?.source === "AUTOMATED")?.detail).toMatchObject({
+      capturedMultiplier: DEFAULT_WEIGHTS.capturedMultiplier,
+    });
+    expect(uploaded.factors.some((f) => f.detail?.capturedMultiplier !== undefined)).toBe(false);
+    expect(captured.score).toBeGreaterThan(uploaded.score);
+    expect(captured.inputsHash).not.toBe(uploaded.inputsHash);
+  });
+
   it("scores owners without KYC lower, and keeps the owner-only cap when a check failed", () => {
     const anonymous = computeTrust(
       inputs({

@@ -15,7 +15,7 @@ import type {
 } from "./types.js";
 import { DEFAULT_WEIGHTS } from "./weights.js";
 
-export const ENGINE_VERSION = "1.2.0";
+export const ENGINE_VERSION = "1.3.0";
 
 export { TRUST_SCORE_DISCLAIMER };
 
@@ -188,11 +188,13 @@ function proofFactors(
     const { proof } = c;
     const freshness = freshnessFactor(proof.type, c.issuedMs, evaluatedMs, weights);
     const suspension = proof.sourceStatus === "SUSPENDED" ? weights.suspendedSourceMultiplier : 1;
+    const capture = proof.captured ? weights.capturedMultiplier : 1;
     const base =
       weights.typePoints[proof.type] *
       weights.sourceMultiplier[proof.source] *
       freshness *
-      suspension;
+      suspension *
+      capture;
     const key = `${proof.type}|${proof.source}|${proof.sourceId}`;
     const group = groups.get(key) ?? [];
     group.push({ counted: c, base });
@@ -219,6 +221,7 @@ function proofFactors(
             ...(proof.sourceStatus === "SUSPENDED"
               ? { suspendedMultiplier: weights.suspendedSourceMultiplier }
               : {}),
+            ...(proof.captured ? { capturedMultiplier: weights.capturedMultiplier } : {}),
           },
         },
       });

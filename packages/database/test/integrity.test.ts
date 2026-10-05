@@ -2389,4 +2389,123 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
       );
     });
   });
+
+  describe("disputes", () => {
+    const open = async (data: Partial<Prisma.DisputeUncheckedCreateInput> = {}) => {
+      const a = data.assetId ? { id: data.assetId } : await activeAsset();
+      return db.prisma.dispute.create({
+        data: {
+          openedById: (await kycUser()).id,
+          reason: "Serial does not match",
+          ...data,
+          assetId: a.id,
+        },
+      });
+    };
+
+    it("only targets an attestation or evidence of the disputed asset", async () => {
+      const att = await attestation();
+      await expect(open({ assetId: att.assetId, attestationId: att.id })).resolves.toBeDefined();
+      const other = await activeAsset();
+      await expectDbError(
+        open({ assetId: other.id, attestationId: att.id }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+    });
+
+    it("allows one open dispute per person and target", async () => {
+      const first = await open();
+      await expect(
+        open({ assetId: first.assetId, openedById: first.openedById }),
+      ).rejects.toMatchObject({ code: "P2002" });
+      await db.prisma.dispute.update({
+        where: { id: first.id },
+        data: { status: "WITHDRAWN", resolvedAt: new Date() },
+      });
+      await expect(
+        open({ assetId: first.assetId, openedById: first.openedById }),
+      ).resolves.toBeDefined();
+    });
+
+    it("records who reviewed and decided, never the opener, and keeps decisions final", async () => {
+      const d = await open();
+      const reviewer = await admin();
+      await expectDbError(
+        db.prisma.dispute.update({ where: { id: d.id }, data: { status: "UNDER_REVIEW" } }),
+        CHECK_VIOLATION,
+      );
+      await expectDbError(
+        db.prisma.dispute.update({
+          where: { id: d.id },
+          data: { status: "UNDER_REVIEW", reviewedById: d.openedById, reviewedAt: new Date() },
+        }),
+        CHECK_VIOLATION,
+      );
+      await db.prisma.dispute.update({
+        where: { id: d.id },
+        data: { status: "UNDER_REVIEW", reviewedById: reviewer.id, reviewedAt: new Date() },
+      });
+      await expectDbError(
+        db.prisma.dispute.update({ where: { id: d.id }, data: { status: "UPHELD" } }),
+        CHECK_VIOLATION,
+      );
+      await expectDbError(
+        db.prisma.dispute.update({ where: { id: d.id }, data: { reason: "Something else" } }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      await db.prisma.dispute.update({
+        where: { id: d.id },
+        data: {
+          status: "UPHELD",
+          resolution: "Confirmed",
+          resolvedById: reviewer.id,
+          resolvedAt: new Date(),
+        },
+      });
+      await expectDbError(
+        db.prisma.dispute.update({ where: { id: d.id }, data: { status: "REJECTED" } }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+      await expectDbError(
+        db.prisma.dispute.delete({ where: { id: d.id } }),
+        DatabaseErrorCode.IMMUTABLE,
+      );
+    });
+
+    it("holds an asset with the status it had, and with one dispute at a time", async () => {
+      const reviewer = await admin();
+      const review = { status: "UNDER_REVIEW" as const, reviewedById: reviewer.id };
+      const d = await open();
+      await expectDbError(
+        db.prisma.dispute.update({
+          where: { id: d.id },
+          data: { ...review, reviewedAt: new Date(), holdsAsset: true },
+        }),
+        CHECK_VIOLATION,
+      );
+      await expectDbError(
+        db.prisma.dispute.update({
+          where: { id: d.id },
+          data: { ...review, reviewedAt: new Date(), holdsAsset: true, assetStatusBefore: "DRAFT" },
+        }),
+        CHECK_VIOLATION,
+      );
+      await db.prisma.dispute.update({
+        where: { id: d.id },
+        data: { ...review, reviewedAt: new Date(), holdsAsset: true, assetStatusBefore: "ACTIVE" },
+      });
+      const second = await open({ assetId: d.assetId });
+      await expect(
+        db.prisma.dispute.update({
+          where: { id: second.id },
+          data: {
+            ...review,
+            reviewedAt: new Date(),
+            holdsAsset: true,
+            assetStatusBefore: "ACTIVE",
+          },
+        }),
+      ).rejects.toMatchObject({ code: "P2002" });
+    });
+  });
 });

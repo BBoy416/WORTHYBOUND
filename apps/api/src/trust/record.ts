@@ -79,7 +79,7 @@ export async function recordTrust(tx: Tx, assetId: string, at: Date): Promise<Tr
       owner: { select: { identityStatus: true } },
     },
   });
-  const [ownerships, evidence, attestations, openDisputes, requests] = await Promise.all([
+  const [ownerships, recorded, attestations, openDisputes, requests] = await Promise.all([
     tx.ownership.findMany({
       where: { assetId },
       orderBy: { startedAt: "asc" },
@@ -95,6 +95,8 @@ export async function recordTrust(tx: Tx, assetId: string, at: Date): Promise<Tr
         reviewStatus: true,
         duplicateOfId: true,
         createdAt: true,
+        captureSession: { select: { status: true } },
+        disputes: { where: { status: "UPHELD" }, select: { id: true }, take: 1 },
         automatedChecks: {
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: 1,
@@ -126,6 +128,11 @@ export async function recordTrust(tx: Tx, assetId: string, at: Date): Promise<Tr
       select: { templateVersion: { select: { templateId: true } } },
     }),
   ]);
+
+  // Evidence an upheld dispute found misleading counts as rejected (ADR 0017).
+  const evidence = recorded.map((e) =>
+    e.disputes.length > 0 ? { ...e, reviewStatus: "REJECTED" as const } : e,
+  );
 
   const templateIds = [...new Set(requests.map((r) => r.templateVersion.templateId))];
   const versions = await tx.verificationTemplateVersion.findMany({
@@ -189,6 +196,8 @@ export async function recordTrust(tx: Tx, assetId: string, at: Date): Promise<Tr
         sourceId: "automated-checks",
         issuedAt: check.createdAt.toISOString(),
         status: e.reviewStatus === "REJECTED" ? "REJECTED" : "ACTIVE",
+        // Photos taken live in a completed guided capture session (ADR 0013).
+        ...(e.captureSession?.status === "COMPLETED" ? { captured: true } : {}),
       });
     }
   }

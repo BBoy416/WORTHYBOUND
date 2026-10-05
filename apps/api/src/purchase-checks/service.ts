@@ -30,6 +30,7 @@ import type { SessionRecord } from "../capture/view.js";
 import { evidenceCheckStates } from "../checks/view.js";
 import type { AutomatedChecks } from "../checks/worker.js";
 import { decodeBase58 } from "../crypto.js";
+import { notUpheld } from "../disputes/view.js";
 import { ApiError, notFound } from "../errors.js";
 import { checkImage } from "../evidence/inspect.js";
 import type { CheckRecord, RemoteRequestRecord } from "./view.js";
@@ -92,6 +93,7 @@ export async function referencePhotos(db: Db, assetId: string): Promise<Evidence
     type: "PHOTO" as const,
     mimeType: { in: PHOTO_TYPES },
     reviewStatus: { not: "REJECTED" as const },
+    ...notUpheld,
     automatedChecks: { none: { result: "FAILED" as const, checkVersion: CHECK_VERSION } },
   };
   const [verifier, session] = await Promise.all([

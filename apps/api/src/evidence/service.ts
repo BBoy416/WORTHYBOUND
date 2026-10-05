@@ -31,6 +31,7 @@ import { assertShotOpen, completeIfDone } from "../capture/service.js";
 import { enqueueEvidenceChecks } from "../checks/queue.js";
 import { evidenceCheckStates } from "../checks/view.js";
 import type { AutomatedChecks } from "../checks/worker.js";
+import { notUpheld } from "../disputes/view.js";
 import { ApiError, fromDomainError, notFound } from "../errors.js";
 import { remoteCheckFilmed, remoteVideoKey } from "../purchase-checks/service.js";
 import { recordTrust } from "../trust/record.js";
@@ -847,6 +848,7 @@ export function createEvidenceService({
           id: evidenceId,
           visibility: "PUBLIC",
           reviewStatus: { not: "REJECTED" },
+          ...notUpheld,
           asset: { wbId, publishedAt: { not: null } },
         },
         select: { publicStorageKey: true, mimeType: true, asset: { select: { status: true } } },

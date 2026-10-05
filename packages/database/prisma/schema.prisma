@@ -363,6 +363,7 @@ model User {
   templateVersionsCreated   VerificationTemplateVersion[]     @relation("TemplateVersionCreator")
   templateVersionsPublished VerificationTemplateVersion[]     @relation("TemplateVersionPublisher")
   disputesOpened            Dispute[]                         @relation("DisputeOpener")
+  disputesReviewed          Dispute[]                         @relation("DisputeReviewer")
   disputesResolved          Dispute[]                         @relation("DisputeResolver")
   assetStatusEvents         AssetStatusEvent[]
   verifierStatusEvents      VerifierStatusEvent[]
@@ -1120,27 +1121,36 @@ model AttestationStatusEvent {
 }
 
 model Dispute {
-  id            String        @id @default(uuid(7)) @db.Uuid
-  assetId       String        @db.Uuid
-  attestationId String?       @db.Uuid
-  evidenceId    String?       @db.Uuid
-  openedById    String        @db.Uuid
-  reason        String
-  details       String?
-  status        DisputeStatus @default(OPEN)
-  resolution    String?
-  resolvedById  String?       @db.Uuid
-  resolvedAt    DateTime?     @db.Timestamptz(3)
-  createdAt     DateTime      @default(now()) @db.Timestamptz(3)
-  updatedAt     DateTime      @updatedAt @db.Timestamptz(3)
+  id                String        @id @default(uuid(7)) @db.Uuid
+  assetId           String        @db.Uuid
+  attestationId     String?       @db.Uuid
+  evidenceId        String?       @db.Uuid
+  openedById        String        @db.Uuid
+  reason            String
+  details           String?
+  status            DisputeStatus @default(OPEN)
+  /// Administrator who started the review, and when (ADR 0017).
+  reviewedById      String?       @db.Uuid
+  reviewedAt        DateTime?     @db.Timestamptz(3)
+  /// The review put the asset on hold (DISPUTED); `assetStatusBefore` is the status it had.
+  holdsAsset        Boolean       @default(false)
+  assetStatusBefore AssetStatus?
+  resolution        String?
+  resolvedById      String?       @db.Uuid
+  /// When the dispute was upheld, rejected or withdrawn.
+  resolvedAt        DateTime?     @db.Timestamptz(3)
+  createdAt         DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime      @updatedAt @db.Timestamptz(3)
 
   asset       Asset        @relation(fields: [assetId], references: [id], onDelete: Restrict)
   attestation Attestation? @relation(fields: [attestationId], references: [id], onDelete: Restrict)
   evidence    Evidence?    @relation(fields: [evidenceId], references: [id], onDelete: Restrict)
   openedBy    User         @relation("DisputeOpener", fields: [openedById], references: [id], onDelete: Restrict)
+  reviewedBy  User?        @relation("DisputeReviewer", fields: [reviewedById], references: [id], onDelete: Restrict)
   resolvedBy  User?        @relation("DisputeResolver", fields: [resolvedById], references: [id], onDelete: Restrict)
 
   @@index([assetId, status])
+  @@index([status, createdAt])
   @@map("disputes")
 }
 

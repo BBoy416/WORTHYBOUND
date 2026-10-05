@@ -914,8 +914,8 @@ describe.skipIf(!TEST_DATABASE_URL)("trust score and verified status", () => {
       score: 7,
       verificationLevel: "UNVERIFIED",
       capsApplied: [],
-      engineVersion: "1.2.0",
-      weightsVersion: "weights-2026.3",
+      engineVersion: "1.3.0",
+      weightsVersion: "weights-2026.4",
       disclaimer: expect.stringContaining("does not guarantee authenticity"),
     });
     expect(codes(score.factors)).toEqual(["OWNER_WALLET_VERIFIED", "CUSTODY_CONTINUITY"]);
@@ -1081,6 +1081,244 @@ describe.skipIf(!TEST_DATABASE_URL)("trust score and verified status", () => {
     await expectOk(f.claim(second, request.id));
     await expectOk(f.attest(second, request.id, { claimType: "PROVENANCE" }), 201);
     expect((await expectOk(call(owner, "GET", `/assets/${wbId}`))).status).toBe("VERIFIED");
+  });
+
+  describe("disputes (ADR 0017)", () => {
+    const authentication = async (wbId: string) =>
+      (await passport(wbId)).attestations.find(
+        (a: { claimType: string }) => a.claimType === "AUTHENTICATION",
+      ).id as string;
+    /** A person with a verified identity. */
+    const reporter = async () => {
+      const p = await f.person();
+      await f.kyc(p);
+      return p;
+    };
+    const status = async (owner: Person, wbId: string) =>
+      (await expectOk(call(owner, "GET", `/assets/${wbId}`))).status as string;
+
+    it("needs a verified identity, counts against the score while open and can be withdrawn", async () => {
+      const owner = await f.person();
+      const wbId = await f.asset(owner);
+      const before = (await trust(owner, wbId)).score as number;
+      const body = { assetId: wbId, reason: "Listed photos show a different watch" };
+
+      expect((await call(null, "POST", "/disputes", body)).statusCode).toBe(401);
+      expect(await errorCode(call(await f.person(), "POST", "/disputes", body), 403)).toBe(
+        "identity_verification_required",
+      );
+      const buyer = await reporter();
+      expect(
+        await errorCode(call(buyer, "POST", "/disputes", { ...body, assetId: "WB-00000000" }), 404),
+      ).toBe("not_found");
+      expect(
+        await errorCode(
+          call(buyer, "POST", "/disputes", { ...body, attestationId: randomUUID() }),
+          404,
+        ),
+      ).toBe("not_found");
+
+      const dispute = await expectOk(call(buyer, "POST", "/disputes", body), 201);
+      expect(dispute).toMatchObject({
+        status: "OPEN",
+        target: { kind: "ASSET", id: null },
+        asset: { wbId },
+        resolution: null,
+      });
+      expect(await errorCode(call(buyer, "POST", "/disputes", body), 409)).toBe("dispute_open");
+      const open = await trust(owner, wbId);
+      expect(codes(open.deductions)).toContain("OPEN_DISPUTES");
+      expect(open.score).toBeLessThan(before);
+      const p = await passport(wbId);
+      expect(p.openDisputes).toBe(1);
+      expect(p.provenance.map((e: { type: string }) => e.type)).toContain("DISPUTE_OPENED");
+      expect(JSON.stringify(p)).not.toContain(buyer.wallet.address);
+      expect(JSON.stringify(p)).not.toContain("different watch");
+
+      expect((await expectOk(call(buyer, "GET", "/disputes"))).items).toHaveLength(1);
+      expect((await expectOk(call(owner, "GET", "/disputes"))).items).toHaveLength(0);
+      expect(await errorCode(call(owner, "POST", `/disputes/${dispute.id}/withdraw`), 404)).toBe(
+        "not_found",
+      );
+      expect(await expectOk(call(buyer, "POST", `/disputes/${dispute.id}/withdraw`))).toMatchObject(
+        { status: "WITHDRAWN", resolvedAt: expect.any(String) },
+      );
+      expect((await trust(owner, wbId)).score).toBe(before);
+      expect((await passport(wbId)).openDisputes).toBe(0);
+      // Withdrawn disputes no longer block a new one.
+      await expectOk(call(buyer, "POST", "/disputes", body), 201);
+    });
+
+    it("upholds a dispute about an attestation: the asset is held, then the attestation revoked", async () => {
+      const { owner, wbId, v } = await verified();
+      const attestationId = await authentication(wbId);
+      const buyer = await reporter();
+      const dispute = await expectOk(
+        call(buyer, "POST", "/disputes", {
+          assetId: wbId,
+          attestationId,
+          reason: "Serial does not match",
+          details: "The caseback serial differs from the certificate.",
+        }),
+        201,
+      );
+      expect(dispute.target).toEqual({ kind: "ATTESTATION", id: attestationId });
+
+      expect((await call(buyer, "GET", "/admin/disputes")).statusCode).toBe(403);
+      const listed = await expectOk(call(adminA, "GET", "/admin/disputes"));
+      expect(listed.items).toContainEqual(
+        expect.objectContaining({
+          id: dispute.id,
+          openedByWalletAddress: buyer.wallet.address,
+          attestation: expect.objectContaining({ claimType: "AUTHENTICATION", status: "ACTIVE" }),
+          asset: expect.objectContaining({ wbId, status: "VERIFIED" }),
+        }),
+      );
+      expect(
+        await errorCode(
+          call(adminA, "POST", `/admin/disputes/${dispute.id}/resolution`, {
+            outcome: "UPHELD",
+            resolution: "Not reviewed yet",
+          }),
+          409,
+        ),
+      ).toBe("invalid_transition");
+
+      const reviewed = await expectOk(
+        call(adminA, "POST", `/admin/disputes/${dispute.id}/review`, { holdAsset: true }),
+      );
+      expect(reviewed).toMatchObject({
+        status: "UNDER_REVIEW",
+        holdsAsset: true,
+        assetStatusBefore: "VERIFIED",
+        attestation: { status: "DISPUTED" },
+        asset: { status: "DISPUTED" },
+      });
+      expect(await status(owner, wbId)).toBe("DISPUTED");
+      const held = await trust(owner, wbId);
+      expect(held.score).toBeLessThanOrEqual(40);
+      expect(held.factors.map((x: { proofId?: string }) => x.proofId)).not.toContain(
+        `attestation:${attestationId}`,
+      );
+      expect(await errorCode(call(buyer, "POST", `/disputes/${dispute.id}/withdraw`), 409)).toBe(
+        "invalid_transition",
+      );
+
+      const decided = await expectOk(
+        call(adminB, "POST", `/admin/disputes/${dispute.id}/resolution`, {
+          outcome: "UPHELD",
+          resolution: "The serial on the item does not match the attested certificate.",
+        }),
+      );
+      expect(decided).toMatchObject({
+        status: "UPHELD",
+        attestation: { status: "REVOKED" },
+        asset: { status: "ACTIVE" },
+      });
+      expect(await status(owner, wbId)).toBe("ACTIVE");
+      const score = await trust(owner, wbId);
+      expect(score.excludedProofs).toContainEqual({
+        proofId: `attestation:${attestationId}`,
+        reason: "REVOKED",
+      });
+      expect(codes(score.deductions)).not.toContain("OPEN_DISPUTES");
+      expect(
+        await db.prisma.verifier.findUniqueOrThrow({ where: { id: v.verifierId } }),
+      ).toMatchObject({ disputeCount: 1, upheldDisputeCount: 1, revokedAttestationCount: 1 });
+      expect((await expectOk(call(buyer, "GET", "/disputes"))).items[0]).toMatchObject({
+        status: "UPHELD",
+        resolution: expect.stringContaining("does not match"),
+      });
+      const types = (await passport(wbId)).provenance.map((e: { type: string }) => e.type);
+      expect(types).toEqual(
+        expect.arrayContaining(["DISPUTE_OPENED", "DISPUTE_RESOLVED", "ATTESTATION_REVOKED"]),
+      );
+      const { id } = await db.prisma.asset.findUniqueOrThrow({ where: { wbId } });
+      const [row] = await db.prisma.$queryRaw<{ broken: number | null }[]>`
+        SELECT wb_verify_provenance_chain(${id}::uuid) AS broken`;
+      expect(row?.broken).toBeNull();
+    });
+
+    it("restores the attestation and VERIFIED when a dispute is rejected", async () => {
+      const { owner, wbId } = await verified();
+      const attestationId = await authentication(wbId);
+      const dispute = await expectOk(
+        call(await reporter(), "POST", "/disputes", {
+          assetId: wbId,
+          attestationId,
+          reason: "Looks fake",
+        }),
+        201,
+      );
+      await expectOk(call(adminA, "POST", `/admin/disputes/${dispute.id}/review`, {}));
+      expect(await status(owner, wbId)).toBe("ACTIVE");
+      expect(
+        await errorCode(
+          call(adminA, "POST", `/admin/disputes/${dispute.id}/resolution`, {
+            outcome: "REJECTED",
+            resolution: "No evidence",
+            assetStatus: "REVOKED",
+          }),
+          422,
+        ),
+      ).toBe("asset_not_held");
+      expect(
+        await expectOk(
+          call(adminA, "POST", `/admin/disputes/${dispute.id}/resolution`, {
+            outcome: "REJECTED",
+            resolution: "The verifier's photos show the serial clearly.",
+          }),
+        ),
+      ).toMatchObject({ status: "REJECTED", attestation: { status: "ACTIVE" } });
+      expect(await expectOk(call(owner, "GET", `/assets/${wbId}`))).toMatchObject({
+        status: "VERIFIED",
+        trustScore: 65,
+      });
+    });
+
+    it("lets an administrator revoke a held asset, and never decide their own dispute", async () => {
+      const owner = await f.person();
+      const wbId = await f.asset(owner);
+      await f.kyc(adminA);
+      const own = await expectOk(
+        call(adminA, "POST", "/disputes", { assetId: wbId, reason: "Stolen in Geneva" }),
+        201,
+      );
+      expect(
+        await errorCode(call(adminA, "POST", `/admin/disputes/${own.id}/review`, {}), 409),
+      ).toBe("self_review");
+      await expectOk(call(adminB, "POST", `/admin/disputes/${own.id}/review`, { holdAsset: true }));
+      const second = await expectOk(
+        call(await reporter(), "POST", "/disputes", { assetId: wbId, reason: "Same item" }),
+        201,
+      );
+      expect(
+        await errorCode(
+          call(adminB, "POST", `/admin/disputes/${second.id}/review`, { holdAsset: true }),
+          409,
+        ),
+      ).toBe("asset_already_held");
+      await expectOk(
+        call(adminB, "POST", `/admin/disputes/${own.id}/resolution`, {
+          outcome: "UPHELD",
+          resolution: "Police report confirms the theft.",
+          assetStatus: "REVOKED",
+        }),
+      );
+      expect(await status(owner, wbId)).toBe("REVOKED");
+      expect((await call(null, "GET", `/passport/${wbId}`)).statusCode).toBe(200);
+      expect(
+        await errorCode(
+          call(await reporter(), "POST", "/disputes", { assetId: wbId, reason: "Again" }),
+          409,
+        ),
+      ).toBe("not_disputable");
+      expect(
+        (await expectOk(call(adminA, "GET", "/admin/disputes?status=UPHELD"))).items.map(
+          (d: { id: string }) => d.id,
+        ),
+      ).toContain(own.id);
+    });
   });
 });
 

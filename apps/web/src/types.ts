@@ -12,6 +12,7 @@ import type {
   ChainTransactionStatus,
   CheckProblem,
   ClaimType,
+  DisputeStatus,
   EscrowStatus,
   EvidenceType,
   EvidenceVisibility,
@@ -443,3 +444,32 @@ export interface TransferEscrow {
 
 /** `GET /admin/transfers/disputes`: both parties, nothing to sign. */
 export type AdminTransfer = Omit<Transfer, "role" | "transaction" | "awaitingYourSignature">;
+
+/** `GET /disputes`: the caller's own reports (ADR 0017). */
+export interface Dispute {
+  id: string;
+  status: DisputeStatus;
+  asset: { wbId: string; brand: string | null; model: string | null };
+  target: { kind: "ASSET" | "ATTESTATION" | "EVIDENCE"; id: string | null };
+  reason: string;
+  details: string | null;
+  resolution: string | null;
+  createdAt: string;
+  reviewedAt: string | null;
+  resolvedAt: string | null;
+}
+
+/** `GET /admin/disputes`. */
+export interface AdminDispute extends Dispute {
+  asset: Dispute["asset"] & { status: AssetStatus };
+  openedByWalletAddress: string;
+  attestation: {
+    claimType: ClaimType;
+    result: AttestationResult;
+    status: AttestationStatus;
+    verifier: { id: string; publicName: string | null };
+  } | null;
+  evidence: { type: EvidenceType; visibility: EvidenceVisibility; mimeType: string } | null;
+  holdsAsset: boolean;
+  assetStatusBefore: AssetStatus | null;
+}

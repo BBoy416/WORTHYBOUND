@@ -191,3 +191,4 @@ pnpm kyc:record <wallet address> <provider> <reference> [VERIFIED|REJECTED|EXPIR
   (proposed)
 - [0015 Trust Score and verified status](docs/adr/0015-trust-score-and-verified-status.md)
 - [0016 Solana program, tokenization and chain sync](docs/adr/0016-solana-program.md)
+- [0017 Disputes](docs/adr/0017-disputes.md)

@@ -85,6 +85,8 @@ const TONES: Record<string, string> = {
   PENDING: "wait",
   INCONCLUSIVE: "wait",
   OPEN: "wait",
+  UNDER_REVIEW: "wait",
+  UPHELD: "bad",
   ASSIGNED: "wait",
   DRAFT: "wait",
   TRANSFER_PENDING: "wait",

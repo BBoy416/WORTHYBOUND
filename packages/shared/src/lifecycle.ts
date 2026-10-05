@@ -299,11 +299,12 @@ export const TRANSFER_LIFECYCLE: Lifecycle<TransferStatus, TransferActor> = {
 
 export type DisputeActor = "OPENER" | "ADMIN";
 
+/** The opener can withdraw until an administrator starts the review (ADR 0017). */
 export const DISPUTE_LIFECYCLE: Lifecycle<DisputeStatus, DisputeActor> = {
   name: "dispute",
   transitions: {
     OPEN: { UNDER_REVIEW: ADMIN_ONLY, REJECTED: ADMIN_ONLY, WITHDRAWN: ["OPENER"] },
-    UNDER_REVIEW: { UPHELD: ADMIN_ONLY, REJECTED: ADMIN_ONLY, WITHDRAWN: ["OPENER"] },
+    UNDER_REVIEW: { UPHELD: ADMIN_ONLY, REJECTED: ADMIN_ONLY },
     UPHELD: {},
     REJECTED: {},
     WITHDRAWN: {},

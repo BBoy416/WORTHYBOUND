@@ -158,6 +158,7 @@ function source(overrides: Partial<PassportSource> = {}): PassportSource {
       summary: `${SECRET}-check-details`,
     } as PassportSource["automatedChecks"],
     custody: { currentSince: d("2025-12-01T00:00:00Z"), transferCount: 0 },
+    openDisputes: 1,
     evidence: [privateEvidence, publicPhoto, rejectedPublic],
     evidenceCommitments: [
       { merkleRoot: hash("d"), evidenceCount: 3, createdAt: d("2026-01-04T00:00:00Z") },
@@ -268,6 +269,7 @@ describe("toPublicPassport", () => {
   });
 
   it("shows only that automated checks passed, and when", () => {
+    expect(toPublicPassport(source())?.openDisputes).toBe(1);
     expect(toPublicPassport(source())?.automatedChecks).toEqual({
       filesPassed: 2,
       lastPassedAt: "2026-04-01T00:00:00.000Z",

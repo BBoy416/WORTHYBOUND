@@ -7,7 +7,7 @@ const NO_DECAY = { halfLifeDays: null, minFactor: 1 } as const;
  * snapshots remain reproducible.
  */
 export const DEFAULT_WEIGHTS: TrustWeights = {
-  version: "weights-2026.3",
+  version: "weights-2026.4",
   typePoints: {
     PHOTO: 2,
     RECEIPT: 8,
@@ -56,6 +56,7 @@ export const DEFAULT_WEIGHTS: TrustWeights = {
   },
   repeatDecay: 0.5,
   suspendedSourceMultiplier: 0.5,
+  capturedMultiplier: 1.5,
   identity: {
     walletVerified: 2,
     identityVerified: 8,

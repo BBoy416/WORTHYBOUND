@@ -6,6 +6,7 @@ import sharp from "sharp";
 import { CheckEngineError } from "@worthybound/automated-checks";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { grantAdmin } from "../src/cli/admin-grant.js";
+import { recordKyc } from "../src/cli/kyc-record.js";
 import { readAll } from "../src/evidence/inspect.js";
 import {
   type Clock,
@@ -51,6 +52,13 @@ const texturedPhoto = (seed: number, size = 256) => {
 };
 
 /** Minimal ISO media file headers, enough for type detection. */
+/** A JPEG of random grey blocks, so its fingerprint differs from every other photo. */
+const blockPhoto = () =>
+  sharp(randomBytes(16 * 16), { raw: { width: 16, height: 16, channels: 1 } })
+    .resize(256, 256, { kernel: "nearest" })
+    .jpeg()
+    .toBuffer();
+
 const mediaFile = (brand: "mp42" | "qt  ") =>
   Buffer.concat([
     Buffer.from([0, 0, 0, 0x18]),
@@ -779,6 +787,58 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       expect(responses.map((r) => r.statusCode)).toEqual([404, 404, 404]);
       expect(new Set(responses.map((r) => r.body)).size).toBe(1);
     });
+
+    it("stops showing and counting a photo once a dispute about it is upheld (ADR 0017)", async () => {
+      const alice = await owner();
+      const wbId = await asset(alice, true);
+      const priv = await added(alice, wbId, { body: await phonePhoto("#a1b2c3") });
+      const pub = await added(alice, wbId, {
+        body: await phonePhoto("#405060"),
+        visibility: "PUBLIC",
+      });
+      const buyer = await owner();
+      const admin = await owner();
+      for (const who of [buyer, admin]) {
+        await recordKyc(
+          db.prisma,
+          {
+            walletAddress: who.wallet.address,
+            provider: "test-kyc",
+            reference: randomUUID(),
+            status: "VERIFIED",
+          },
+          clock.now,
+        );
+      }
+      await grantAdmin(db.prisma, admin.wallet.address);
+      const dispute = (evidenceId: string) =>
+        call(buyer, "POST", "/disputes", {
+          assetId: wbId,
+          evidenceId,
+          reason: "This photo is from a sales listing",
+        });
+      // Others cannot dispute private evidence they cannot see.
+      expect((await dispute(priv.id)).statusCode).toBe(404);
+      const opened = await dispute(pub.id);
+      expect(opened.statusCode, opened.body).toBe(201);
+      const { id } = opened.json<{ id: string }>();
+      expect((await call(admin, "POST", `/admin/disputes/${id}/review`, {})).statusCode).toBe(200);
+      const decided = await call(admin, "POST", `/admin/disputes/${id}/resolution`, {
+        outcome: "UPHELD",
+        resolution: "The photo appears on a dealer's website.",
+      });
+      expect(decided.statusCode, decided.body).toBe(200);
+      expect(decided.json()).toMatchObject({ evidence: { type: "PHOTO", visibility: "PUBLIC" } });
+
+      const passport = (await call(null, "GET", `/passport/${wbId}`)).json().passport;
+      expect(passport.publicEvidence).toEqual([]);
+      expect((await call(null, "GET", pub.publicPath as string)).statusCode).toBe(404);
+      const trust = (await call(alice, "GET", `/assets/${wbId}/trust`)).json();
+      expect(trust.excludedProofs).toContainEqual({
+        proofId: `evidence:${pub.id}`,
+        reason: "REJECTED",
+      });
+    });
   });
   describe("AI checks", () => {
     type Check = { status: string; problems: string[]; checkedAt: string | null } | null;
@@ -1263,6 +1323,44 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       });
       expect(late.json().error.code).toBe("capture_session_closed");
       expect((await start(alice, wbId)).statusCode).toBe(201);
+    });
+
+    it("counts checked photos from a completed session more in the Trust Score", async () => {
+      const alice = await owner();
+      const wbId = await asset(alice, true);
+      const session = (await start(alice, wbId)).json<Session>();
+      for (const name of session.shots.map((s) => s.shot)) {
+        const { res } = await upload(alice, wbId, {
+          body: await blockPhoto(),
+          captureSessionId: session.id,
+          captureShot: name,
+        });
+        expect(res.statusCode, res.body).toBe(201);
+      }
+      const plain = await added(alice, wbId, { body: await phonePhoto("#778899") });
+      const checks = app.automatedChecks as NonNullable<FastifyInstance["automatedChecks"]>;
+      while ((await checks.runOnce()) > 0);
+
+      const trust = (await call(alice, "GET", `/assets/${wbId}/trust`)).json<{
+        factors: { proofId?: string; detail?: { source?: string; capturedMultiplier?: number } }[];
+      }>();
+      const automated = trust.factors.filter((f) => f.detail?.source === "AUTOMATED");
+      const captured = await db.prisma.automatedCheck.findMany({
+        where: { evidence: { captureSessionId: session.id }, result: "PASSED" },
+        select: { id: true },
+      });
+      expect(captured).toHaveLength(session.shots.length);
+      for (const { id } of captured) {
+        expect(automated.find((f) => f.proofId === `check:${id}`)?.detail).toMatchObject({
+          capturedMultiplier: 1.5,
+        });
+      }
+      const plainCheck = await db.prisma.automatedCheck.findFirstOrThrow({
+        where: { evidenceId: plain.id },
+      });
+      expect(
+        automated.find((f) => f.proofId === `check:${plainCheck.id}`)?.detail?.capturedMultiplier,
+      ).toBeUndefined();
     });
 
     it("refuses shots that arrive after the code expired", async () => {

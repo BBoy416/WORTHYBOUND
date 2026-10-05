@@ -39,6 +39,11 @@ export interface Proof {
   /** Outcome of a claim. CONTRADICTED is a negative finding (e.g. "serial does not match"). */
   result?: "CONFIRMED" | "CONTRADICTED";
   sourceStatus?: SourceStatus;
+  /**
+   * A passed automated check of a photo taken in a completed guided capture session: live from
+   * the camera, with the session code (ADR 0013).
+   */
+  captured?: boolean;
 }
 
 export interface TrustInputs {
@@ -80,6 +85,8 @@ export interface TrustWeights {
   repeatDecay: number;
   /** Weight multiplier for proofs from a suspended party. */
   suspendedSourceMultiplier: number;
+  /** Weight multiplier for captured proofs (see `Proof.captured`). */
+  capturedMultiplier: number;
   identity: {
     walletVerified: number;
     identityVerified: number;

@@ -34,6 +34,7 @@ unchanged.
   proof. _Copies_ of a file already on another asset (ADR 0010) do not count.
 - _Owner_: every user signed in with a wallet; identity verified from the KYC status.
 - _Custody_ from the ownership periods; _open disputes_ from `OPEN` and `UNDER_REVIEW` disputes.
+  Evidence a dispute upheld counts as rejected (ADR 0017).
 
 **Verified.** An asset is evaluated against the templates its owner requested verification
 against (open, completed or attested requests), each in its current published version. When one

@@ -2,6 +2,7 @@ import {
   CAPTURE_CODE_ALPHABET,
   CAPTURE_CODE_LENGTH,
   CAPTURE_SHOTS,
+  DISPUTE_STATUSES,
   TRANSFER_DELIVERIES,
 } from "@worthybound/shared";
 import { z } from "zod";
@@ -100,8 +101,26 @@ export const openDisputeSchema = z
   });
 export type OpenDisputeInput = z.infer<typeof openDisputeSchema>;
 
+/** Statuses an administrator can give an asset held by a dispute when deciding it (ADR 0017). */
+export const DISPUTE_ASSET_OUTCOMES = ["ACTIVE", "REVERIFICATION_REQUIRED", "REVOKED"] as const;
+
+/**
+ * `assetStatus` applies only when the dispute holds the asset; without it the asset returns to
+ * ACTIVE, or REVERIFICATION_REQUIRED if it was awaiting reverification.
+ */
 export const resolveDisputeSchema = z.strictObject({
   outcome: z.enum(["UPHELD", "REJECTED"]),
   resolution: text(2000),
+  assetStatus: z.enum(DISPUTE_ASSET_OUTCOMES).optional(),
 });
 export type ResolveDisputeInput = z.infer<typeof resolveDisputeSchema>;
+
+/** Starting a review; `holdAsset` puts the asset on hold (DISPUTED), which blocks transfers. */
+export const reviewDisputeSchema = z.strictObject({ holdAsset: z.boolean().default(false) });
+export type ReviewDisputeInput = z.infer<typeof reviewDisputeSchema>;
+
+export const disputeParamsSchema = z.strictObject({ disputeId: uuidSchema });
+
+export const disputeListQuerySchema = z.strictObject({
+  status: z.enum(DISPUTE_STATUSES).optional(),
+});

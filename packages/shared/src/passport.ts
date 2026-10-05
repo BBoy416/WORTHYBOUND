@@ -47,6 +47,8 @@ export interface PassportSource {
   /** Passed automated checks counted in the latest Trust Score, if none failed (ADR 0013). */
   automatedChecks: { filesPassed: number; lastPassedAt: Date } | null;
   custody: { currentSince: Date | null; transferCount: number };
+  /** Disputes open or under review (ADR 0017). */
+  openDisputes: number;
   evidence: readonly {
     id: string;
     type: EvidenceType;
@@ -137,6 +139,8 @@ export interface PublicPassport {
     chainRecordAddress: string | null;
   };
   custody: { currentSince: string | null; transferCount: number };
+  /** Disputes open or under review; who opened them and why stays private (ADR 0017). */
+  openDisputes: number;
   publicEvidence: {
     evidenceId: string;
     type: EvidenceType;
@@ -285,6 +289,7 @@ export function toPublicPassport(source: PassportSource): PublicPassport | null 
       currentSince: isoOrNull(source.custody.currentSince),
       transferCount: source.custody.transferCount,
     },
+    openDisputes: source.openDisputes,
     publicEvidence: source.evidence
       .filter((e) => e.visibility === "PUBLIC" && e.reviewStatus !== "REJECTED")
       .sort(byTime((e) => e.createdAt))
