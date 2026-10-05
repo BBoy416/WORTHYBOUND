@@ -28,12 +28,12 @@ export function HomePage() {
             Real assets. <span className="gold">Proven identity.</span>
           </h1>
           <p className="lead">
-            Give a watch, artwork, piece of jewelry, collectible or car a public passport. Seal its
-            evidence in a vault, tokenize it on Solana once your identity is verified, and have
-            approved professionals review it online or in person to raise its Trust Score. Buyers
-            check the passport and the item before paying, and the token changes hands only through
-            WorthyBound's controlled transfer. A token is not proof of authenticity: trust must be
-            earned.
+            Give any valuable item a public passport, whether it is a watch, a painting, a guitar or
+            a car. Seal its evidence in a vault, tokenize it on Solana once your identity is
+            verified, and have approved professionals review it online or in person to raise its
+            Trust Score. Buyers check the passport and the item before paying, and the token changes
+            hands only through WorthyBound's controlled transfer. A token is not proof of
+            authenticity: trust must be earned.
           </p>
           <form className="lookup" onSubmit={lookUp}>
             <input
