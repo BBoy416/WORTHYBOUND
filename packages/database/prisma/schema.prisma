@@ -279,6 +279,8 @@ enum ChainTransactionKind {
   ESCROW_PAYMENT
   /// The return of a shipped transfer's escrow to the buyer.
   ESCROW_REFUND
+  /// Closes an ended transfer's nonce accounts and returns their rent to the oracle.
+  CLOSE_NONCE_ACCOUNTS
 }
 
 enum ChainEntityType {

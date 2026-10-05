@@ -28,9 +28,11 @@ import {
   createNonceAccountInstructions,
   NONCE_ACCOUNT_SIZE,
   readNonceAccount,
+  withdrawNonceInstruction,
 } from "./transfer.js";
 
 /** How long `sendTransfer` waits for confirmation before the caller retries. */
+const SYSTEM_PROGRAM = "11111111111111111111111111111111";
 const TRANSFER_CONFIRM_ATTEMPTS = 30;
 const TRANSFER_CONFIRM_INTERVAL_MS = 2_000;
 
@@ -136,6 +138,12 @@ export interface WorthyBoundOracle {
     buyer: string;
     priceLamports: bigint;
   }): Promise<Signature | null>;
+  /**
+   * Closes the oracle's nonce accounts that hold no more than their rent, returning the rent to
+   * the oracle. Accounts already closed, holding more or under another authority are left alone.
+   * Null if there was nothing to close.
+   */
+  closeNonceAccounts(accounts: string[]): Promise<Signature | null>;
   /** Lamports held by the account, 0 if it does not exist. */
   getBalance(address: string): Promise<bigint>;
   /**
@@ -329,6 +337,34 @@ export function createWorthyBoundOracle(
         priceLamports,
       });
       return client.sendTransfer({ transaction, signatures: {} });
+    },
+
+    async closeNonceAccounts(accounts) {
+      const rent = await rentExempt();
+      const instructions = [];
+      for (const account of new Set(accounts)) {
+        const { value } = await connection.rpc
+          .getAccountInfo(account as Address, { encoding: "base64", commitment: "confirmed" })
+          .send();
+        if (!value || value.owner !== SYSTEM_PROGRAM || BigInt(value.lamports) > rent) continue;
+        let authority: Address;
+        try {
+          ({ authority } = readNonceAccount(Buffer.from(value.data[0], "base64")));
+        } catch {
+          continue;
+        }
+        if (authority !== oracle.address) continue;
+        instructions.push(
+          withdrawNonceInstruction({
+            nonceAccount: account as Address,
+            to: oracle.address,
+            authority: oracle,
+            lamports: BigInt(value.lamports),
+          }),
+        );
+      }
+      if (instructions.length === 0) return null;
+      return sendInstructions(connection, oracle, instructions);
     },
 
     async getBalance(account) {

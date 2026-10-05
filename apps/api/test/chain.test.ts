@@ -18,7 +18,7 @@ import type { Storage } from "@worthybound/storage";
 import type { FastifyInstance } from "fastify";
 import sharp from "sharp";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_CHAIN_ATTEMPTS } from "../src/chain/sync.js";
+import { closeNoncesJobKey, MAX_CHAIN_ATTEMPTS } from "../src/chain/sync.js";
 import { grantAdmin } from "../src/cli/admin-grant.js";
 import { recordKyc } from "../src/cli/kyc-record.js";
 import {
@@ -53,7 +53,8 @@ type Call =
     }
   | { kind: "transfer"; wbId: string; buyer: string }
   | { kind: "payment" | "payment_reset"; buyer: string; price: bigint }
-  | { kind: "refund"; buyer: string; price: bigint };
+  | { kind: "refund"; buyer: string; price: bigint }
+  | { kind: "close"; accounts: string[] };
 
 type Signer = Awaited<ReturnType<typeof loadKeypairSigner>>;
 
@@ -92,6 +93,8 @@ class FakeOracle implements WorthyBoundOracle {
   readonly balances = new Map<string, bigint>();
   /** Lamports held in escrow, by nonce account. */
   readonly escrows = new Map<string, bigint>();
+  /** Nonce accounts created and not yet closed. */
+  readonly nonces = new Set<string>();
   #n = 0;
 
   constructor(readonly signer: Signer) {}
@@ -184,6 +187,8 @@ class FakeOracle implements WorthyBoundOracle {
     });
     const paymentNonceAccount =
       input.escrow && input.priceLamports > 0n ? new TestWallet().address : null;
+    this.nonces.add(nonceAccount);
+    if (paymentNonceAccount) this.nonces.add(paymentNonceAccount);
     return { transaction, nonceAccount, paymentNonceAccount };
   }
 
@@ -239,6 +244,17 @@ class FakeOracle implements WorthyBoundOracle {
     this.#credit(input.buyer, input.priceLamports);
     this.#advanced.add(input.escrowAccount);
     this.calls.push({ kind: "refund", buyer: input.buyer, price: input.priceLamports });
+    return this.#sign();
+  }
+
+  async closeNonceAccounts(accounts: string[]) {
+    this.#maybeFail();
+    const closing = accounts.filter(
+      (a) => this.nonces.has(a) && (this.escrows.get(a) ?? 0n) === 0n,
+    );
+    if (closing.length === 0) return null;
+    for (const a of closing) this.nonces.delete(a);
+    this.calls.push({ kind: "close", accounts: closing });
     return this.#sign();
   }
 
@@ -773,6 +789,21 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
         "TRANSFER_ASSET",
       );
       expect(JSON.stringify(passport)).not.toContain(bob.wallet.address);
+
+      // The next run closes the nonce account and returns its rent to the oracle, once.
+      const { nonceAccount } = await db.prisma.transferRequest.findUniqueOrThrow({
+        where: { id: started.id },
+      });
+      await app.chainSync?.runOnce();
+      await app.chainSync?.runOnce();
+      expect(oracle.calls.filter((c) => c.kind === "close")).toEqual([
+        { kind: "close", accounts: [nonceAccount] },
+      ]);
+      expect(
+        await db.prisma.chainTransaction.findUniqueOrThrow({
+          where: { idempotencyKey: closeNoncesJobKey(started.id) },
+        }),
+      ).toMatchObject({ kind: "CLOSE_NONCE_ACCOUNTS", status: "CONFIRMED" });
     });
 
     it("puts the agreed price in the transaction and checks the buyer can pay before signing", async () => {
@@ -977,6 +1008,10 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
         closedReason: "cancelled_by_recipient",
       });
       expect(oracle.records.get(wbId)?.owner).toBe(alice.wallet.address);
+      // Closing the nonce account also keeps the signed transaction from ever landing.
+      await app.chainSync?.runOnce();
+      const { nonceAccount } = await db.prisma.transferRequest.findUniqueOrThrow({ where: { id } });
+      expect(oracle.calls).toContainEqual({ kind: "close", accounts: [nonceAccount] });
     });
 
     describe.skipIf(!TEST_STORAGE_AVAILABLE)("shipped, with the price in escrow", () => {
@@ -1226,6 +1261,14 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
           closedReason: "cancelled_by_sender",
         });
         expect(oracle.calls.filter((c) => c.kind === "refund")).toHaveLength(2);
+
+        // Refunded escrows are closed: the escrow and payment nonce accounts of both sales.
+        await run();
+        const closed = oracle.calls.flatMap((c) => (c.kind === "close" ? c.accounts : []));
+        for (const id of [late.id, second.id]) {
+          const t = await row(id);
+          expect(closed).toEqual(expect.arrayContaining([t.nonceAccount, t.paymentNonceAccount]));
+        }
       });
 
       it("holds a sale whose photos do not match for an administrator, who refunds or releases it", async () => {
