@@ -1,6 +1,6 @@
 # ADR 0003: Weighted Trust Score
 
-- Status: Accepted; amended by ADR 0013
+- Status: Accepted; amended by ADR 0013 and the verification route ceilings (2026-10-05)
 - Date: 2026-09-28
 
 ## Context
@@ -20,10 +20,29 @@ proof is weighted by:
 Rules:
 
 - Each source class has a ceiling (owner-submitted proofs contribute at most 30 points).
-- Tier caps: self-documented only ≤ 35 (≤ 45 with KYC); no verifier inspection ≤ 60; no
-  authentication plus provenance ≤ 80; high-risk categories need two independent verifiers to
-  exceed 90. Once automated checks have passed and none failed, the first two are 65 instead
-  (ADR 0013).
+- Ceilings by verification route (weights `weights-2026.5`, engine `1.4.0`). They are maximums,
+  not scores: evidence quality, confirmed claims, failed checks and deductions set the actual
+  score.
+
+  | Evidence and verification                                   | Maximum |
+  | ----------------------------------------------------------- | ------- |
+  | Owner evidence only (with KYC)                              | 35 (45) |
+  | Verifier proofs, but no review of the required claims       | 60      |
+  | Owner evidence plus passed automated checks, none failed    | 65      |
+  | One approved verifier reviews online                        | 75      |
+  | Two independent approved verifiers review online            | 80      |
+  | One in-person inspection                                    | 85      |
+  | One online review plus one independent in-person inspection | 90      |
+  | Two independent approved verifiers inspect in person        | 100     |
+
+  A review counts when one approved, not suspended verifier's signed, confirmed attestations
+  cover every required claim of a template the asset is evaluated against (ADR 0015), each with a
+  method the template allows. It is in person when every claim was examined `IN_PERSON` or in a
+  `LABORATORY`; `REMOTE` and `DOCUMENT_REVIEW` count as online. Two reviews need two different
+  verifiers. The 65 also replaces the 60 when no review counts. `MULTI_VERIFIED` requires two
+  independent in-person inspections; online reviews alone cannot unlock it. A score of 100 is
+  the strongest proof under these rules, not a guarantee of authenticity.
+
 - Deductions: open disputes, contradicted claims, revoked attestations, suspended verifiers,
   missing required evidence, failed automated checks (ADR 0013), broken custody, stale
   verification.

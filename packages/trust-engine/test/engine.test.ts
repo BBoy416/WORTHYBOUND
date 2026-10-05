@@ -7,6 +7,7 @@ import {
   type Proof,
   type TrustInputs,
   TrustInputError,
+  type TrustTemplate,
 } from "../src/index.js";
 
 const NOW = "2026-09-01T00:00:00.000Z";
@@ -45,6 +46,17 @@ function inputs(overrides: Partial<TrustInputs> = {}): TrustInputs {
 const ownerPhotos = (n: number) =>
   Array.from({ length: n }, () => proof({ type: "PHOTO", source: "OWNER" }));
 
+const TEMPLATE = {
+  requiredClaims: ["AUTHENTICATION", "CONDITION"],
+  allowedMethods: ["IN_PERSON", "REMOTE", "LABORATORY", "DOCUMENT_REVIEW"],
+} as const satisfies TrustTemplate;
+
+/** A verifier's signed, confirmed attestations of every claim `TEMPLATE` requires. */
+const review = (sourceId: string, method: NonNullable<Proof["method"]>) =>
+  TEMPLATE.requiredClaims.map((type) =>
+    proof({ type, source: "VERIFIER", sourceId, result: "CONFIRMED", method }),
+  );
+
 describe("computeTrust: output contract", () => {
   it("returns score, factors, deductions, versions, hash and timestamp", () => {
     const result = computeTrust(inputs());
@@ -74,11 +86,12 @@ describe("computeTrust: output contract", () => {
         ...ownerPhotos(20),
         ...["v-a", "v-b", "v-c", "v-d"].flatMap((sourceId) => [
           proof({ type: "INSPECTION", source: "VERIFIER", sourceId }),
-          proof({ type: "AUTHENTICATION", source: "VERIFIER", sourceId }),
+          ...review(sourceId, "IN_PERSON"),
         ]),
         proof({ type: "AUTHENTICATION", source: "MANUFACTURER" }),
         proof({ type: "PROVENANCE", source: "THIRD_PARTY" }),
       ],
+      templates: [TEMPLATE],
     });
     const worst = inputs({
       owner: { walletVerified: false, identityVerified: false },
@@ -161,18 +174,14 @@ describe("computeTrust: strength of proofs, not number of proofs", () => {
   it("counts two independent verifiers higher than the same verifier twice", () => {
     const sameVerifier = computeTrust(
       inputs({
-        proofs: [
-          proof({ type: "INSPECTION", source: "VERIFIER", sourceId: "v-a" }),
-          proof({ type: "INSPECTION", source: "VERIFIER", sourceId: "v-a" }),
-        ],
+        proofs: [...review("v-a", "IN_PERSON"), ...review("v-a", "IN_PERSON")],
+        templates: [TEMPLATE],
       }),
     );
     const twoVerifiers = computeTrust(
       inputs({
-        proofs: [
-          proof({ type: "INSPECTION", source: "VERIFIER", sourceId: "v-a" }),
-          proof({ type: "INSPECTION", source: "VERIFIER", sourceId: "v-b" }),
-        ],
+        proofs: [...review("v-a", "IN_PERSON"), ...review("v-b", "IN_PERSON")],
+        templates: [TEMPLATE],
       }),
     );
     expect(twoVerifiers.score).toBeGreaterThan(sameVerifier.score);
@@ -233,7 +242,7 @@ describe("computeTrust: trust must be earned (tier caps)", () => {
       }),
     );
     expect(result.verificationLevel).toBe("SELF_DOCUMENTED");
-    expect(result.score).toBeLessThanOrEqual(DEFAULT_WEIGHTS.caps.withoutInspection);
+    expect(result.score).toBeLessThanOrEqual(DEFAULT_WEIGHTS.caps.withoutReview);
   });
 
   it("assigns a weight and freshness rule to every claim type", () => {
@@ -243,7 +252,7 @@ describe("computeTrust: trust must be earned (tier caps)", () => {
     }
   });
 
-  it("requires a verifier inspection to exceed the no-inspection cap", () => {
+  it("requires a review of the required claims to exceed 60", () => {
     const result = computeTrust(
       inputs({
         proofs: [
@@ -251,57 +260,126 @@ describe("computeTrust: trust must be earned (tier caps)", () => {
           proof({ type: "PROVENANCE", source: "OWNER" }),
           proof({ type: "SERIAL_NUMBER", source: "OWNER" }),
           proof({ type: "APPRAISAL", source: "VERIFIER", sourceId: "v-a" }),
+          proof({ type: "INSPECTION", source: "VERIFIER", sourceId: "v-a" }),
           proof({ type: "CERTIFICATE", source: "MANUFACTURER" }),
         ],
+        templates: [TEMPLATE],
       }),
     );
-    expect(result.score).toBe(DEFAULT_WEIGHTS.caps.withoutInspection);
-    expect(result.capsApplied.map((c) => c.code)).toEqual(["WITHOUT_INSPECTION"]);
+    expect(result.score).toBe(DEFAULT_WEIGHTS.caps.withoutReview);
+    expect(result.capsApplied.map((c) => c.code)).toEqual(["WITHOUT_REVIEW"]);
+    expect(result.verificationLevel).toBe("INSPECTED");
+  });
+});
+
+describe("computeTrust: verification route ceilings", () => {
+  const base = () => [
+    ...ownerPhotos(3),
+    proof({ type: "RECEIPT", source: "OWNER" }),
+    proof({ type: "CERTIFICATE", source: "OWNER" }),
+    proof({ type: "PROVENANCE", source: "OWNER" }),
+    proof({ type: "SERIAL_NUMBER", source: "OWNER" }),
+    proof({ type: "PHOTO", source: "AUTOMATED" }),
+    proof({ type: "RECEIPT", source: "AUTOMATED" }),
+    proof({ type: "CERTIFICATE", source: "AUTOMATED" }),
+  ];
+  const score = (proofs: Proof[], overrides: Partial<TrustInputs> = {}) =>
+    computeTrust(inputs({ proofs: [...base(), ...proofs], templates: [TEMPLATE], ...overrides }));
+
+  it.each([
+    ["one online review", [["v-a", "REMOTE"]], 75, "ONE_ONLINE_REVIEW"],
+    [
+      "two online reviews",
+      [
+        ["v-a", "REMOTE"],
+        ["v-b", "REMOTE"],
+      ],
+      80,
+      "TWO_ONLINE_REVIEWS",
+    ],
+    ["one in-person inspection", [["v-a", "IN_PERSON"]], 85, "ONE_IN_PERSON_INSPECTION"],
+    [
+      "an online review and an in-person inspection",
+      [
+        ["v-a", "REMOTE"],
+        ["v-b", "IN_PERSON"],
+      ],
+      90,
+      "ONLINE_REVIEW_AND_IN_PERSON_INSPECTION",
+    ],
+  ] as const)("caps %s", (_label, reviews, limit, code) => {
+    const result = score(reviews.flatMap(([id, method]) => review(id, method)));
+    expect(result.score).toBe(limit);
+    expect(result.capsApplied).toEqual([{ code, limit }]);
+    expect(result.verificationLevel).not.toBe("MULTI_VERIFIED");
   });
 
-  it("requires authentication plus provenance to exceed 80", () => {
-    const base = [
-      proof({ type: "RECEIPT", source: "OWNER" }),
-      proof({ type: "SERIAL_NUMBER", source: "OWNER" }),
-      proof({ type: "INSPECTION", source: "VERIFIER", sourceId: "v-a" }),
-      proof({ type: "INSPECTION", source: "VERIFIER", sourceId: "v-b" }),
-    ];
-    const inspectedOnly = computeTrust(inputs({ proofs: base }));
-    expect(inspectedOnly.score).toBe(DEFAULT_WEIGHTS.caps.withoutAuthenticationAndProvenance);
+  it("allows 100 and MULTI_VERIFIED only with two independent in-person inspections", () => {
+    const two = score([...review("v-a", "IN_PERSON"), ...review("v-b", "IN_PERSON")]);
+    expect(two.score).toBe(100);
+    expect(two.capsApplied).toEqual([]);
+    expect(two.verificationLevel).toBe("MULTI_VERIFIED");
 
-    const authenticated = computeTrust(
-      inputs({
-        proofs: [
-          ...base,
-          proof({ type: "AUTHENTICATION", source: "VERIFIER", sourceId: "v-a" }),
-          proof({ type: "PROVENANCE", source: "THIRD_PARTY" }),
-        ],
-      }),
-    );
-    expect(authenticated.score).toBeGreaterThan(80);
-    expect(authenticated.capsApplied).toEqual([]);
+    const threeOnline = score(["v-a", "v-b", "v-c"].flatMap((id) => review(id, "REMOTE")));
+    expect(threeOnline.score).toBe(DEFAULT_WEIGHTS.caps.twoOnlineReviews);
+    expect(threeOnline.verificationLevel).toBe("AUTHENTICATED");
+
+    const sameVerifier = score([...review("v-a", "IN_PERSON"), ...review("v-a", "IN_PERSON")]);
+    expect(sameVerifier.score).toBe(DEFAULT_WEIGHTS.caps.oneInPersonInspection);
   });
 
-  it("requires multiple independent verifiers above 90 for high-risk categories", () => {
-    const proofs = [
-      proof({ type: "RECEIPT", source: "OWNER" }),
-      proof({ type: "SERIAL_NUMBER", source: "OWNER" }),
-      proof({ type: "PROVENANCE", source: "THIRD_PARTY" }),
-      proof({ type: "INSPECTION", source: "VERIFIER", sourceId: "v-a" }),
-      proof({ type: "AUTHENTICATION", source: "VERIFIER", sourceId: "v-a" }),
-      proof({ type: "APPRAISAL", source: "VERIFIER", sourceId: "v-a" }),
-    ];
-    const single = computeTrust(inputs({ category: "LUXURY_WATCH", proofs }));
-    expect(single.score).toBe(DEFAULT_WEIGHTS.caps.highRiskWithoutMultipleVerifiers);
-    expect(single.capsApplied.map((c) => c.code)).toEqual(["HIGH_RISK_WITHOUT_MULTIPLE_VERIFIERS"]);
-
-    const multiple = computeTrust(
-      inputs({
-        category: "LUXURY_WATCH",
-        proofs: [...proofs, proof({ type: "AUTHENTICATION", source: "MANUFACTURER" })],
-      }),
+  it("is a ceiling: deductions still lower the score below it", () => {
+    const result = score(review("v-a", "IN_PERSON"), { openDisputes: 1 });
+    expect(result.score).toBe(
+      DEFAULT_WEIGHTS.caps.oneInPersonInspection - DEFAULT_WEIGHTS.deductions.openDispute.points,
     );
-    expect(multiple.score).toBeGreaterThan(90);
+  });
+
+  it("counts a review with any claim examined online as online", () => {
+    const [authentication, condition] = review("v-a", "IN_PERSON");
+    const result = score([authentication!, { ...condition!, method: "REMOTE" }]);
+    expect(result.capsApplied.map((c) => c.code)).toEqual(["ONE_ONLINE_REVIEW"]);
+    expect(score(review("v-a", "DOCUMENT_REVIEW")).capsApplied.map((c) => c.code)).toEqual([
+      "ONE_ONLINE_REVIEW",
+    ]);
+    expect(score(review("v-a", "LABORATORY")).capsApplied.map((c) => c.code)).toEqual([
+      "ONE_IN_PERSON_INSPECTION",
+    ]);
+  });
+
+  it("counts only confirmed, signed reports covering every required claim", () => {
+    const [authentication, condition] = review("v-a", "IN_PERSON");
+    const cases: Proof[][] = [
+      [authentication!],
+      [authentication!, (({ method: _method, ...unsigned }) => unsigned)(condition!)],
+      [authentication!, { ...condition!, result: "CONTRADICTED" }],
+      [authentication!, { ...condition!, status: "REVOKED" }],
+      [authentication!, { ...condition!, expiresAt: daysAgo(1) }],
+      review("v-b", "IN_PERSON").map((p) => ({ ...p, sourceStatus: "SUSPENDED" as const })),
+      review("v-c", "IN_PERSON").map((p) => ({ ...p, source: "MANUFACTURER" as const })),
+    ];
+    for (const proofs of cases) {
+      const result = score(proofs);
+      expect(result.capsApplied.map((c) => c.code)).toEqual(["AUTOMATED_CHECKS_PASSED"]);
+    }
+    expect(score(review("v-a", "IN_PERSON"), { templates: [] }).score).toBe(
+      DEFAULT_WEIGHTS.caps.automatedChecksPassed,
+    );
+  });
+
+  it("uses each template's required claims and allowed methods", () => {
+    const inPersonOnly: TrustTemplate = { ...TEMPLATE, allowedMethods: ["IN_PERSON"] };
+    expect(score(review("v-a", "REMOTE"), { templates: [inPersonOnly] }).score).toBe(
+      DEFAULT_WEIGHTS.caps.automatedChecksPassed,
+    );
+    const authenticationOnly: TrustTemplate = {
+      requiredClaims: ["AUTHENTICATION"],
+      allowedMethods: ["REMOTE"],
+    };
+    const result = score(review("v-a", "REMOTE").slice(0, 1), {
+      templates: [inPersonOnly, authenticationOnly],
+    });
+    expect(result.capsApplied.map((c) => c.code)).toEqual(["ONE_ONLINE_REVIEW"]);
   });
 });
 
@@ -427,9 +505,14 @@ describe("computeTrust: asset status", () => {
   });
 
   it("does not cap a VERIFIED asset", () => {
-    expect(computeTrust(inputs({ status: "VERIFIED", proofs: strong() })).score).toBeGreaterThan(
-      80,
+    const result = computeTrust(
+      inputs({
+        status: "VERIFIED",
+        proofs: [...strong(), ...review("v-a", "IN_PERSON")],
+        templates: [TEMPLATE],
+      }),
     );
+    expect(result.score).toBe(DEFAULT_WEIGHTS.caps.oneInPersonInspection);
   });
 });
 

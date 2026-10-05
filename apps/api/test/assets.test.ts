@@ -560,8 +560,8 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
         verificationLevel: "UNVERIFIED",
         trust: {
           score: 7,
-          engineVersion: "1.3.0",
-          weightsVersion: "weights-2026.4",
+          engineVersion: "1.4.0",
+          weightsVersion: "weights-2026.5",
           disclaimer: expect.stringContaining("does not guarantee authenticity"),
         },
         custody: { transferCount: 0 },

@@ -3,11 +3,13 @@ import {
   CLAIM_TYPES,
   PROOF_SOURCES,
   type AssetStatus,
+  type AttestationMethod,
+  type ClaimType,
   type VerificationLevel,
 } from "@worthybound/shared";
 
 export { ASSET_STATUSES, PROOF_SOURCES };
-export type { AssetStatus, VerificationLevel };
+export type { AssetStatus, AttestationMethod, VerificationLevel };
 
 /**
  * Who stands behind a proof: the evidence sources, plus AUTOMATED for a passed automated check
@@ -44,6 +46,17 @@ export interface Proof {
    * the camera, with the session code (ADR 0013).
    */
   captured?: boolean;
+  /**
+   * How a verifier examined the item, for a signed attestation. Only proofs with a method count
+   * towards a review (see `TrustInputs.templates`).
+   */
+  method?: AttestationMethod;
+}
+
+/** Requirements of a template the asset is evaluated against. */
+export interface TrustTemplate {
+  requiredClaims: readonly ClaimType[];
+  allowedMethods: readonly AttestationMethod[];
 }
 
 export interface TrustInputs {
@@ -63,6 +76,12 @@ export interface TrustInputs {
   missingRequiredEvidence?: number;
   /** Owner files whose latest automated check failed and that no verifier has accepted. */
   failedAutomatedChecks?: number;
+  /**
+   * A verifier's review counts towards a higher ceiling when their confirmed attestations cover
+   * every required claim of one of these templates. In person if every claim was examined in
+   * person or in a laboratory, otherwise online (remote or document review).
+   */
+  templates?: readonly TrustTemplate[];
   /** ISO-8601 evaluation time. Injected so results are reproducible. */
   evaluatedAt: string;
 }
@@ -107,14 +126,15 @@ export interface TrustWeights {
      * has failed.
      */
     automatedChecksPassed: number;
-    /** No counted INSPECTION or AUTHENTICATION from a verifier/manufacturer. */
-    withoutInspection: number;
-    /** No counted AUTHENTICATION plus PROVENANCE. */
-    withoutAuthenticationAndProvenance: number;
-    /** High-risk categories without at least two independent verifiers/manufacturers. */
-    highRiskWithoutMultipleVerifiers: number;
+    /** Counted verifier or manufacturer proofs, but no review of the required claims. */
+    withoutReview: number;
+    oneOnlineReview: number;
+    /** Two different approved verifiers, both online. */
+    twoOnlineReviews: number;
+    oneInPersonInspection: number;
+    /** An online review plus an in-person inspection by a different verifier. */
+    onlineReviewAndInPersonInspection: number;
   };
-  highRiskCategories: readonly string[];
   statusCaps: Partial<Record<AssetStatus, number>>;
   deductions: {
     openDispute: { points: number; max: number };

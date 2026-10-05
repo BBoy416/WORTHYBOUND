@@ -914,8 +914,8 @@ describe.skipIf(!TEST_DATABASE_URL)("trust score and verified status", () => {
       score: 7,
       verificationLevel: "UNVERIFIED",
       capsApplied: [],
-      engineVersion: "1.3.0",
-      weightsVersion: "weights-2026.4",
+      engineVersion: "1.4.0",
+      weightsVersion: "weights-2026.5",
       disclaimer: expect.stringContaining("does not guarantee authenticity"),
     });
     expect(codes(score.factors)).toEqual(["OWNER_WALLET_VERIFIED", "CUSTODY_CONTINUITY"]);
@@ -1081,6 +1081,31 @@ describe.skipIf(!TEST_DATABASE_URL)("trust score and verified status", () => {
     await expectOk(f.claim(second, request.id));
     await expectOk(f.attest(second, request.id, { claimType: "PROVENANCE" }), 201);
     expect((await expectOk(call(owner, "GET", `/assets/${wbId}`))).status).toBe("VERIFIED");
+  });
+
+  it("becomes MULTI_VERIFIED only with a second independent in-person inspection", async () => {
+    const { owner, wbId } = await verified();
+    const level = async () =>
+      (await expectOk(call(owner, "GET", `/assets/${wbId}`))).verificationLevel as string;
+    expect(await level()).toBe("AUTHENTICATED");
+    const review = async (method: string) => {
+      const { versionId } = await f.template(adminA, adminB, "LUXURY_WATCH", {
+        ...noEvidence,
+        allowedMethods: ["IN_PERSON", "REMOTE", "LABORATORY"],
+      });
+      const request = await f.openRequest(owner, wbId, versionId);
+      const v = await f.verifier(adminA);
+      await expectOk(f.claim(v, request.id));
+      await expectOk(f.attest(v, request.id, { method }), 201);
+      await expectOk(
+        f.attest(v, request.id, { method, claimType: "CONDITION", conditionGrade: "GOOD" }),
+        201,
+      );
+    };
+    await review("REMOTE");
+    expect(await level()).toBe("AUTHENTICATED");
+    await review("LABORATORY");
+    expect(await level()).toBe("MULTI_VERIFIED");
   });
 
   describe("disputes (ADR 0017)", () => {

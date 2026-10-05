@@ -161,8 +161,9 @@ export async function recordTrust(tx: Tx, assetId: string, at: Date): Promise<Tr
       verifierStatus: a.verifier.status,
       expiresAt: a.expiresAt,
     }));
-  const evaluations = versions.map((v) =>
-    evaluateTemplate(requirementsOf(v), { attestations: facts, evidence, at }),
+  const requirements = versions.map(requirementsOf);
+  const evaluations = requirements.map((r) =>
+    evaluateTemplate(r, { attestations: facts, evidence, at }),
   );
   // Owner files whose latest automated check failed deduct and block templates until a verifier
   // accepts them (ADR 0013).
@@ -214,6 +215,8 @@ export async function recordTrust(tx: Tx, assetId: string, at: Date): Promise<Tr
       status:
         a.status === "REVOKED" ? "REVOKED" : a.status === "SUPERSEDED" ? "SUPERSEDED" : "ACTIVE",
       result: a.result,
+      // Like templates, ceilings after recovery count only attestations recorded since.
+      ...(attestedSince === null || a.createdAt >= attestedSince ? { method: a.method } : {}),
       ...(SOURCE_STATUS[a.verifier.status]
         ? { sourceStatus: SOURCE_STATUS[a.verifier.status] }
         : {}),
@@ -268,6 +271,10 @@ export async function recordTrust(tx: Tx, assetId: string, at: Date): Promise<Tr
     openDisputes,
     missingRequiredEvidence,
     failedAutomatedChecks,
+    templates: requirements.map(({ requiredClaims, allowedMethods }) => ({
+      requiredClaims,
+      allowedMethods,
+    })),
     evaluatedAt: at.toISOString(),
   });
 

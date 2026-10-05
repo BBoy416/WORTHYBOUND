@@ -115,7 +115,7 @@ It is enabled by `OPENAI_API_KEY` (model: `OPENAI_MODEL`); without it the checks
 
 - **Trust Score.** Engine `1.2.0`, weights `weights-2026.3`. Each passed check is an `AUTOMATED`
   proof (source multiplier 1.5, at most 20 points). With a passed check and no failed one, the
-  owner-only caps (35, or 45 with KYC) and the no-inspection cap (60) are replaced by 65. Each file whose latest
+  owner-only caps (35, or 45 with KYC) and the no-review cap (60, ADR 0003) are replaced by 65. Each file whose latest
   check failed deducts 10 (at most 30) and blocks templates, until a verifier accepts the file.
 - **Verifier applications.** Each application, and each request for more categories, gets an
   advisory AI report: recommendation, summary, strengths, concerns, questions for the reviewer,

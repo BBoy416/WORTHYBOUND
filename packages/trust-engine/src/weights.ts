@@ -7,7 +7,7 @@ const NO_DECAY = { halfLifeDays: null, minFactor: 1 } as const;
  * snapshots remain reproducible.
  */
 export const DEFAULT_WEIGHTS: TrustWeights = {
-  version: "weights-2026.4",
+  version: "weights-2026.5",
   typePoints: {
     PHOTO: 2,
     RECEIPT: 8,
@@ -70,11 +70,12 @@ export const DEFAULT_WEIGHTS: TrustWeights = {
     selfDocumented: 35,
     selfDocumentedIdentityVerified: 45,
     automatedChecksPassed: 65,
-    withoutInspection: 60,
-    withoutAuthenticationAndProvenance: 80,
-    highRiskWithoutMultipleVerifiers: 90,
+    withoutReview: 60,
+    oneOnlineReview: 75,
+    twoOnlineReviews: 80,
+    oneInPersonInspection: 85,
+    onlineReviewAndInPersonInspection: 90,
   },
-  highRiskCategories: ["FINE_ART", "LUXURY_WATCH", "JEWELRY", "COLLECTIBLE_CAR"],
   statusCaps: {
     DISPUTED: 40,
     REPORTED_LOST: 25,

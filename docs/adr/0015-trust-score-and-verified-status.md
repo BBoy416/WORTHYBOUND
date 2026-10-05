@@ -23,8 +23,12 @@ unchanged.
 
 **Inputs** (`recordTrust`, `apps/api/src/trust/record.ts`):
 
-- _Attestations_ are proofs of their claim type from source `VERIFIER`, with their expiry, status
-  and verifier status. Inconclusive and disputed attestations are left out.
+- _Attestations_ are proofs of their claim type from source `VERIFIER`, with their expiry, status,
+  verifier status and method. Inconclusive and disputed attestations are left out. After
+  recovery, only attestations recorded since carry their method, so only they count towards the
+  verification route ceilings (ADR 0003).
+- _Templates_: the required claims and allowed methods of the template versions evaluated below,
+  which decide whether a verifier's attestations form a review (ADR 0003).
 - _Evidence_ counts as the type it documents: photos and videos as `PHOTO`, receipts as `RECEIPT`,
   certificates, provenance documents, serial numbers and ownership documents as their claim type,
   and reports, appraisals, service records and manufacturer documents as `DOCUMENTATION`. Evidence

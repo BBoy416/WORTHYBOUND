@@ -2,6 +2,7 @@ import { TRUST_SCORE_DISCLAIMER } from "@worthybound/shared";
 import { canonicalJson, sha256Hex } from "./hash.js";
 import type {
   AppliedCap,
+  AttestationMethod,
   ExcludedProof,
   Proof,
   ProofSource,
@@ -10,17 +11,20 @@ import type {
   TrustFactor,
   TrustInputs,
   TrustResult,
+  TrustTemplate,
   TrustWeights,
   VerificationLevel,
 } from "./types.js";
 import { DEFAULT_WEIGHTS } from "./weights.js";
 
-export const ENGINE_VERSION = "1.3.0";
+export const ENGINE_VERSION = "1.4.0";
 
 export { TRUST_SCORE_DISCLAIMER };
 
 const INDEPENDENT_SOURCES: ReadonlySet<ProofSource> = new Set(["VERIFIER", "MANUFACTURER"]);
 const INSPECTION_TYPES: ReadonlySet<ProofType> = new Set(["INSPECTION", "AUTHENTICATION"]);
+/** Methods in which the verifier examines the item itself; the others count as online. */
+const IN_PERSON_METHODS: ReadonlySet<AttestationMethod> = new Set(["IN_PERSON", "LABORATORY"]);
 const CUSTODY_BOUND_TYPES: ReadonlySet<ProofType> = new Set([
   "POSSESSION",
   "CONDITION",
@@ -102,10 +106,9 @@ export function computeTrust(
   const trusted = counted.filter(
     (c) => INDEPENDENT_SOURCES.has(c.proof.source) && c.proof.sourceStatus !== "SUSPENDED",
   );
-  const independentSourceIds = new Set(trusted.map((c) => c.proof.sourceId));
   const hasInspection = trusted.some((c) => INSPECTION_TYPES.has(c.proof.type));
   const hasAuthentication = trusted.some((c) => c.proof.type === "AUTHENTICATION");
-  const hasProvenance = counted.some((c) => c.proof.type === "PROVENANCE");
+  const reviews = countReviews(trusted, inputs.templates ?? []);
   const automatedPassed =
     counted.some((c) => c.proof.source === "AUTOMATED") &&
     (inputs.failedAutomatedChecks ?? 0) === 0;
@@ -126,23 +129,27 @@ export function computeTrust(
             }
           : { code: "SELF_DOCUMENTED", limit: weights.caps.selfDocumented },
     );
-  } else if (!hasInspection) {
+  } else if (reviews.inPerson + reviews.online === 0) {
     applicableCaps.push(
       automatedPassed
         ? automatedCap
-        : { code: "WITHOUT_INSPECTION", limit: weights.caps.withoutInspection },
+        : { code: "WITHOUT_REVIEW", limit: weights.caps.withoutReview },
     );
-  } else if (!(hasAuthentication && hasProvenance)) {
-    applicableCaps.push({
-      code: "WITHOUT_AUTHENTICATION_AND_PROVENANCE",
-      limit: weights.caps.withoutAuthenticationAndProvenance,
-    });
-  }
-  if (weights.highRiskCategories.includes(inputs.category) && independentSourceIds.size < 2) {
-    applicableCaps.push({
-      code: "HIGH_RISK_WITHOUT_MULTIPLE_VERIFIERS",
-      limit: weights.caps.highRiskWithoutMultipleVerifiers,
-    });
+  } else if (reviews.inPerson === 1) {
+    applicableCaps.push(
+      reviews.online > 0
+        ? {
+            code: "ONLINE_REVIEW_AND_IN_PERSON_INSPECTION",
+            limit: weights.caps.onlineReviewAndInPersonInspection,
+          }
+        : { code: "ONE_IN_PERSON_INSPECTION", limit: weights.caps.oneInPersonInspection },
+    );
+  } else if (reviews.inPerson === 0) {
+    applicableCaps.push(
+      reviews.online > 1
+        ? { code: "TWO_ONLINE_REVIEWS", limit: weights.caps.twoOnlineReviews }
+        : { code: "ONE_ONLINE_REVIEW", limit: weights.caps.oneOnlineReview },
+    );
   }
   const capsApplied = applicableCaps.filter((c) => c.limit < positiveTotal);
   const cappedPositive = Math.min(positiveTotal, ...applicableCaps.map((c) => c.limit));
@@ -162,9 +169,12 @@ export function computeTrust(
 
   return {
     score: Math.round(score),
-    verificationLevel: verificationLevel(counted.length, hasInspection, hasAuthentication, [
-      ...independentSourceIds,
-    ]),
+    verificationLevel: verificationLevel(
+      counted.length,
+      hasInspection,
+      hasAuthentication,
+      reviews.inPerson,
+    ),
     factors: factors.map(roundPoints),
     deductions: deductions.map(roundPoints),
     capsApplied,
@@ -330,13 +340,50 @@ function computeDeductions(
   return deductions;
 }
 
+/**
+ * Distinct verifiers whose confirmed proofs cover every required claim of a template, with
+ * allowed methods: in person when every claim was examined in person (or in a laboratory),
+ * otherwise online.
+ */
+function countReviews(
+  trusted: readonly CountedProof[],
+  templates: readonly TrustTemplate[],
+): { inPerson: number; online: number } {
+  const byVerifier = new Map<string, Proof[]>();
+  for (const { proof } of trusted) {
+    if (proof.source !== "VERIFIER" || proof.result !== "CONFIRMED" || !proof.method) continue;
+    byVerifier.set(proof.sourceId, [...(byVerifier.get(proof.sourceId) ?? []), proof]);
+  }
+  let inPerson = 0;
+  let online = 0;
+  for (const proofs of byVerifier.values()) {
+    let best: "IN_PERSON" | "REMOTE" | null = null;
+    for (const template of templates) {
+      if (template.requiredClaims.length === 0) continue;
+      const usable = proofs.filter((p) => p.method && template.allowedMethods.includes(p.method));
+      const covered = template.requiredClaims.every((claim) =>
+        usable.some((p) => p.type === claim),
+      );
+      if (!covered) continue;
+      const allInPerson = template.requiredClaims.every((claim) =>
+        usable.some((p) => p.type === claim && p.method && IN_PERSON_METHODS.has(p.method)),
+      );
+      if (allInPerson) best = "IN_PERSON";
+      else best ??= "REMOTE";
+    }
+    if (best === "IN_PERSON") inPerson += 1;
+    else if (best === "REMOTE") online += 1;
+  }
+  return { inPerson, online };
+}
+
 function verificationLevel(
   countedProofs: number,
   hasInspection: boolean,
   hasAuthentication: boolean,
-  independentSourceIds: readonly string[],
+  inPersonInspections: number,
 ): VerificationLevel {
-  if (hasInspection && independentSourceIds.length >= 2) return "MULTI_VERIFIED";
+  if (inPersonInspections >= 2) return "MULTI_VERIFIED";
   if (hasAuthentication) return "AUTHENTICATED";
   if (hasInspection) return "INSPECTED";
   if (countedProofs > 0) return "SELF_DOCUMENTED";
