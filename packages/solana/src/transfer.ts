@@ -114,7 +114,8 @@ export function systemTransferInstruction(input: {
 
 /**
  * System program WithdrawNonceAccount: `lamports` from a nonce account to `to`, signed by the
- * nonce authority. The nonce account keeps at least its rent-exempt balance.
+ * nonce authority. The nonce account keeps at least its rent-exempt balance, unless the whole
+ * balance is withdrawn, which closes it.
  */
 export function withdrawNonceInstruction(input: {
   nonceAccount: Address;

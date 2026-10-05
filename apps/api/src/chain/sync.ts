@@ -29,6 +29,7 @@ const SYNC_KINDS: readonly ChainTransactionKind[] = [
   "TRANSFER_ASSET",
   "ESCROW_PAYMENT",
   "ESCROW_REFUND",
+  "CLOSE_NONCE_ACCOUNTS",
 ];
 
 /** Failed jobs are retried with growing delays, then left FAILED for an operator. */
@@ -36,6 +37,39 @@ export const MAX_CHAIN_ATTEMPTS = 5;
 const retryDelayMs = (attempts: number) => Math.min(5_000 * 2 ** (attempts - 1), 5 * 60_000);
 
 export const registerJobKey = (assetId: string) => `register-asset:${assetId}`;
+export const closeNoncesJobKey = (transferId: string) => `close-nonces:${transferId}`;
+
+/**
+ * Queues closing the nonce accounts of transfers that ended, once no other chain job of theirs
+ * can still run and no escrow holds the price, so the oracle gets their rent back.
+ */
+export async function enqueueNonceClosures(prisma: PrismaClient): Promise<void> {
+  const ended = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT t."id" FROM "transfer_requests" t
+    WHERE t."nonceAccount" IS NOT NULL
+      AND t."status" IN ('COMPLETED', 'CANCELLED', 'EXPIRED', 'REJECTED')
+      AND (t."escrowStatus" IS NULL
+        OR t."escrowStatus" IN ('AWAITING_PAYMENT', 'RELEASED', 'REFUNDED'))
+      AND NOT EXISTS (
+        SELECT 1 FROM "chain_transactions" c
+        WHERE c."entityType" = 'TRANSFER_REQUEST' AND c."entityId" = t."id"
+          AND (c."kind" = 'CLOSE_NONCE_ACCOUNTS'
+            OR c."status" IN ('PENDING', 'SUBMITTED')
+            OR (c."status" = 'FAILED' AND c."attempts" < ${MAX_CHAIN_ATTEMPTS})))
+    ORDER BY t."id"
+    LIMIT 50`;
+  if (ended.length === 0) return;
+  await prisma.chainTransaction.createMany({
+    data: ended.map(({ id }) => ({
+      idempotencyKey: closeNoncesJobKey(id),
+      kind: "CLOSE_NONCE_ACCOUNTS" as const,
+      cluster: "DEVNET" as const,
+      entityType: "TRANSFER_REQUEST" as const,
+      entityId: id,
+    })),
+    skipDuplicates: true,
+  });
+}
 
 /**
  * Queues mirroring of the asset's current status and latest Trust Score snapshot, if it is
@@ -226,6 +260,14 @@ export function createChainSync(options: ChainSyncOptions): ChainSync {
     return signature ? { status: "CONFIRMED", signature } : { status: "SUPERSEDED" };
   }
 
+  /** Returns an ended transfer's nonce accounts' rent; SUPERSEDED if none was left to close. */
+  async function closeNonces(job: ChainTransaction): Promise<Outcome> {
+    const t = await prisma.transferRequest.findUniqueOrThrow({ where: { id: job.entityId } });
+    const accounts = [t.nonceAccount, t.paymentNonceAccount].filter((a): a is string => !!a);
+    const signature = await oracle.closeNonceAccounts(accounts);
+    return signature ? { status: "CONFIRMED", signature } : { status: "SUPERSEDED" };
+  }
+
   async function complete(job: ChainTransaction, outcome: Outcome): Promise<void> {
     const at = now();
     await prisma.$transaction(async (tx) => {
@@ -355,7 +397,9 @@ export function createChainSync(options: ChainSyncOptions): ChainSync {
                 ? await escrowPayment(job)
                 : job.kind === "ESCROW_REFUND"
                   ? await escrowRefund(job)
-                  : await commitTrust(job);
+                  : job.kind === "CLOSE_NONCE_ACCOUNTS"
+                    ? await closeNonces(job)
+                    : await commitTrust(job);
       await complete(job, outcome);
     } catch (error) {
       if (
@@ -443,6 +487,9 @@ export function createChainSync(options: ChainSyncOptions): ChainSync {
     running = (async () => {
       await escrowDeadlines(now()).catch((error: unknown) =>
         log.error({ err: error }, "escrow deadlines failed"),
+      );
+      await enqueueNonceClosures(prisma).catch((error: unknown) =>
+        log.error({ err: error }, "queueing nonce closures failed"),
       );
       const attempted = new Set<string>();
       // Registrations enable an asset's other jobs, so look again after each pass.

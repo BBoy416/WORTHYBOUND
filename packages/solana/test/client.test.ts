@@ -39,6 +39,7 @@ import {
   toChainAssetStatus,
   toChainVerificationLevel,
   transferSignature,
+  withdrawNonceInstruction,
   WORTHYBOUND_PROGRAM_ADDRESS,
 } from "../src/index.js";
 import { walletSign } from "./svm.js";
@@ -179,6 +180,50 @@ describe("transfer transactions", () => {
       nonceAccount: nonceAccount.address,
       nonce,
     });
+  });
+
+  it("closes a nonce account when its whole balance is withdrawn", async () => {
+    const svm = new LiteSVM();
+    svm.airdrop(oracle.address, lamports(1_000_000_000n));
+    const account = await generateKeyPairSigner();
+    const rent = svm.minimumBalanceForRentExemption(NONCE_ACCOUNT_SIZE);
+    const send = async (instructions: Parameters<typeof appendTransactionMessageInstructions>[0]) =>
+      svm.sendTransaction(
+        await signTransactionMessageWithSigners(
+          pipe(
+            createTransactionMessage({ version: 0 }),
+            (m) => setTransactionMessageFeePayerSigner(oracle, m),
+            (m) =>
+              setTransactionMessageLifetimeUsingBlockhash(
+                { blockhash: svm.latestBlockhash(), lastValidBlockHeight: 1_000n },
+                m,
+              ),
+            (m) => appendTransactionMessageInstructions(instructions, m),
+          ),
+        ),
+      );
+    const created = await send(
+      createNonceAccountInstructions({
+        payer: oracle,
+        nonceAccount: account,
+        authority: oracle.address,
+        lamports: rent,
+      }),
+    );
+    expect(created).not.toBeInstanceOf(FailedTransactionMetadata);
+    const before = svm.getBalance(oracle.address) ?? 0n;
+    svm.expireBlockhash();
+    const closed = await send([
+      withdrawNonceInstruction({
+        nonceAccount: account.address,
+        to: oracle.address,
+        authority: oracle,
+        lamports: rent,
+      }),
+    ]);
+    expect(closed).not.toBeInstanceOf(FailedTransactionMetadata);
+    expect(svm.getAccount(account.address).exists).toBe(false);
+    expect((svm.getBalance(oracle.address) ?? 0n) - before).toBe(rent - 5_000n);
   });
 
   it("needs oracle, seller and buyer, and uses the durable nonce", () => {

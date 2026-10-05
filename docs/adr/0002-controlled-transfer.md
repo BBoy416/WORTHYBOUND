@@ -42,6 +42,9 @@ WorthyBound asset tokens are **not freely transferable**.
   `DISPUTED`, `REVOKED`) close the
   transfer. Except for that last case, the asset returns to its previous status. Neither party can
   cancel while the signed transaction is being sent, unless the chain worker gave up.
+- Once a transfer has ended and none of its chain jobs can still run, the chain worker closes its
+  nonce accounts (`CLOSE_NONCE_ACCOUNTS`), returning their rent to the oracle. Accounts that still
+  hold more than their rent, such as an escrow not yet refunded, are left open.
 
 ## Consequences
 

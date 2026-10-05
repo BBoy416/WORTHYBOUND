@@ -281,6 +281,7 @@ export const CHAIN_TRANSACTION_KINDS = [
   "UPDATE_ASSET_STATUS",
   "ESCROW_PAYMENT",
   "ESCROW_REFUND",
+  "CLOSE_NONCE_ACCOUNTS",
 ] as const;
 export type ChainTransactionKind = (typeof CHAIN_TRANSACTION_KINDS)[number];
 
