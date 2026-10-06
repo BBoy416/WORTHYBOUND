@@ -32,20 +32,6 @@ export function HomePage() {
             sealed evidence vault, a Trust Score supported by evidence and verification, and an
             ownership token on Solana.
           </p>
-          <p className="muted">
-            Anyone can register an item. Trust grows through submitted evidence, online reviews by
-            approved verifiers, and independent in-person inspections. Two independent in-person
-            inspections provide WorthyBound’s highest level of verification.
-          </p>
-          <p className="muted">
-            Your private documents stay off-chain. Your ownership history stays connected to the
-            item. The token changes hands only through WorthyBound’s verified transfer process,
-            keeping that history intact as ownership changes.
-          </p>
-          <p className="muted">
-            A token alone does not prove authenticity. The evidence behind it—and the people who
-            verify it—build trust.
-          </p>
           <p>
             <strong className="gold">Tokenize the item. Unlock its story. Earn the trust.</strong>
           </p>
@@ -107,8 +93,9 @@ export function HomePage() {
       <section className="trust-ladder">
         <h2>Trust is earned</h2>
         <p className="muted">
-          The highest Trust Score an item can reach depends on how it was verified. Evidence
-          quality, confirmed claims and open disputes set the actual score.
+          Anyone can register an item. Trust grows through submitted evidence, online reviews by
+          approved verifiers, and independent in-person inspections. Two independent in-person
+          inspections provide WorthyBound’s highest level of verification.
         </p>
         <div className="steps">
           {[
@@ -124,6 +111,22 @@ export function HomePage() {
             </div>
           ))}
         </div>
+        <p className="muted small">
+          The highest Trust Score an item can reach depends on how it was verified. Evidence
+          quality, confirmed claims and open disputes set the actual score.
+        </p>
+        <p className="muted">
+          A token alone does not prove authenticity. The evidence behind it—and the people who
+          verify it—build trust.
+        </p>
+      </section>
+      <section className="trust-ladder">
+        <h2>History that stays with the item</h2>
+        <p className="muted">
+          Your private documents stay off-chain. Your ownership history stays connected to the item.
+          The token changes hands only through WorthyBound’s verified transfer process, keeping that
+          history intact as ownership changes.
+        </p>
       </section>
     </div>
   );
