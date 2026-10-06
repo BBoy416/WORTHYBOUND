@@ -20,6 +20,7 @@ import {
 import { chainAddresses } from "@worthybound/solana";
 import type {
   AssetConditionRequest,
+  AdminRevokeAssetInput,
   AssetStatusRequest,
   RegisterAssetInput,
   UpdateDraftAssetInput,
@@ -210,10 +211,10 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
       });
     },
 
-    /** Newest first. `cursor` is the last WB ID of the previous page. */
+    /** Newest first, without revoked assets. `cursor` is the last WB ID of the previous page. */
     async list(actor: Actor, limit: number, cursor?: string) {
       const items = await prisma.asset.findMany({
-        where: { ownerId: actor.userId, NOT: { status: "REVOKED", publishedAt: null } },
+        where: { ownerId: actor.userId, status: { not: "REVOKED" } },
         orderBy: { id: "desc" },
         take: limit + 1,
         ...(cursor ? { cursor: { wbId: cursor }, skip: 1 } : {}),
@@ -519,6 +520,55 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
             targetType: "asset",
             targetId: asset.wbId,
             metadata: { fromStatus: asset.status, toStatus: input.toStatus },
+          },
+          actor.fp,
+        );
+        await recordTrust(tx, asset.id, at);
+        return tx.asset.findUniqueOrThrow({ where: { id: asset.id } });
+      });
+    },
+
+    /**
+     * An administrator revokes any asset that is not revoked yet: a draft is discarded, a
+     * published passport stays public as revoked and the status is mirrored on-chain.
+     */
+    async revoke(wbId: string, input: AdminRevokeAssetInput, actor: Actor): Promise<Asset> {
+      return prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT 1 FROM "assets" WHERE "wbId" = ${wbId} FOR UPDATE`;
+        const asset = await tx.asset.findUnique({ where: { wbId } });
+        if (!asset) throw notFound("Asset");
+        if (asset.status === "REVOKED") {
+          throw new ApiError(409, "asset_revoked", "This asset is already revoked");
+        }
+        try {
+          assertTransition(ASSET_LIFECYCLE, asset.status, "REVOKED", "ADMIN");
+        } catch (error) {
+          throw fromDomainError(error);
+        }
+        const at = now();
+        await tx.asset.update({
+          where: { id: asset.id },
+          data: { status: "REVOKED", updatedAt: at },
+        });
+        await recordStatusChange(tx, asset, "REVOKED", actor, at, input.reason);
+        if (asset.status === "TRANSFER_PENDING") {
+          await cancelOpenTransfer(tx, asset.id, "asset_revoked", at);
+        }
+        await closeRequestsAsSystem(
+          tx,
+          { assetId: asset.id },
+          "CANCELLED",
+          "asset_unavailable",
+          at,
+        );
+        await writeAudit(
+          tx,
+          {
+            actorId: actor.userId,
+            action: "asset.revoked_by_admin",
+            targetType: "asset",
+            targetId: asset.wbId,
+            metadata: { fromStatus: asset.status, reason: input.reason },
           },
           actor.fp,
         );

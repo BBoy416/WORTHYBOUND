@@ -1,5 +1,6 @@
 import { evidencePreviewPath } from "@worthybound/shared";
 import {
+  adminRevokeAssetSchema,
   assetConditionRequestSchema,
   assetParamsSchema,
   assetStatusRequestSchema,
@@ -44,7 +45,7 @@ const perUser = (limit: RateLimit) => ({
 });
 
 export const assetRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx) => {
-  const { config, prisma, now, authenticate, rateLimits, chainSync } = ctx;
+  const { config, prisma, now, authenticate, requireRole, rateLimits, chainSync } = ctx;
   const service = createAssetService({
     prisma,
     now,
@@ -172,6 +173,24 @@ export const assetRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx) =
     },
     async (request) =>
       view(await service.changeStatus(request.params.wbId, request.body, actor(request))),
+  );
+
+  app.post(
+    "/admin/assets/:wbId/revoke",
+    {
+      preHandler: requireRole("ADMIN"),
+      config: perUser(rateLimits.write),
+      schema: {
+        params: assetParamsSchema,
+        body: adminRevokeAssetSchema,
+        response: { 200: ownerAssetSchema, ...errors },
+      },
+    },
+    async (request) => {
+      const asset = await service.revoke(request.params.wbId, request.body, actor(request));
+      chainSync?.kick();
+      return view(asset);
+    },
   );
 
   /** Accepted: registration runs in the background; poll the asset's `tokenizationStatus`. */

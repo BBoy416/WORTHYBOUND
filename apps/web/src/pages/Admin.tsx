@@ -46,7 +46,7 @@ import type {
   VerifierSummary,
 } from "../types.js";
 
-type Tab = "verifiers" | "templates" | "roles" | "checks" | "disputes" | "escrow";
+type Tab = "verifiers" | "templates" | "roles" | "checks" | "disputes" | "escrow" | "items";
 
 const ACTION_LABELS: Record<string, string> = {
   UNDER_REVIEW: "Start review",
@@ -87,6 +87,9 @@ export function AdminPage({ tab }: { tab: Tab }) {
             <TabLink to="/admin/escrow" active={current === "escrow"}>
               Escrow disputes
             </TabLink>
+            <TabLink to="/admin/items" active={current === "items"}>
+              Items
+            </TabLink>
           </nav>
         )}
       </div>
@@ -96,6 +99,7 @@ export function AdminPage({ tab }: { tab: Tab }) {
       {current === "checks" && <ChecksTab />}
       {current === "disputes" && <DisputesTab />}
       {current === "escrow" && <EscrowTab />}
+      {current === "items" && <ItemsTab />}
     </div>
   );
 }
@@ -745,6 +749,60 @@ function RolesTab() {
           Add reviewer
         </button>
       </form>
+      <ErrorText error={error} />
+    </Card>
+  );
+}
+
+// ─── Items ────────────────────────────────────────────────────────────────────
+
+/** Revokes any item: a draft is discarded; a published passport stays public as revoked. */
+function ItemsTab() {
+  const { busy, error, run } = useAction();
+  const [wbId, setWbId] = useState("");
+  const [reason, setReason] = useState("");
+  const [done, setDone] = useState<string | null>(null);
+  const revoke = (event: FormEvent) => {
+    event.preventDefault();
+    const id = wbId.trim().toUpperCase();
+    if (
+      !confirm(
+        `Revoke ${id}? This cannot be undone. Open transfers and verification requests are cancelled.`,
+      )
+    ) {
+      return;
+    }
+    void run(async () => {
+      setDone(null);
+      await post(`/admin/assets/${encodeURIComponent(id)}/revoke`, { reason: reason.trim() });
+      setDone(id);
+      setWbId("");
+      setReason("");
+    });
+  };
+  return (
+    <Card title="Revoke an item">
+      <p className="muted small">
+        The item disappears from its owner's list. A published passport stays public and is marked
+        revoked, and a token's on-chain record is set to revoked. Nothing is deleted.
+      </p>
+      <form className="row spaced" onSubmit={revoke}>
+        <Field label="WB ID">
+          <input
+            value={wbId}
+            onChange={(e) => setWbId(e.target.value)}
+            placeholder="WB-7F93A281"
+            autoComplete="off"
+          />
+        </Field>
+        <Field label="Reason">
+          <input value={reason} onChange={(e) => setReason(e.target.value)} autoComplete="off" />
+        </Field>
+        <button type="submit" className="danger" disabled={busy || !wbId.trim() || !reason.trim()}>
+          Revoke item
+        </button>
+      </form>
+      {done && <p className="small">{done} revoked.</p>}
       <ErrorText error={error} />
     </Card>
   );

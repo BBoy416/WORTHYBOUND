@@ -108,7 +108,8 @@ export function Page({ path }: { path: string }) {
     path === "/admin/roles" ||
     path === "/admin/checks" ||
     path === "/admin/disputes" ||
-    path === "/admin/escrow"
+    path === "/admin/escrow" ||
+    path === "/admin/items"
   )
     return (
       <SignedIn>
@@ -125,7 +126,9 @@ export function Page({ path }: { path: string }) {
                     ? "checks"
                     : path === "/admin/disputes"
                       ? "disputes"
-                      : "escrow"
+                      : path === "/admin/escrow"
+                        ? "escrow"
+                        : "items"
           }
         />
       </SignedIn>

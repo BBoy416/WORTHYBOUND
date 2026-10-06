@@ -46,9 +46,14 @@ attributes and condition stay editable; public description and condition changes
 the provenance history.
 
 **Owner status changes:** report lost, report stolen, lost → recovered (`REVERIFICATION_REQUIRED`,
-recorded as `RECOVERED`) and discarding a draft (`REVOKED`). Clearing a stolen report, disputes and
-revocation of published assets are admin actions (later phase); transfers have their own flow
-(ADR 0002); `VERIFIED` is set only by the system.
+recorded as `RECOVERED`) and discarding a draft (`REVOKED`). Clearing a stolen report and
+disputes are admin actions (ADR 0017); transfers have their own flow (ADR 0002); `VERIFIED` is set
+only by the system.
+
+**Admin revocation.** `POST /admin/assets/:wbId/revoke` with a reason revokes any asset that is not
+revoked yet: a draft is discarded, a published passport stays public as revoked, an open transfer
+and verification requests are cancelled, and a token's record is set to revoked on-chain. Revoked
+assets no longer appear in the owner's list.
 
 **Discarded drafts** are `REVOKED` with no `publishedAt`. They are hidden from everyone, release
 their serial and never get a passport.

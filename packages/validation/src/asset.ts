@@ -61,6 +61,10 @@ const statusFields = {
 export const assetStatusRequestSchema = z.strictObject(statusFields);
 export type AssetStatusRequest = z.infer<typeof assetStatusRequestSchema>;
 
+/** Body of `POST /admin/assets/:wbId/revoke`. */
+export const adminRevokeAssetSchema = z.strictObject({ reason: text(500) });
+export type AdminRevokeAssetInput = z.infer<typeof adminRevokeAssetSchema>;
+
 /** Requested status change; the lifecycle rules decide whether the caller may make it. */
 export const assetStatusChangeSchema = z.strictObject({ assetId: wbIdSchema, ...statusFields });
 export type AssetStatusChangeInput = z.infer<typeof assetStatusChangeSchema>;

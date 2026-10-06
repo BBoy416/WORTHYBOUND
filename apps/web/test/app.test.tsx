@@ -908,6 +908,20 @@ describe("admin", () => {
     });
     expect(calls.some((c) => c.method === "DELETE")).toBe(true);
   });
+
+  it("revokes an item by WB ID with a reason", async () => {
+    const calls = mockFetch({
+      "GET /auth/me": { json: me(["USER", "ADMIN"]) },
+      "POST /admin/assets/WB-246A7CD7/revoke": { json: {} },
+    });
+    vi.stubGlobal("confirm", () => true);
+    renderAt("/admin/items");
+    fireEvent.change(await screen.findByLabelText("WB ID"), { target: { value: "wb-246a7cd7" } });
+    fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "Test item" } });
+    fireEvent.click(screen.getByText("Revoke item"));
+    expect(await screen.findByText("WB-246A7CD7 revoked.")).toBeTruthy();
+    expect(calls.find((c) => c.method === "POST")?.body).toEqual({ reason: "Test item" });
+  });
 });
 
 describe("guided capture", () => {

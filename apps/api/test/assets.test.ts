@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { grantAdmin } from "../src/cli/admin-grant.js";
 import {
   createTestDatabase,
   signIn,
@@ -501,6 +502,54 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
       expect((await call(alice, "GET", `/assets/${wbId}`)).statusCode).toBe(404);
       expect((await call(null, "GET", `/passport/${wbId}`)).statusCode).toBe(404);
       expect((await assetRow(wbId)).status).toBe("REVOKED");
+    });
+
+    it("lets an administrator revoke a published asset, which leaves the owner's list", async () => {
+      const [alice, admin] = [await owner(), await owner()];
+      await grantAdmin(db.prisma, admin.wallet.address);
+      const wbId = await published(alice);
+      const reason = { reason: "Test item" };
+      const url = `/admin/assets/${wbId}/revoke`;
+      expect((await call(alice, "POST", url, reason)).statusCode).toBe(403);
+      expect((await call(admin, "POST", url, {})).statusCode).toBe(400);
+
+      const res = await call(admin, "POST", url, reason);
+      expect(res.statusCode).toBe(200);
+      expect(res.json().status).toBe("REVOKED");
+      const again = await call(admin, "POST", url, reason);
+      expect(again.statusCode).toBe(409);
+      expect(again.json().error.code).toBe("asset_revoked");
+
+      const list = await call(alice, "GET", "/assets");
+      expect(list.json().items.map((a: { wbId: string }) => a.wbId)).not.toContain(wbId);
+      const passport = await call(null, "GET", `/passport/${wbId}`);
+      expect(passport.json().passport.status).toBe("REVOKED");
+      const asset = await db.prisma.asset.findUniqueOrThrow({
+        where: { wbId },
+        include: { statusEvents: true },
+      });
+      expect(asset.statusEvents.at(-1)).toMatchObject({
+        fromStatus: "ACTIVE",
+        toStatus: "REVOKED",
+        reason: "Test item",
+      });
+      const logs = await db.prisma.auditLog.findMany({
+        where: { action: "asset.revoked_by_admin", targetId: wbId },
+      });
+      expect(logs).toHaveLength(1);
+    });
+
+    it("lets an administrator discard a draft", async () => {
+      const [alice, admin] = [await owner(), await owner()];
+      await grantAdmin(db.prisma, admin.wallet.address);
+      const { wbId } = await registered(alice);
+      const res = await call(admin, "POST", `/admin/assets/${wbId}/revoke`, { reason: "Spam" });
+      expect(res.statusCode).toBe(200);
+      expect((await call(alice, "GET", `/assets/${wbId}`)).statusCode).toBe(404);
+      const missing = await call(admin, "POST", "/admin/assets/WB-00000000/revoke", {
+        reason: "Spam",
+      });
+      expect(missing.statusCode).toBe(404);
     });
   });
 
