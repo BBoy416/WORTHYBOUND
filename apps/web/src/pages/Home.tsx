@@ -28,16 +28,26 @@ export function HomePage() {
             Real assets. <span className="gold">Proven identity.</span>
           </h1>
           <p className="lead">
-            WorthyBound gives any valuable item a portable digital identity: a sealed evidence
-            vault, a Trust Score that rises with stronger verification, and an ownership token on
-            Solana. Anyone can register an item. Trust is earned, from submitted evidence to online
-            review and independent in-person inspection.
+            Every valuable item has a story. WorthyBound gives yours a digital passport—with a
+            sealed evidence vault, a Trust Score supported by evidence and verification, and an
+            ownership token on Solana.
           </p>
           <p className="muted">
-            Sensitive evidence stays off-chain, and the token changes hands only through
-            WorthyBound's verified transfer, so provenance is kept without exposing private
-            documents. A token alone is not proof of authenticity. Independent in-person
-            verification is the strongest proof WorthyBound records.
+            Anyone can register an item. Trust grows through submitted evidence, online reviews by
+            approved verifiers, and independent in-person inspections. Two independent in-person
+            inspections provide WorthyBound’s highest level of verification.
+          </p>
+          <p className="muted">
+            Your private documents stay off-chain. Your ownership history stays connected to the
+            item. The token changes hands only through WorthyBound’s verified transfer process,
+            keeping that history intact as ownership changes.
+          </p>
+          <p className="muted">
+            A token alone does not prove authenticity. The evidence behind it—and the people who
+            verify it—build trust.
+          </p>
+          <p>
+            <strong className="gold">Tokenize the item. Unlock its story. Earn the trust.</strong>
           </p>
           <form className="lookup" onSubmit={lookUp}>
             <input
