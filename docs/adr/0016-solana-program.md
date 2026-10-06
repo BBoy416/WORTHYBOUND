@@ -71,7 +71,8 @@ key the endpoint answers `503`.
 
 **Metadata.** `GET /metadata/:wbId` serves the token metadata (Metaplex JSON) registered as the
 Core asset's URI. It is built from the public passport, so it shows nothing the passport does
-not, and says that a token is not proof of authenticity. The passport shows the token and
+not, and says that a token alone is not proof of authenticity and that independent in-person
+verification is the strongest proof WorthyBound records. The passport shows the token and
 record addresses once tokenized.
 
 **Hosting (demo).** Render runs the API and PostgreSQL 16 (`render.yaml`); evidence is stored in

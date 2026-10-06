@@ -40,7 +40,8 @@ export const metadataRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx
         description: [
           title ? `${title}. ` : "",
           "Digital passport of a physical asset on WorthyBound. The token is frozen and moves only ",
-          "through WorthyBound. A token is not proof of authenticity. ",
+          "through WorthyBound. A token alone is not proof of authenticity. Independent in-person ",
+          "verification is the strongest proof WorthyBound records. ",
           TRUST_SCORE_DISCLAIMER,
         ].join(""),
         external_url: passportUrl(config.publicWebUrl, passport.wbId),

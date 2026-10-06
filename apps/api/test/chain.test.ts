@@ -1565,7 +1565,7 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
         name: `WorthyBound ${wbId}`,
         external_url: `https://worthybound.test/passport/${wbId}`,
       });
-      expect(body.description).toContain("A token is not proof of authenticity.");
+      expect(body.description).toContain("A token alone is not proof of authenticity.");
       expect(body.attributes).toEqual(
         expect.arrayContaining([
           { trait_type: "WB ID", value: wbId },

@@ -91,7 +91,10 @@ export function PassportPage({ wbId }: { wbId: string }) {
       </section>
 
       <p className="disclaimer">
-        {p.trust?.disclaimer ?? "A token is not proof of authenticity. Trust must be earned."}
+        {
+          "A token alone is not proof of authenticity. Independent in-person verification is the strongest proof WorthyBound records. "
+        }
+        {p.trust?.disclaimer ?? "Trust must be earned."}
       </p>
 
       <div className="grid">

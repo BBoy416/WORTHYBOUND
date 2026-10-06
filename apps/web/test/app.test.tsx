@@ -171,7 +171,9 @@ describe("public passport", () => {
     renderAt(`/passport/${WB}`);
     expect(await screen.findByText("Submariner")).toBeTruthy();
     expect(screen.getByRole("img", { name: "Trust Score 72 of 100" })).toBeTruthy();
-    expect(screen.getByText("Not a guarantee.")).toBeTruthy();
+    expect(
+      screen.getByText(/^A token alone is not proof of authenticity\..*Not a guarantee\.$/),
+    ).toBeTruthy();
     expect(screen.getByText(/Geneva Watch Lab/)).toBeTruthy();
     const record = screen.getByText("5stf…GMem ↗") as HTMLAnchorElement;
     expect(record.getAttribute("href")).toBe(

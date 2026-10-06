@@ -9,7 +9,8 @@ moves only through WorthyBound's verified transfer.
 ![WorthyBound](apps/web/public/og-image.png)
 
 > **Anyone can register an item. Trust must be earned.**
-> A token is not proof of authenticity. The Trust Score measures recorded evidence and verification;
+> A token alone is not proof of authenticity. Independent in-person verification is the strongest
+> proof WorthyBound records. The Trust Score measures recorded evidence and verification;
 > it does not guarantee authenticity, ownership, legal title or value.
 
 ## How it works

@@ -36,7 +36,8 @@ export function HomePage() {
           <p className="muted">
             Sensitive evidence stays off-chain, and the token changes hands only through
             WorthyBound's verified transfer, so provenance is kept without exposing private
-            documents. A token is not proof of authenticity.
+            documents. A token alone is not proof of authenticity. Independent in-person
+            verification is the strongest proof WorthyBound records.
           </p>
           <form className="lookup" onSubmit={lookUp}>
             <input

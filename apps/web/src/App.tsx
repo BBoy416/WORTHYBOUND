@@ -161,7 +161,8 @@ export function App() {
       </main>
       <footer className="footer">
         <p>
-          A token is not proof of authenticity. The Trust Score measures recorded evidence and
+          A token alone is not proof of authenticity. Independent in-person verification is the
+          strongest proof WorthyBound records. The Trust Score measures recorded evidence and
           verification; it does not guarantee authenticity, ownership, legal title or value.
         </p>
         <p className="muted tiny">WorthyBound · Solana devnet</p>
