@@ -28,12 +28,15 @@ export function HomePage() {
             Real assets. <span className="gold">Proven identity.</span>
           </h1>
           <p className="lead">
-            Give any valuable item a public passport, whether it is a watch, a painting, a guitar or
-            a car. Seal its evidence in a vault, tokenize it on Solana once your identity is
-            verified, and have approved professionals review it online or in person to raise its
-            Trust Score. Buyers check the passport and the item before paying, and the token changes
-            hands only through WorthyBound's controlled transfer. A token is not proof of
-            authenticity: trust must be earned.
+            WorthyBound gives any valuable item a portable digital identity: a sealed evidence
+            vault, a Trust Score that rises with stronger verification, and an ownership token on
+            Solana. Anyone can register an item. Trust is earned, from submitted evidence to online
+            review and independent in-person inspection.
+          </p>
+          <p className="muted">
+            Sensitive evidence stays off-chain, and the token changes hands only through
+            WorthyBound's verified transfer, so provenance is kept without exposing private
+            documents. A token is not proof of authenticity.
           </p>
           <form className="lookup" onSubmit={lookUp}>
             <input
@@ -89,6 +92,27 @@ export function HomePage() {
             <p>{text}</p>
           </div>
         ))}
+      </section>
+      <section className="trust-ladder">
+        <h2>Trust is earned</h2>
+        <p className="muted">
+          The highest Trust Score an item can reach depends on how it was verified. Evidence
+          quality, confirmed claims and open disputes set the actual score.
+        </p>
+        <div className="steps">
+          {[
+            ["65", "Your evidence", "Live camera photos and documents that pass automatic checks."],
+            ["75–80", "Online review", "One or two approved professionals review it remotely."],
+            ["85–90", "In-person inspection", "A professional examines the item itself."],
+            ["100", "Two inspections", "Two independent professionals inspect it in person."],
+          ].map(([max, title, text]) => (
+            <div key={title} className="step">
+              <span className="step-n score">{max}</span>
+              <h3>{title}</h3>
+              <p>{text}</p>
+            </div>
+          ))}
+        </div>
       </section>
     </div>
   );

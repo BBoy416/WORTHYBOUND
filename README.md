@@ -1,19 +1,56 @@
 # WorthyBound
 
-WorthyBound lets anyone create a digital identity for a physical asset and tokenize it on Solana.
-Owners add evidence, ownership details and provenance to build the asset's digital passport;
-verification by approved professionals raises its Trust Score.
+WorthyBound gives any valuable item a portable digital identity on Solana: a sealed evidence
+vault, a Trust Score that rises with stronger verification, and a frozen ownership token that
+moves only through WorthyBound's verified transfer.
 
-> **Anyone can create and tokenize an asset. Trust must be earned.**
+**Live on Solana devnet: [worthybound.com](https://worthybound.com)**
+
+![WorthyBound](apps/web/public/og-image.png)
+
+> **Anyone can register an item. Trust must be earned.**
 > A token is not proof of authenticity. The Trust Score measures recorded evidence and verification;
 > it does not guarantee authenticity, ownership, legal title or value.
 
+## How it works
+
+1. **Register:** describe the item. Its serial number is fingerprinted, so it cannot be
+   registered twice.
+2. **Prove:** add live camera photos (guided capture with a one-time code), receipts and
+   certificates. Every file is hashed, sealed and checked automatically.
+3. **Tokenize:** once the owner's identity is verified, a frozen Metaplex Core token is minted to
+   their wallet, with the status and Trust Score anchored on-chain.
+4. **Verify (optional):** approved professionals review the item online or in person and sign
+   attestations with their wallet.
+5. **Sell:** buyers check the passport and confirm the seller controls the item before paying.
+   In person, one Solana transaction pays the seller and moves the token; shipped items use SOL
+   escrow released on a receipt check.
+
+Sensitive evidence and identity data stay off-chain. Disputes (ADR 0017) can hold an item and
+cancel its open transfer.
+
+### Trust is earned
+
+The highest Trust Score depends on how an item was verified (ADR 0003). Evidence quality,
+confirmed claims and open disputes set the actual score.
+
+| Evidence and verification                                  | Maximum |
+| ---------------------------------------------------------- | ------- |
+| Owner evidence only (with verified identity)               | 35 (45) |
+| Owner evidence that passed automatic checks                | 65      |
+| One online review by an approved verifier                  | 75      |
+| Two independent online reviews                             | 80      |
+| One in-person inspection                                   | 85      |
+| One online review plus an independent in-person inspection | 90      |
+| Two independent in-person inspections                      | 100     |
+
 ## Status
 
-Phase 10: Solana program on devnet: frozen Metaplex Core tokens, on-chain status and Trust Score,
-tokenization and chain sync (ADR 0016), on top of the Trust Score and verified status (Phase 9),
-and the web app for owners, verifiers, administrators and public passports.
-Solana work targets **Devnet only**.
+Built on Solana devnet: wallet sign-in, assets and passports, Evidence Vault, guided capture,
+automatic checks, verifier onboarding and signed attestations, Trust Score (engine 1.4.0),
+tokenization and chain sync, checks before buying (in person and remote), controlled SOL
+transfers, shipped-item SOL escrow and disputes. Not yet built: real (fiat or stablecoin)
+payments, an identity-verification provider (identity is recorded by an operator) and mainnet.
 
 ## Repository layout
 
