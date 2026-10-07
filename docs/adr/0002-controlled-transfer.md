@@ -1,6 +1,6 @@
 # ADR 0002: Controlled transfer of asset tokens
 
-- Status: Accepted (mechanism confirmed in Phase 10, ADR 0016); amendment proposed in ADR 0014
+- Status: Accepted (mechanism confirmed in Phase 10, ADR 0016); amended by ADR 0014
 - Date: 2026-09-28
 
 ## Context

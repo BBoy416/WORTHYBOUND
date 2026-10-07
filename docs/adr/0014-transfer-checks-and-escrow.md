@@ -1,6 +1,6 @@
 # ADR 0014: Checks before buying, and escrowed transfers
 
-- Status: Proposed (amends ADR 0002)
+- Status: Accepted, implemented on devnet; stablecoin payments planned (amends ADR 0002)
 - Date: 2026-09-29
 
 ## Context
