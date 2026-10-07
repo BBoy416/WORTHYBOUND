@@ -14,6 +14,9 @@ export const shortAddress = (address: string): string =>
 export const explorerUrl = (kind: "address" | "tx", value: string): string =>
   `https://explorer.solana.com/${kind}/${value}?cluster=devnet`;
 
+export const solscanUrl = (kind: "address" | "tx", value: string): string =>
+  `https://solscan.io/${kind === "address" ? "account" : "tx"}/${value}?cluster=devnet`;
+
 export const formatBytes = (bytes: number): string =>
   bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 

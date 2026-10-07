@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { explorerUrl, humanize, shortAddress } from "../format.js";
+import { explorerUrl, humanize, shortAddress, solscanUrl } from "../format.js";
 
 /** Loads data on mount and on `reload()`. */
 export function useLoad<T>(load: () => Promise<T>, deps: readonly unknown[]) {
@@ -139,9 +139,14 @@ export function TrustDial({ score, size = 132 }: { score: number | null; size?: 
 
 export function ChainLink({ kind, value }: { kind: "address" | "tx"; value: string }) {
   return (
-    <a className="mono" href={explorerUrl(kind, value)} target="_blank" rel="noreferrer">
-      {shortAddress(value)} ↗
-    </a>
+    <>
+      <a className="mono" href={solscanUrl(kind, value)} target="_blank" rel="noreferrer">
+        {shortAddress(value)} ↗
+      </a>{" "}
+      <a className="muted tiny" href={explorerUrl(kind, value)} target="_blank" rel="noreferrer">
+        Explorer ↗
+      </a>
+    </>
   );
 }
 

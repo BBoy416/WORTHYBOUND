@@ -177,6 +177,9 @@ describe("public passport", () => {
     expect(screen.getByText(/Geneva Watch Lab/)).toBeTruthy();
     const record = screen.getByText("5stf…GMem ↗") as HTMLAnchorElement;
     expect(record.getAttribute("href")).toBe(
+      "https://solscan.io/account/5stfBCcoD9mpW3514ycoKZBQ4Xzav3KpbZHTC9AUGMem?cluster=devnet",
+    );
+    expect(record.nextElementSibling?.getAttribute("href")).toBe(
       "https://explorer.solana.com/address/5stfBCcoD9mpW3514ycoKZBQ4Xzav3KpbZHTC9AUGMem?cluster=devnet",
     );
   });
