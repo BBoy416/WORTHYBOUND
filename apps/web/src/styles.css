@@ -482,6 +482,14 @@ legend {
 .trust-ladder {
   margin-top: 3rem;
 }
+.step-label {
+  display: block;
+  color: var(--muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 0.4rem;
+}
 .step p {
   color: var(--muted);
   margin: 0;
