@@ -50,8 +50,9 @@ confirmed claims and open disputes set the actual score.
 Built on Solana devnet: wallet sign-in, assets and passports, Evidence Vault, guided capture,
 automatic checks, verifier onboarding and signed attestations, Trust Score (engine 1.4.0),
 tokenization and chain sync, checks before buying (in person and remote), controlled SOL
-transfers, shipped-item SOL escrow and disputes. Not yet built: real (fiat or stablecoin)
-payments, an identity-verification provider (identity is recorded by an operator) and mainnet.
+transfers, shipped-item SOL escrow and disputes. Payments settle on Solana: SOL today; USDC and
+EURC are next, and a Canadian dollar stablecoin after that. Not yet built: stablecoin payments, an
+identity-verification provider (identity is recorded by an operator) and mainnet.
 
 ## Repository layout
 
