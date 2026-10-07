@@ -105,7 +105,7 @@ export function HomePage() {
             ["100", "Two inspections", "Two independent professionals inspect it in person."],
           ].map(([max, title, text]) => (
             <div key={title} className="step">
-              <span className="step-n score">{max}</span>
+              <span className="step-n score">Trust Score up to {max}</span>
               <h3>{title}</h3>
               <p>{text}</p>
             </div>
