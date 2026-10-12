@@ -54,6 +54,7 @@ export async function postFile<T>(path: string, file: Blob): Promise<T> {
 }
 
 export const put = <T>(path: string, body?: unknown) => api<T>("PUT", path, body);
+export const patch = <T>(path: string, body?: unknown) => api<T>("PATCH", path, body);
 export const del = <T>(path: string) => api<T>("DELETE", path);
 
 /** Hex SHA-256 of a file, as the API expects when an upload is requested. */

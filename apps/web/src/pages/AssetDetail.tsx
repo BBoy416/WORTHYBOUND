@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
-import { get, post } from "../api.js";
+import { ASSET_CATEGORIES } from "@worthybound/shared";
+import { useEffect, useState, type FormEvent } from "react";
+import { get, patch, post } from "../api.js";
 import { GuidedCapture } from "../components/Capture.js";
 import { EvidenceList, UploadForm } from "../components/Evidence.js";
 import {
@@ -8,6 +9,7 @@ import {
   ChainLink,
   ErrorText,
   Facts,
+  Field,
   Loading,
   TrustDial,
   useAction,
@@ -121,6 +123,9 @@ export function AssetDetailPage({ wbId }: { wbId: string }) {
             ]}
           />
           {a.publicDescription && <p className="small">{a.publicDescription}</p>}
+          {a.publishedAt === null && a.status !== "REVOKED" && (
+            <EditDraft asset={a} onChange={reloadAll} />
+          )}
         </Card>
         <Lifecycle asset={a} onChange={reloadAll} />
       </div>
@@ -166,6 +171,88 @@ export function AssetDetailPage({ wbId }: { wbId: string }) {
       <Verification asset={a} requests={requests.data?.items ?? null} onChange={reloadAll} />
       <TrustBreakdown trust={trust.data} error={trust.error} />
     </div>
+  );
+}
+
+const DRAFT_FIELDS = [
+  "category",
+  "brand",
+  "model",
+  "serialNumber",
+  "publicDescription",
+  "description",
+] as const;
+
+/** Edits a draft's details; they are locked once the passport is published. */
+function EditDraft({ asset: a, onChange }: { asset: OwnerAsset; onChange: () => void }) {
+  const { busy, error, run } = useAction();
+  const initial = Object.fromEntries(DRAFT_FIELDS.map((f) => [f, a[f] ?? ""])) as Record<
+    (typeof DRAFT_FIELDS)[number],
+    string
+  >;
+  const [open, setOpen] = useState(a.missingForPublish.length > 0);
+  const [form, setForm] = useState(initial);
+  const set = (name: keyof typeof form) => (e: { target: { value: string } }) =>
+    setForm({ ...form, [name]: e.target.value });
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    void run(async () => {
+      const body = Object.fromEntries(
+        DRAFT_FIELDS.filter((f) => form[f].trim() !== "" && form[f] !== initial[f]).map((f) => [
+          f,
+          form[f],
+        ]),
+      );
+      if (Object.keys(body).length > 0) await patch(`/assets/${a.wbId}`, body);
+      setOpen(false);
+      onChange();
+    });
+  };
+
+  if (!open) {
+    return (
+      <p>
+        <button className="ghost small" onClick={() => setOpen(true)}>
+          Edit details
+        </button>
+      </p>
+    );
+  }
+  return (
+    <form className="form" onSubmit={submit}>
+      <Field label="Category">
+        <select value={form.category} onChange={set("category")}>
+          {ASSET_CATEGORIES.map((c) => (
+            <option key={c} value={c}>
+              {humanize(c)}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <div className="row">
+        <Field label="Brand">
+          <input value={form.brand} onChange={set("brand")} placeholder="Rolex" />
+        </Field>
+        <Field label="Model">
+          <input value={form.model} onChange={set("model")} placeholder="Submariner 124060" />
+        </Field>
+      </div>
+      <Field label="Serial number (private, never shown or written on-chain)">
+        <input value={form.serialNumber} onChange={set("serialNumber")} autoComplete="off" />
+      </Field>
+      <Field label="Public description (shown on the passport)">
+        <textarea value={form.publicDescription} onChange={set("publicDescription")} rows={3} />
+      </Field>
+      <Field label="Private notes (you and your verifiers only)">
+        <textarea value={form.description} onChange={set("description")} rows={2} />
+      </Field>
+      <p className="muted small">Category, brand, model and serial are locked once published.</p>
+      <ErrorText error={error} />
+      <button type="submit" disabled={busy}>
+        {busy ? "Saving…" : "Save details"}
+      </button>
+    </form>
   );
 }
 

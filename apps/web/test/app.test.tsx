@@ -356,6 +356,43 @@ describe("owner asset page", () => {
     expect(screen.queryByText("Publish passport")).toBeNull();
   });
 
+  it("adds the missing brand and model to a draft, then offers to publish", async () => {
+    let state = asset({
+      status: "DRAFT",
+      publishedAt: null,
+      brand: null,
+      model: null,
+      missingForPublish: ["brand", "model"],
+    });
+    const calls = mockFetch({
+      ...ownerRoutes(state),
+      [`GET /assets/${WB}`]: () => ({ json: state }),
+      [`PATCH /assets/${WB}`]: () => (
+        (state = asset({ status: "DRAFT", publishedAt: null, model: "Datejust" })),
+        { json: state }
+      ),
+    });
+    renderAt(`/assets/${WB}`);
+    expect(await screen.findByText("To publish, add: brand and model.")).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText("Rolex"), { target: { value: "Rolex" } });
+    fireEvent.change(screen.getByPlaceholderText("Submariner 124060"), {
+      target: { value: "Datejust" },
+    });
+    fireEvent.click(screen.getByText("Save details"));
+    expect(await screen.findByText("Publish passport")).toBeTruthy();
+    expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({
+      brand: "Rolex",
+      model: "Datejust",
+    });
+  });
+
+  it("offers no editing once the passport is published", async () => {
+    mockFetch(ownerRoutes(asset()));
+    renderAt(`/assets/${WB}`);
+    await screen.findByText("Tokenize on Solana devnet");
+    expect(screen.queryByText("Edit details")).toBeNull();
+  });
+
   it("hashes, uploads straight to storage and completes an evidence upload", async () => {
     const calls = mockFetch({
       ...ownerRoutes(asset()),
