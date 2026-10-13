@@ -195,7 +195,10 @@ export function EvidenceList({
             <div className="grow">
               <div>
                 <strong>{humanize(e.type)}</strong> <Badge value={e.visibility} />{" "}
-                <Badge value={e.reviewStatus} />
+                <Badge
+                  value={e.reviewStatus}
+                  label={`Verifier ${humanize(e.reviewStatus).toLowerCase()}`}
+                />
                 {e.source === "VERIFIER" && <Badge value="VERIFIER" label="From verifier" />}
                 {e.captureShot && (
                   <Badge value="CAPTURED" label={`Guided capture: ${humanize(e.captureShot)}`} />
