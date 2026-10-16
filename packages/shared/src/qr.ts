@@ -297,19 +297,83 @@ export function encodeQr(text: string): QrCode {
   return best!;
 }
 
-/** A QR code as a standalone SVG with a 4-module quiet zone. */
-export function qrSvg(text: string, title: string): string {
-  const { modules } = encodeQr(text);
-  const size = modules.length + 8;
-  const path = modules
-    .flatMap((row, y) => row.map((dark, x) => (dark ? `M${x + 4} ${y + 4}h1v1h-1z` : "")))
+const escapeXml = (text: string) => text.replace(/[<>&"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+export interface PassportLabel {
+  url: string;
+  wbId: string;
+  /** Brand and model, shown under the QR code. */
+  itemName?: string | undefined;
+}
+
+/**
+ * Printable 2 × 2 inch passport label in a 2.5 × 2.5 inch cut-out area with a dashed cut line,
+ * corner marks and scissors. One SVG unit is 1/100 inch, so it prints to size at 100% scale.
+ */
+export function passportLabelSvg({ url, wbId, itemName }: PassportLabel): string {
+  const { modules } = encodeQr(url);
+  const quiet = 4;
+  const count = modules.length + quiet * 2;
+  const box = 112;
+  const unit = box / count;
+  const qrX = 125 - box / 2;
+  const qrY = 74;
+  const qr = modules
+    .flatMap((row, y) => row.map((dark, x) => (dark ? `M${x + quiet} ${y + quiet}h1v1h-1z` : "")))
     .join("");
-  const escaped = title.replace(/[<>&"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  const name = itemName?.trim() ?? "";
+  const shortName = name.length > 34 ? `${name.slice(0, 33)}…` : name;
+  const host = new URL(url).host;
+  const serif = "Georgia, 'Times New Roman', serif";
+  const sans = "Helvetica, Arial, sans-serif";
+  const mono = "'Courier New', Courier, monospace";
+  const corners = [
+    [25, 25, -1, -1],
+    [225, 25, 1, -1],
+    [25, 225, -1, 1],
+    [225, 225, 1, 1],
+  ]
+    .map(([x, y, dx, dy]) => `M${x! + dx! * 4} ${y}h${dx! * 14}M${x} ${y! + dy! * 4}v${dy! * 14}`)
+    .join("");
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" ` +
-    `width="${size * 8}" height="${size * 8}" shape-rendering="crispEdges">` +
-    `<title>${escaped}</title><rect width="100%" height="100%" fill="#fff"/>` +
-    `<path d="${path}" fill="#000"/></svg>`
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 250" width="2.5in" height="2.5in">` +
+    `<title>WorthyBound passport label ${escapeXml(wbId)}</title>` +
+    `<defs><linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">` +
+    `<stop offset="0" stop-color="#f3dc95"/><stop offset="0.5" stop-color="#c9a54c"/>` +
+    `<stop offset="1" stop-color="#9c7a2c"/></linearGradient></defs>` +
+    `<rect width="250" height="250" fill="#fff"/>` +
+    `<path d="${corners}" stroke="#999" stroke-width="0.6" fill="none"/>` +
+    `<rect x="27.5" y="27.5" width="195" height="195" rx="7" fill="#0b0b0c"/>` +
+    `<rect x="32" y="32" width="186" height="186" rx="5" fill="none" stroke="url(#gold)" stroke-width="1.2"/>` +
+    `<rect x="35" y="35" width="180" height="180" rx="3.5" fill="none" stroke="#c9a54c" ` +
+    `stroke-opacity="0.45" stroke-width="0.4"/>` +
+    `<g fill="none" stroke="url(#gold)" stroke-width="2.4">` +
+    `<rect x="112" y="40" width="15" height="10.5" rx="3.4"/>` +
+    `<rect x="122" y="44.5" width="15" height="10.5" rx="3.4"/>` +
+    `<path d="M127 42.5v5" stroke-linecap="round"/></g>` +
+    `<text x="125" y="66" text-anchor="middle" font-family="${sans}" font-size="10.5" ` +
+    `letter-spacing="1.9" fill="#f5f3ee">WORTHY<tspan fill="#c9a54c" font-weight="bold">BOUND</tspan></text>` +
+    `<text x="125" y="72.5" text-anchor="middle" font-family="${serif}" font-size="4.4" ` +
+    `letter-spacing="2.2" fill="#c9a54c">DIGITAL PASSPORT</text>` +
+    `<rect x="${qrX - 1}" y="${qrY + 1}" width="${box + 2}" height="${box + 2}" rx="3" fill="#fff"/>` +
+    `<path transform="translate(${qrX} ${qrY + 2}) scale(${unit.toFixed(4)})" d="${qr}" fill="#000"/>` +
+    (shortName
+      ? `<text x="125" y="196.5" text-anchor="middle" font-family="${sans}" font-size="6.2" ` +
+        `fill="#f5f3ee">${escapeXml(shortName)}</text>`
+      : "") +
+    `<text x="125" y="${shortName ? 205.5 : 201}" text-anchor="middle" font-family="${mono}" ` +
+    `font-size="9.5" font-weight="bold" letter-spacing="0.8" fill="#e6c875">${escapeXml(wbId)}</text>` +
+    `<text x="125" y="212" text-anchor="middle" font-family="${sans}" font-size="4.4" ` +
+    `letter-spacing="0.5" fill="#9a978f">Scan to view the passport · ${escapeXml(host)}</text>` +
+    `<rect x="25" y="25" width="200" height="200" fill="none" stroke="#555" stroke-width="0.7" ` +
+    `stroke-dasharray="4 2.5"/>` +
+    `<rect x="36" y="21" width="20" height="8" fill="#fff"/>` +
+    `<g transform="translate(38 21.5)" fill="none" stroke="#333" stroke-width="0.8" stroke-linecap="round">` +
+    `<circle cx="2.2" cy="1.8" r="1.7"/><circle cx="2.2" cy="5.2" r="1.7"/>` +
+    `<path d="M3.7 2.6L15 6.2M3.7 4.4L15 0.8"/></g>` +
+    `<text x="125" y="240" text-anchor="middle" font-family="${sans}" font-size="5" fill="#777">` +
+    `Cut along the dashed line · print at 100% for a 2 × 2 in label</text>` +
+    `</svg>`
   );
 }
 

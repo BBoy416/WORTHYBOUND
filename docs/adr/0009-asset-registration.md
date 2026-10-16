@@ -13,17 +13,17 @@ learn private details of other people's items.
 
 **Endpoints** (signed in, owner only unless noted):
 
-| Endpoint                        | Does                                                      |
-| ------------------------------- | --------------------------------------------------------- |
-| `POST /assets`                  | Registers a private `DRAFT`; accepts an `Idempotency-Key` |
-| `GET /assets`                   | The caller's assets, newest first, cursor pagination      |
-| `GET /assets/:wbId`             | Private view, including the serial                        |
-| `PATCH /assets/:wbId`           | Edits details (limits below)                              |
-| `POST /assets/:wbId/publish`    | `DRAFT`/`TOKENIZED` → `ACTIVE`; requires brand and model  |
-| `POST /assets/:wbId/status`     | Owner status changes the lifecycle allows (below)         |
-| `POST /assets/:wbId/condition`  | Owner-stated condition, recorded as `CONDITION_UPDATED`   |
-| `GET /passport/:wbId`           | Public passport and its link (for QR codes); no sign-in   |
-| `GET /assets/:wbId/passport-qr` | Owner only: SVG QR code of the passport link              |
+| Endpoint                           | Does                                                           |
+| ---------------------------------- | -------------------------------------------------------------- |
+| `POST /assets`                     | Registers a private `DRAFT`; accepts an `Idempotency-Key`      |
+| `GET /assets`                      | The caller's assets, newest first, cursor pagination           |
+| `GET /assets/:wbId`                | Private view, including the serial                             |
+| `PATCH /assets/:wbId`              | Edits details (limits below)                                   |
+| `POST /assets/:wbId/publish`       | `DRAFT`/`TOKENIZED` → `ACTIVE`; requires brand and model       |
+| `POST /assets/:wbId/status`        | Owner status changes the lifecycle allows (below)              |
+| `POST /assets/:wbId/condition`     | Owner-stated condition, recorded as `CONDITION_UPDATED`        |
+| `GET /passport/:wbId`              | Public passport and its link (for QR codes); no sign-in        |
+| `GET /assets/:wbId/passport-label` | Owner only: printable 2 × 2 in label with the passport QR code |
 
 Registration runs in one transaction: random WB ID (retried on collision), asset, first custody
 period, status event, `REGISTERED` provenance event (hash-chained, ADR 0005), idempotency key and
@@ -65,9 +65,12 @@ the same 404. Published assets stay visible after being reported stolen, dispute
 Individual verifiers are not named; organisations are. There is no Trust Score until Phase 9
 connects the engine to evidence and attestations (`trust: null`, shown as "not yet scored").
 
-**Passport QR codes (2026-10-12).** The owner of a published, not revoked passport gets a QR code
-of its link (`GET /assets/:wbId/passport-qr`, SVG, level M), to print for the item's box, papers
-or display tag. The code holds only the public passport link, so it is public by design: a code
+**Passport QR codes (2026-10-12).** The owner of a published, not revoked passport gets a printable
+label (`GET /assets/:wbId/passport-label`, SVG): a 2 × 2 inch WorthyBound label with a QR code of
+the passport link (level M), the WB ID and the brand and model, inside a 2.5 inch area with a
+dashed cut line, corner marks and scissors. One SVG unit is 1/100 inch, so it prints to size at
+100% scale; the web app prints it from a hidden frame. The owner cuts it out and keeps it with the
+item: in its box, with its papers or on its display tag. The code holds only the public passport link, so it is public by design: a code
 for owners only would be useless to buyers, and the passport already shows nothing private. A QR
 code can be copied onto another item, so it identifies the passport, never the item; the asset
 page, the scanner and the passport's "Check before buying" card say so, and buyers still run a

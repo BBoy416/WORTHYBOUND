@@ -1,4 +1,9 @@
-import { evidencePreviewPath, isPassportPublic, passportUrl, qrSvg } from "@worthybound/shared";
+import {
+  evidencePreviewPath,
+  isPassportPublic,
+  passportLabelSvg,
+  passportUrl,
+} from "@worthybound/shared";
 import {
   adminRevokeAssetSchema,
   assetConditionRequestSchema,
@@ -127,11 +132,12 @@ export const assetRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx) =
   );
 
   /**
-   * QR code of the public passport link, for the owner to print. It only links to the passport,
-   * which anyone may open; it does not prove that an item is the registered one.
+   * Printable 2 × 2 inch label with a QR code of the public passport link, for the owner to keep
+   * with the item. It only links to the passport, which anyone may open; it does not prove that an
+   * item is the registered one.
    */
   app.get(
-    "/assets/:wbId/passport-qr",
+    "/assets/:wbId/passport-label",
     {
       preHandler: authenticate,
       config: perUser(rateLimits.public),
@@ -143,17 +149,20 @@ export const assetRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx) =
         throw new ApiError(
           409,
           "passport_not_public",
-          "Only published passports that are not revoked have a QR code",
+          "Only published passports that are not revoked have a label",
         );
       }
+      const label = passportLabelSvg({
+        url: passportUrl(config.publicWebUrl, asset.wbId),
+        wbId: asset.wbId,
+        itemName: [asset.brand, asset.model].filter(Boolean).join(" "),
+      });
       return reply
         .header("content-type", "image/svg+xml")
-        .header("content-disposition", `inline; filename="${asset.wbId}-passport-qr.svg"`)
+        .header("content-disposition", `inline; filename="${asset.wbId}-passport-label.svg"`)
         .header("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'")
         .header("cache-control", "private, max-age=3600")
-        .send(
-          qrSvg(passportUrl(config.publicWebUrl, asset.wbId), `WorthyBound passport ${asset.wbId}`),
-        );
+        .send(label);
     },
   );
 

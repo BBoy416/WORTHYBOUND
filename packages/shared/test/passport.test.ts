@@ -10,7 +10,7 @@ import {
   passportPath,
   passportUrl,
   QR_MASKS,
-  qrSvg,
+  passportLabelSvg,
   rsRemainder,
   toPublicPassport,
   TRUST_SCORE_DISCLAIMER,
@@ -449,11 +449,36 @@ describe("passport QR codes", () => {
     expect(decoded).toBe(text);
   });
 
-  it("renders an SVG with a quiet zone and an escaped title", () => {
-    const svg = qrSvg(URL_TEXT, 'A <b> & "c"');
-    expect(svg).toMatch(/^<svg [^>]*viewBox="0 0 41 41"/);
-    expect(svg).toContain("<title>A &#60;b&#62; &#38; &#34;c&#34;</title>");
-    expect(svg).not.toContain("<script");
+  describe("printable label", () => {
+    const label = (itemName?: string) =>
+      passportLabelSvg({ url: URL_TEXT, wbId: "WB-59D6C372", itemName });
+
+    it("is a 2 × 2 inch label with a dashed cut line inside a 2.5 inch sheet", () => {
+      const svg = label("Rolex Submariner");
+      expect(svg).toMatch(/^<svg [^>]*viewBox="0 0 250 250" width="2.5in" height="2.5in"/);
+      expect(svg).toContain(
+        '<rect x="25" y="25" width="200" height="200" fill="none" stroke="#555" stroke-width="0.7" stroke-dasharray="4 2.5"/>',
+      );
+      expect(svg).toContain("WB-59D6C372");
+      expect(svg).toContain("Rolex Submariner");
+      expect(svg).toContain("worthybound.com");
+      expect(svg).toContain("Cut along the dashed line");
+    });
+
+    it("draws exactly the QR code of the passport link", () => {
+      const { modules } = encodeQr(URL_TEXT);
+      const dark = modules.flat().filter(Boolean).length;
+      const path = /scale\([^)]+\)" d="([^"]+)"/.exec(label())![1]!;
+      expect(path.split("M").length - 1).toBe(dark);
+      expect(path).toContain(`M4 4h1v1h-1z`);
+    });
+
+    it("escapes the item name and shortens a long one", () => {
+      expect(label('A <b> & "c"')).toContain("A &#60;b&#62; &#38; &#34;c&#34;");
+      expect(label("x".repeat(60))).toContain(`${"x".repeat(33)}…`);
+      expect(label("<script>")).not.toContain("<script");
+      expect(label()).not.toContain('font-size="6.2"');
+    });
   });
 
   it("rejects text that does not fit", () => {

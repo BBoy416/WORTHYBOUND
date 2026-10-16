@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { qrSvg } from "@worthybound/shared";
+import { passportLabelSvg } from "@worthybound/shared";
 import { grantAdmin } from "../src/cli/admin-grant.js";
 import {
   createTestDatabase,
@@ -586,16 +586,20 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
     });
   });
 
-  describe("passport QR code", () => {
-    it("gives the owner a QR code of the public passport link", async () => {
+  describe("passport label", () => {
+    it("gives the owner a printable label with a QR code of the public passport link", async () => {
       const alice = await owner();
       const wbId = await published(alice);
-      const res = await call(alice, "GET", `/assets/${wbId}/passport-qr`);
+      const res = await call(alice, "GET", `/assets/${wbId}/passport-label`);
       expect(res.statusCode, res.body).toBe(200);
       expect(res.headers["content-type"]).toContain("image/svg+xml");
       expect(res.headers["cache-control"]).toContain("private");
       expect(res.body).toBe(
-        qrSvg(`https://worthybound.test/passport/${wbId}`, `WorthyBound passport ${wbId}`),
+        passportLabelSvg({
+          url: `https://worthybound.test/passport/${wbId}`,
+          wbId,
+          itemName: "Rolex Submariner",
+        }),
       );
     });
 
@@ -603,10 +607,10 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
       const alice = await owner();
       const bob = await owner();
       const wbId = await published(alice);
-      expect((await call(null, "GET", `/assets/${wbId}/passport-qr`)).statusCode).toBe(401);
-      expect((await call(bob, "GET", `/assets/${wbId}/passport-qr`)).statusCode).toBe(404);
+      expect((await call(null, "GET", `/assets/${wbId}/passport-label`)).statusCode).toBe(401);
+      expect((await call(bob, "GET", `/assets/${wbId}/passport-label`)).statusCode).toBe(404);
       const { wbId: draft } = await registered(alice);
-      const res = await call(alice, "GET", `/assets/${draft}/passport-qr`);
+      const res = await call(alice, "GET", `/assets/${draft}/passport-label`);
       expect(res.statusCode).toBe(409);
       expect(res.json().error.code).toBe("passport_not_public");
     });

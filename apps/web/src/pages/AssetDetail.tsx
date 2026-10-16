@@ -138,7 +138,7 @@ export function AssetDetailPage({ wbId }: { wbId: string }) {
           <Card title="Confirm ownership to a buyer">
             <ConfirmOwnership asset={a} />
           </Card>
-          <PassportQr base={base} wbId={a.wbId} />
+          <PassportLabel base={base} wbId={a.wbId} />
         </>
       )}
 
@@ -175,50 +175,76 @@ export function AssetDetailPage({ wbId }: { wbId: string }) {
   );
 }
 
-/** The owner's printable QR code of the public passport link. */
-function PassportQr({ base, wbId }: { base: string; wbId: string }) {
-  const [url, setUrl] = useState<string | null>(null);
+/** Prints the label at its real size from a hidden frame, so no pop-up window is needed. */
+const printLabel = (svg: string, wbId: string) => {
+  const frame = document.createElement("iframe");
+  frame.setAttribute("aria-hidden", "true");
+  frame.style.cssText = "position:fixed;width:0;height:0;border:0;right:0;bottom:0";
+  frame.srcdoc =
+    `<!doctype html><html><head><title>${wbId} passport label</title><style>` +
+    "@page{margin:0.5in}html,body{margin:0;background:#fff}" +
+    "svg{display:block;width:2.5in;height:2.5in}</style></head><body>" +
+    `${svg}</body></html>`;
+  frame.onload = () => {
+    frame.contentWindow?.focus();
+    frame.contentWindow?.print();
+    setTimeout(() => frame.remove(), 60_000);
+  };
+  document.body.appendChild(frame);
+};
+
+/** The owner's printable 2 × 2 inch passport label with a QR code of the public passport link. */
+function PassportLabel({ base, wbId }: { base: string; wbId: string }) {
+  const [label, setLabel] = useState<{ svg: string; url: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let objectUrl: string | null = null;
     let live = true;
-    fetch(`${base}/passport-qr`, {
+    fetch(`${base}/passport-label`, {
       headers: { accept: "image/svg+xml" },
       credentials: "same-origin",
     })
       .then(async (res) => {
         if (!res.ok) throw new Error();
-        const blob = new Blob([await res.text()], { type: "image/svg+xml" });
+        const svg = await res.text();
         if (!live) return;
-        objectUrl = URL.createObjectURL(blob);
-        setUrl(objectUrl);
+        objectUrl = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+        setLabel({ svg, url: objectUrl });
       })
-      .catch(() => live && setError("The QR code could not be loaded."));
+      .catch(() => live && setError("The label could not be loaded."));
     return () => {
       live = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [base]);
   return (
-    <Card title="Passport QR code">
-      <div className="passport-qr">
-        {url && <img src={url} alt={`QR code of the passport ${wbId}`} width={180} height={180} />}
+    <Card title="Passport label">
+      <div className="passport-label">
+        {label && (
+          <img src={label.url} alt={`Passport label of ${wbId}`} width={200} height={200} />
+        )}
         <div>
           <p className="small">
-            Print it for the item's box, papers or display tag. Anyone who scans it sees the public
+            Print this 2 × 2 inch label, cut it out along the dashed line and keep it with the item:
+            in its box, with its papers or on its display tag. Scanning the QR code opens the public
             passport, never your identity, serial number or private evidence.
           </p>
           <p className="muted small">
-            A QR code can be copied, so it identifies the passport, not the item: buyers should
-            still run a check before buying. Avoid sticking it on the item itself.
+            Print at 100% (&quot;Actual size&quot;) so the QR code scans well. A label can be
+            copied, so it identifies the passport, not the item: buyers should still run a check
+            before buying.
           </p>
-          {url && (
+          {label && (
             <p className="actions">
-              <a className="button ghost small" href={url} download={`${wbId}-passport-qr.svg`}>
+              <button className="small" onClick={() => printLabel(label.svg, wbId)}>
+                Print label
+              </button>
+              <a
+                className="button ghost small"
+                href={label.url}
+                download={`${wbId}-passport-label.svg`}
+              >
                 Download
-              </a>
-              <a className="button ghost small" href={url} target="_blank" rel="noreferrer">
-                Open to print
               </a>
             </p>
           )}

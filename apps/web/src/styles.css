@@ -760,14 +760,12 @@ legend {
   margin: 0 0 6px;
 }
 
-.passport-qr {
+.passport-label {
   display: flex;
   gap: 1.25rem;
   align-items: flex-start;
   flex-wrap: wrap;
 }
-.passport-qr img {
-  background: #fff;
+.passport-label img {
   border-radius: 8px;
-  padding: 6px;
 }

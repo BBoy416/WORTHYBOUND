@@ -137,7 +137,7 @@ const ownerRoutes = (a: OwnerAsset) => ({
   [`GET /assets/${WB}/verification-requests`]: { json: { items: [] } },
   [`GET /assets/${WB}/capture-sessions`]: { json: { items: [] } },
   [`GET /assets/${WB}/remote-checks`]: { json: { items: [] } },
-  [`GET /assets/${WB}/passport-qr`]: { json: "<svg/>" },
+  [`GET /assets/${WB}/passport-label`]: { json: "<svg/>" },
   "GET /templates": { json: { items: [] } },
 });
 
@@ -441,19 +441,24 @@ describe("owner asset page", () => {
     });
   });
 
-  it("offers the passport QR code of a published asset", async () => {
+  it("offers a printable passport label for a published asset", async () => {
     mockFetch(ownerRoutes(asset()));
     renderAt(`/assets/${WB}`);
-    const img = (await screen.findByAltText(`QR code of the passport ${WB}`)) as HTMLImageElement;
+    const img = (await screen.findByAltText(`Passport label of ${WB}`)) as HTMLImageElement;
     expect(img.getAttribute("src")).toBe("blob:test");
-    expect(screen.getByText("Download").getAttribute("download")).toBe(`${WB}-passport-qr.svg`);
+    expect(screen.getByText("Download").getAttribute("download")).toBe(`${WB}-passport-label.svg`);
+    fireEvent.click(screen.getByText("Print label"));
+    const frame = document.querySelector("iframe") as HTMLIFrameElement;
+    expect(frame.srcdoc).toContain("width:2.5in;height:2.5in");
+    expect(frame.srcdoc).toContain('"<svg/>"');
+    frame.remove();
   });
 
-  it("offers no QR code before the passport is published", async () => {
+  it("offers no label before the passport is published", async () => {
     mockFetch(ownerRoutes(asset({ status: "DRAFT", publishedAt: null })));
     renderAt(`/assets/${WB}`);
     await screen.findByText("Details");
-    expect(screen.queryByText("Passport QR code")).toBeNull();
+    expect(screen.queryByText("Passport label")).toBeNull();
   });
 
   it("offers no editing once the passport is published", async () => {
