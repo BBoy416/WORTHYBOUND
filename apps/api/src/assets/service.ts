@@ -26,7 +26,7 @@ import type {
   UpdateDraftAssetInput,
 } from "@worthybound/validation";
 import { type RequestFingerprint, writeAudit } from "../audit.js";
-import { registerJobKey, TOKENIZABLE_STATUSES } from "../chain/sync.js";
+import { registerJobKey } from "../chain/sync.js";
 import { ApiError, fromDomainError, notFound } from "../errors.js";
 import { cancelOpenTransfer } from "../transfers/service.js";
 import { recordTrust } from "../trust/record.js";
@@ -97,8 +97,69 @@ function requestHash(body: object): string {
     .digest("hex");
 }
 
+async function recordStatusChange(
+  tx: Tx,
+  asset: Asset,
+  to: AssetStatus,
+  actor: Pick<Actor, "userId">,
+  at: Date,
+  reason?: string,
+) {
+  await tx.assetStatusEvent.create({
+    data: {
+      assetId: asset.id,
+      fromStatus: asset.status,
+      toStatus: to,
+      reason: reason ?? null,
+      actorId: actor.userId,
+      createdAt: at,
+    },
+  });
+  await tx.provenanceEvent.create({
+    data: {
+      assetId: asset.id,
+      type: provenanceTypeFor(asset.status, to),
+      actorId: actor.userId,
+      occurredAt: at,
+      payload: { fromStatus: asset.status, toStatus: to },
+    },
+  });
+}
+
 /** Discarded drafts are hidden from everyone, including their owner. */
 const isDiscardedDraft = (asset: Asset) => asset.status === "REVOKED" && asset.publishedAt === null;
+
+const publicationPending = () =>
+  new ApiError(
+    409,
+    "publication_pending",
+    "This asset is being tokenized; try again once its passport is published",
+  );
+
+/**
+ * Publishes a draft whose registration on-chain was just confirmed, on behalf of its owner who
+ * asked for it. Run in the transaction that confirms the registration; the asset row is locked.
+ */
+export async function publishTokenized(tx: Tx, assetId: string, at: Date): Promise<void> {
+  const asset = await tx.asset.findUniqueOrThrow({ where: { id: assetId } });
+  if (asset.status !== "DRAFT" || asset.publishedAt !== null) return;
+  await tx.asset.update({
+    where: { id: asset.id },
+    data: { status: "ACTIVE", publishedAt: at, updatedAt: at },
+  });
+  await recordStatusChange(tx, asset, "ACTIVE", { userId: asset.ownerId }, at);
+  await writeAudit(
+    tx,
+    {
+      actorId: asset.ownerId,
+      action: "asset.published",
+      targetType: "asset",
+      targetId: asset.wbId,
+    },
+    null,
+  );
+  await recordTrust(tx, asset.id, at);
+}
 
 export function createAssetService({ prisma, now, serialFingerprintKey }: AssetServiceOptions) {
   const fingerprintOf = (asset: Pick<Asset, "category" | "brand" | "serialNumber">) =>
@@ -147,35 +208,6 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
       throw notFound("Asset");
     }
     return asset;
-  }
-
-  async function recordStatusChange(
-    tx: Tx,
-    asset: Asset,
-    to: AssetStatus,
-    actor: Actor,
-    at: Date,
-    reason?: string,
-  ) {
-    await tx.assetStatusEvent.create({
-      data: {
-        assetId: asset.id,
-        fromStatus: asset.status,
-        toStatus: to,
-        reason: reason ?? null,
-        actorId: actor.userId,
-        createdAt: at,
-      },
-    });
-    await tx.provenanceEvent.create({
-      data: {
-        assetId: asset.id,
-        type: provenanceTypeFor(asset.status, to),
-        actorId: actor.userId,
-        occurredAt: at,
-        payload: { fromStatus: asset.status, toStatus: to },
-      },
-    });
   }
 
   async function replay(actor: Actor, key: string, hash: string): Promise<Asset | null> {
@@ -358,6 +390,9 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
         if (asset.status === "REVOKED") {
           throw new ApiError(409, "asset_revoked", "A revoked asset can no longer be changed");
         }
+        if (asset.publishedAt === null && asset.tokenizationStatus === "PENDING") {
+          throw publicationPending();
+        }
         const changed = (Object.keys(input) as (keyof UpdateDraftAssetInput)[]).filter(
           (field) => JSON.stringify(input[field]) !== JSON.stringify(asset[field]),
         );
@@ -437,9 +472,16 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
       return result as Asset;
     },
 
+    /**
+     * Queues registration on-chain: a frozen token minted to the owner's wallet (ADR 0002,
+     * ADR 0016). The passport is published once registration is confirmed (`publishTokenized`),
+     * so every public passport has a token. Needs a verified identity (ADR 0004). Repeating the
+     * request while pending changes nothing; after a failure it retries.
+     */
     async publish(wbId: string, actor: Actor): Promise<Asset> {
       return prisma.$transaction(async (tx) => {
         const asset = await lockOwned(tx, wbId, actor);
+        if (asset.tokenizationStatus === "PENDING") return asset;
         if (!canPublish(asset.status, asset.publishedAt)) {
           throw new ApiError(409, "invalid_transition", "This asset cannot be published");
         }
@@ -456,23 +498,50 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
         } catch (error) {
           throw fromDomainError(error);
         }
+        const owner = await tx.user.findUniqueOrThrow({
+          where: { id: actor.userId },
+          select: { identityStatus: true },
+        });
+        if (owner.identityStatus !== "VERIFIED") {
+          throw new ApiError(
+            403,
+            "identity_verification_required",
+            "Verify your identity before publishing an asset",
+          );
+        }
+        const { record, coreAsset } = await chainAddresses(asset.wbId);
         const at = now();
         await tx.asset.update({
           where: { id: asset.id },
-          data: { status: "ACTIVE", publishedAt: at, updatedAt: at },
+          data: {
+            tokenizationStatus: "PENDING",
+            chainRecordAddress: record,
+            chainAssetAddress: coreAsset,
+            updatedAt: at,
+          },
         });
-        await recordStatusChange(tx, asset, "ACTIVE", actor, at);
+        await tx.chainTransaction.upsert({
+          where: { idempotencyKey: registerJobKey(asset.id) },
+          create: {
+            idempotencyKey: registerJobKey(asset.id),
+            kind: "REGISTER_ASSET",
+            cluster: "DEVNET",
+            entityType: "ASSET",
+            entityId: asset.id,
+          },
+          update: { status: "PENDING", attempts: 0, lastError: null },
+        });
         await writeAudit(
           tx,
           {
             actorId: actor.userId,
-            action: "asset.published",
+            action: "asset.tokenization_requested",
             targetType: "asset",
             targetId: asset.wbId,
+            metadata: { retry: asset.tokenizationStatus === "FAILED" },
           },
           actor.fp,
         );
-        await recordTrust(tx, asset.id, at);
         return tx.asset.findUniqueOrThrow({ where: { id: asset.id } });
       });
     },
@@ -488,6 +557,9 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
               ? "Use POST /assets/:wbId/publish to publish an asset"
               : `The owner cannot set the status ${input.toStatus}`,
           );
+        }
+        if (asset.publishedAt === null && asset.tokenizationStatus === "PENDING") {
+          throw publicationPending();
         }
         try {
           assertTransition(ASSET_LIFECYCLE, asset.status, input.toStatus, "OWNER");
@@ -573,73 +645,6 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
           actor.fp,
         );
         await recordTrust(tx, asset.id, at);
-        return tx.asset.findUniqueOrThrow({ where: { id: asset.id } });
-      });
-    },
-
-    /**
-     * Queues registration on-chain: a frozen token minted to the owner's wallet (ADR 0002,
-     * ADR 0016). Needs a published asset and a verified identity (ADR 0004). Repeating the
-     * request while pending changes nothing; after a failure it retries.
-     */
-    async tokenize(wbId: string, actor: Actor): Promise<Asset> {
-      return prisma.$transaction(async (tx) => {
-        const asset = await lockOwned(tx, wbId, actor);
-        if (asset.tokenizationStatus === "TOKENIZED") {
-          throw new ApiError(409, "already_tokenized", "This asset is already tokenized");
-        }
-        if (asset.tokenizationStatus === "PENDING") return asset;
-        if (asset.publishedAt === null || !TOKENIZABLE_STATUSES.includes(asset.status)) {
-          throw new ApiError(
-            409,
-            "not_tokenizable",
-            "Only published assets that are active, verified or awaiting reverification can be tokenized",
-          );
-        }
-        const owner = await tx.user.findUniqueOrThrow({
-          where: { id: actor.userId },
-          select: { identityStatus: true },
-        });
-        if (owner.identityStatus !== "VERIFIED") {
-          throw new ApiError(
-            403,
-            "identity_verification_required",
-            "Verify your identity before tokenizing an asset",
-          );
-        }
-        const { record, coreAsset } = await chainAddresses(asset.wbId);
-        const at = now();
-        await tx.asset.update({
-          where: { id: asset.id },
-          data: {
-            tokenizationStatus: "PENDING",
-            chainRecordAddress: record,
-            chainAssetAddress: coreAsset,
-            updatedAt: at,
-          },
-        });
-        await tx.chainTransaction.upsert({
-          where: { idempotencyKey: registerJobKey(asset.id) },
-          create: {
-            idempotencyKey: registerJobKey(asset.id),
-            kind: "REGISTER_ASSET",
-            cluster: "DEVNET",
-            entityType: "ASSET",
-            entityId: asset.id,
-          },
-          update: { status: "PENDING", attempts: 0, lastError: null },
-        });
-        await writeAudit(
-          tx,
-          {
-            actorId: actor.userId,
-            action: "asset.tokenization_requested",
-            targetType: "asset",
-            targetId: asset.wbId,
-            metadata: { retry: asset.tokenizationStatus === "FAILED" },
-          },
-          actor.fp,
-        );
         return tx.asset.findUniqueOrThrow({ where: { id: asset.id } });
       });
     },

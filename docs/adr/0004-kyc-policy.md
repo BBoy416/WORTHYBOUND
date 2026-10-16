@@ -6,7 +6,8 @@
 ## Decision
 
 - Anyone may create a draft asset without KYC.
-- KYC is required before **tokenization** or **transfer** (both parties).
+- KYC is required before **tokenization** or **transfer** (both parties). Every item is tokenized
+  before its passport is published (ADR 0016, 2026-10-16), so publishing needs KYC too.
 - KYC is always required for **verifiers**.
 - KYC is performed by a third-party provider; WorthyBound stores only the verification status and
   provider reference, never identity documents.

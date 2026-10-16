@@ -14,6 +14,7 @@ import {
 } from "fastify-type-provider-zod";
 import { adminRoutes } from "./admin/routes.js";
 import { assetRoutes } from "./assets/routes.js";
+import { publishTokenized } from "./assets/service.js";
 import { createAuthenticate, createRequireRole } from "./auth/guard.js";
 import { authRoutes } from "./auth/routes.js";
 import { type ChainSync, createChainSync } from "./chain/sync.js";
@@ -140,6 +141,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         now,
         log: app.log,
         metadataUrl: (wbId) => `${config.apiPublicUrl}/metadata/${wbId}`,
+        publishTokenized,
         completeTransfer,
         escrow: escrowChainHooks,
         escrowDeadlines: (at) => runEscrowDeadlines(prisma, at),

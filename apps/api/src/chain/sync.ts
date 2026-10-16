@@ -15,7 +15,7 @@ import type { FastifyBaseLogger } from "fastify";
 
 type Tx = Prisma.TransactionClient;
 
-/** Published statuses an asset can be tokenized from; the program registers only these. */
+/** Statuses the program accepts for a record, at registration and after a transfer. */
 export const TOKENIZABLE_STATUSES: readonly AssetStatus[] = [
   "ACTIVE",
   "VERIFIED",
@@ -109,6 +109,8 @@ export interface ChainSyncOptions {
   log: FastifyBaseLogger;
   /** Token metadata URL registered on-chain for an asset. */
   metadataUrl: (wbId: string) => string;
+  /** Publishes a draft whose registration was confirmed, in the transaction that confirms it. */
+  publishTokenized: (tx: Tx, assetId: string, at: Date) => Promise<void>;
   /** Records a transfer confirmed on-chain, in the transaction that confirms its job. */
   completeTransfer: (tx: Tx, transferId: string, signature: string, at: Date) => Promise<void>;
   /** Records escrow payments, refunds and failed releases (ADR 0014), in the job's transaction. */
@@ -139,8 +141,17 @@ type Outcome = { status: "CONFIRMED"; signature: string } | { status: "SUPERSEDE
  * recorded as SUPERSEDED. One worker per database: run a single API instance.
  */
 export function createChainSync(options: ChainSyncOptions): ChainSync {
-  const { prisma, oracle, now, log, metadataUrl, completeTransfer, escrow, escrowDeadlines } =
-    options;
+  const {
+    prisma,
+    oracle,
+    now,
+    log,
+    metadataUrl,
+    publishTokenized,
+    completeTransfer,
+    escrow,
+    escrowDeadlines,
+  } = options;
   let running: Promise<number> | null = null;
   let timer: NodeJS.Timeout | null = null;
 
@@ -156,18 +167,17 @@ export function createChainSync(options: ChainSyncOptions): ChainSync {
       },
     });
 
+  /** Registers a draft as ACTIVE, with the sequence number of the status event that publishes it. */
   async function register(job: ChainTransaction): Promise<Outcome> {
     const asset = await assetOf(job.entityId);
-    if (!TOKENIZABLE_STATUSES.includes(asset.status)) {
-      throw new NotTokenizableError(asset.status);
-    }
+    if (asset.status !== "DRAFT") throw new NotTokenizableError(asset.status);
     const statusSeq = await prisma.assetStatusEvent.count({ where: { assetId: asset.id } });
     const signature = await oracle.registerAsset({
       wbId: asset.wbId,
       owner: asset.owner.walletAddress,
       uri: metadataUrl(asset.wbId),
-      status: asset.status,
-      statusSeq: BigInt(statusSeq),
+      status: "ACTIVE",
+      statusSeq: BigInt(statusSeq + 1),
     });
     return { status: "CONFIRMED", signature };
   }
@@ -316,6 +326,7 @@ export function createChainSync(options: ChainSyncOptions): ChainSync {
           },
         },
       });
+      await publishTokenized(tx, asset.id, at);
       await enqueueChainSync(tx, asset.id);
     });
   }

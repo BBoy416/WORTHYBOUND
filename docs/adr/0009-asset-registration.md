@@ -13,17 +13,17 @@ learn private details of other people's items.
 
 **Endpoints** (signed in, owner only unless noted):
 
-| Endpoint                           | Does                                                           |
-| ---------------------------------- | -------------------------------------------------------------- |
-| `POST /assets`                     | Registers a private `DRAFT`; accepts an `Idempotency-Key`      |
-| `GET /assets`                      | The caller's assets, newest first, cursor pagination           |
-| `GET /assets/:wbId`                | Private view, including the serial                             |
-| `PATCH /assets/:wbId`              | Edits details (limits below)                                   |
-| `POST /assets/:wbId/publish`       | `DRAFT`/`TOKENIZED` → `ACTIVE`; requires brand and model       |
-| `POST /assets/:wbId/status`        | Owner status changes the lifecycle allows (below)              |
-| `POST /assets/:wbId/condition`     | Owner-stated condition, recorded as `CONDITION_UPDATED`        |
-| `GET /passport/:wbId`              | Public passport and its link (for QR codes); no sign-in        |
-| `GET /assets/:wbId/passport-label` | Owner only: printable 2 × 2 in label with the passport QR code |
+| Endpoint                           | Does                                                              |
+| ---------------------------------- | ----------------------------------------------------------------- |
+| `POST /assets`                     | Registers a private `DRAFT`; accepts an `Idempotency-Key`         |
+| `GET /assets`                      | The caller's assets, newest first, cursor pagination              |
+| `GET /assets/:wbId`                | Private view, including the serial                                |
+| `PATCH /assets/:wbId`              | Edits details (limits below)                                      |
+| `POST /assets/:wbId/publish`       | Mints the token, then `DRAFT` → `ACTIVE` (ADR 0016); brand, model |
+| `POST /assets/:wbId/status`        | Owner status changes the lifecycle allows (below)                 |
+| `POST /assets/:wbId/condition`     | Owner-stated condition, recorded as `CONDITION_UPDATED`           |
+| `GET /passport/:wbId`              | Public passport and its link (for QR codes); no sign-in           |
+| `GET /assets/:wbId/passport-label` | Owner only: printable 2 × 2 in label with the passport QR code    |
 
 Registration runs in one transaction: random WB ID (retried on collision), asset, first custody
 period, status event, `REGISTERED` provenance event (hash-chained, ADR 0005), idempotency key and

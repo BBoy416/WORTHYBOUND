@@ -1,5 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { generateKeyPairSync, randomBytes, sign, type KeyObject } from "node:crypto";
+import { generateKeyPairSync, randomBytes, randomUUID, sign, type KeyObject } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAddressDecoder } from "@solana/addresses";
 import type {
@@ -12,6 +15,16 @@ import type {
   VerifierReportOutcome,
 } from "@worthybound/automated-checks";
 import { createPrismaClient, type PrismaClient } from "@worthybound/database";
+import {
+  buildEscrowPaymentTransaction,
+  buildTransferTransaction,
+  type ChainRecordState,
+  completeTransferTransaction,
+  loadKeypairSigner,
+  StaleChainUpdateError,
+  TransferFailedError,
+  type WorthyBoundOracle,
+} from "@worthybound/solana";
 import { createStorage, type Storage } from "@worthybound/storage";
 import type { FastifyInstance } from "fastify";
 import pg from "pg";
@@ -160,6 +173,19 @@ export function testApp(
 }
 
 /**
+ * Test app with an in-memory oracle, for tests that publish assets. Chain jobs run only when a
+ * test calls `app.chainSync.runOnce()`.
+ */
+export async function testAppWithOracle(
+  prisma: PrismaClient,
+  options: Partial<BuildAppOptions> = {},
+): Promise<FastifyInstance> {
+  const app = await testApp(prisma, { oracle: new FakeOracle(await oracleSigner()), ...options });
+  app.chainSync!.kick = () => {};
+  return app;
+}
+
+/**
  * A check engine that records its inputs and answers with `evidence`, `match` and `report`, which
  * tests may replace or make throw.
  */
@@ -231,4 +257,307 @@ export async function signIn(app: FastifyInstance, wallet: TestWallet): Promise<
   const cookie = res.cookies.find((c) => c.name === "wb_session");
   if (res.statusCode !== 200 || !cookie) throw new Error(`sign-in failed: ${res.statusCode}`);
   return cookie.value;
+}
+
+export type Address = ChainRecordState["owner"];
+type Signature = Awaited<ReturnType<WorthyBoundOracle["updateStatus"]>>;
+
+type Call =
+  | { kind: "register"; wbId: string; owner: string; uri: string; status: string; seq: bigint }
+  | { kind: "status"; wbId: string; status: string; seq: bigint }
+  | { kind: "trust"; wbId: string; score: number; level: string; seq: bigint }
+  | {
+      kind: "prepare";
+      wbId: string;
+      seller: string;
+      buyer: string;
+      status: string;
+      seq: bigint;
+      price: bigint;
+    }
+  | { kind: "transfer"; wbId: string; buyer: string }
+  | { kind: "payment" | "payment_reset"; buyer: string; price: bigint }
+  | { kind: "refund"; buyer: string; price: bigint }
+  | { kind: "close"; accounts: string[] };
+
+type Signer = Awaited<ReturnType<typeof loadKeypairSigner>>;
+
+/** In-memory stand-in for the program: keeps records and rejects stale sequence numbers. */
+export class FakeOracle implements WorthyBoundOracle {
+  readonly records = new Map<string, ChainRecordState & { status: string; score?: number }>();
+  readonly calls: Call[] = [];
+  /** Prepared transfers by transaction, to apply when sent. */
+  readonly #prepared = new Map<
+    string,
+    {
+      wbId: string;
+      seller: string;
+      buyer: string;
+      status: string;
+      seq: bigint;
+      nonceAccount: string;
+      escrow: boolean;
+      price: bigint;
+    }
+  >();
+  /** Prepared payments into escrow by transaction. */
+  readonly #payments = new Map<string, { buyer: string; escrow: string; price: bigint }>();
+  /** Escrow nonce accounts whose nonce moved on with a refund; their transfer cannot run. */
+  readonly #advanced = new Set<string>();
+  failures = 0;
+  /** Makes the next sent payment land and fail, as when the buyer spent the SOL meanwhile. */
+  failNextPayment = false;
+  /**
+   * Payments are sent but never seen to confirm, as during an outage; they stay valid, and land
+   * with `landLostPayments`, until their payment nonce is advanced.
+   */
+  losePayments = false;
+  readonly #lost = new Set<string>();
+  /** Lamports by wallet; wallets not listed hold 10 SOL. */
+  readonly balances = new Map<string, bigint>();
+  /** Lamports held in escrow, by nonce account. */
+  readonly escrows = new Map<string, bigint>();
+  /** Nonce accounts created and not yet closed. */
+  readonly nonces = new Set<string>();
+  #n = 0;
+
+  constructor(readonly signer: Signer) {}
+
+  get oracleAddress(): WorthyBoundOracle["oracleAddress"] {
+    return this.signer.address;
+  }
+
+  #sign(): Signature {
+    this.#n += 1;
+    return `sig-${this.#n}-${randomUUID()}` as Signature;
+  }
+
+  #maybeFail() {
+    if (this.failures > 0) {
+      this.failures -= 1;
+      throw new Error("RPC unavailable");
+    }
+  }
+
+  async fetchRecord(wbId: string) {
+    return this.records.get(wbId) ?? null;
+  }
+
+  async registerAsset(
+    input: Parameters<WorthyBoundOracle["registerAsset"]>[0],
+  ): ReturnType<WorthyBoundOracle["registerAsset"]> {
+    this.#maybeFail();
+    this.calls.push({ kind: "register", ...input, seq: input.statusSeq });
+    this.records.set(input.wbId, {
+      owner: input.owner as Address,
+      status: input.status,
+      statusSeq: input.statusSeq,
+      trustSeq: 0n,
+    });
+    return this.#sign();
+  }
+
+  async updateStatus(
+    input: Parameters<WorthyBoundOracle["updateStatus"]>[0],
+  ): ReturnType<WorthyBoundOracle["updateStatus"]> {
+    this.#maybeFail();
+    const record = this.records.get(input.wbId);
+    if (!record) throw new Error("AccountNotInitialized");
+    if (input.statusSeq <= record.statusSeq) throw new StaleChainUpdateError();
+    this.calls.push({ kind: "status", ...input, seq: input.statusSeq });
+    Object.assign(record, { status: input.status, statusSeq: input.statusSeq });
+    return this.#sign();
+  }
+
+  async commitTrustScore(
+    input: Parameters<WorthyBoundOracle["commitTrustScore"]>[0],
+  ): ReturnType<WorthyBoundOracle["commitTrustScore"]> {
+    this.#maybeFail();
+    const record = this.records.get(input.wbId);
+    if (!record) throw new Error("AccountNotInitialized");
+    if (input.trustSeq <= record.trustSeq) throw new StaleChainUpdateError();
+    this.calls.push({
+      kind: "trust",
+      wbId: input.wbId,
+      score: input.score,
+      level: input.level,
+      seq: input.trustSeq,
+    });
+    Object.assign(record, { score: input.score, trustSeq: input.trustSeq });
+    return this.#sign();
+  }
+
+  async prepareTransfer(input: Parameters<WorthyBoundOracle["prepareTransfer"]>[0]) {
+    this.#maybeFail();
+    this.calls.push({
+      kind: "prepare",
+      wbId: input.wbId,
+      seller: input.seller,
+      buyer: input.buyer,
+      status: input.statusAfter,
+      seq: input.statusSeq,
+      price: input.priceLamports,
+    });
+    const nonceAccount = new TestWallet().address as Address;
+    const transaction = await buildTransferTransaction({
+      ...input,
+      oracle: this.oracleAddress,
+      seller: input.seller as Address,
+      buyer: input.buyer as Address,
+      nonceAccount,
+      nonce: new TestWallet().address,
+    });
+    this.#prepared.set(transaction, {
+      ...input,
+      status: input.statusAfter,
+      seq: input.statusSeq,
+      nonceAccount,
+      escrow: input.escrow === true,
+      price: input.priceLamports,
+    });
+    const paymentNonceAccount =
+      input.escrow && input.priceLamports > 0n ? new TestWallet().address : null;
+    this.nonces.add(nonceAccount);
+    if (paymentNonceAccount) this.nonces.add(paymentNonceAccount);
+    return { transaction, nonceAccount, paymentNonceAccount };
+  }
+
+  async prepareEscrowPayment(input: Parameters<WorthyBoundOracle["prepareEscrowPayment"]>[0]) {
+    this.#maybeFail();
+    const transaction = buildEscrowPaymentTransaction({
+      ...input,
+      oracle: this.oracleAddress,
+      buyer: input.buyer as Address,
+      escrowAccount: input.escrowAccount as Address,
+      paymentNonceAccount: input.paymentNonceAccount as Address,
+      nonce: new TestWallet().address,
+    });
+    this.#payments.set(transaction, {
+      buyer: input.buyer,
+      escrow: input.escrowAccount,
+      price: input.priceLamports,
+    });
+    return transaction;
+  }
+
+  /** Lands the payments that were sent and are still valid. */
+  landLostPayments() {
+    for (const transaction of this.#lost) {
+      const payment = this.#payments.get(transaction);
+      if (!payment) continue;
+      this.#payments.delete(transaction);
+      this.#credit(payment.buyer, -payment.price);
+      this.escrows.set(payment.escrow, (this.escrows.get(payment.escrow) ?? 0n) + payment.price);
+      this.calls.push({ kind: "payment", buyer: payment.buyer, price: payment.price });
+    }
+    this.#lost.clear();
+  }
+
+  async resetEscrowPayment(
+    input: Parameters<WorthyBoundOracle["resetEscrowPayment"]>[0],
+  ): ReturnType<WorthyBoundOracle["resetEscrowPayment"]> {
+    this.#maybeFail();
+    // Advancing the payment nonce invalidates every payment prepared for this escrow.
+    for (const [transaction, payment] of this.#payments) {
+      if (payment.escrow === input.escrowAccount) this.#payments.delete(transaction);
+    }
+    this.calls.push({ kind: "payment_reset", buyer: input.buyer, price: input.priceLamports });
+    if ((this.escrows.get(input.escrowAccount) ?? 0n) >= input.priceLamports) return { held: true };
+    return { held: false, transaction: await this.prepareEscrowPayment(input) };
+  }
+
+  async refundEscrow(
+    input: Parameters<WorthyBoundOracle["refundEscrow"]>[0],
+  ): ReturnType<WorthyBoundOracle["refundEscrow"]> {
+    this.#maybeFail();
+    const held = this.escrows.get(input.escrowAccount) ?? 0n;
+    if (held < input.priceLamports) return null;
+    this.escrows.set(input.escrowAccount, held - input.priceLamports);
+    this.#credit(input.buyer, input.priceLamports);
+    this.#advanced.add(input.escrowAccount);
+    this.calls.push({ kind: "refund", buyer: input.buyer, price: input.priceLamports });
+    return this.#sign();
+  }
+
+  async closeNonceAccounts(
+    accounts: string[],
+  ): ReturnType<WorthyBoundOracle["closeNonceAccounts"]> {
+    this.#maybeFail();
+    const closing = accounts.filter(
+      (a) => this.nonces.has(a) && (this.escrows.get(a) ?? 0n) === 0n,
+    );
+    if (closing.length === 0) return null;
+    for (const a of closing) this.nonces.delete(a);
+    this.calls.push({ kind: "close", accounts: closing });
+    return this.#sign();
+  }
+
+  #credit(wallet: string, lamports: bigint) {
+    this.balances.set(wallet, (this.balances.get(wallet) ?? 10_000_000_000n) + lamports);
+  }
+
+  async getBalance(address: string) {
+    this.#maybeFail();
+    return this.balances.get(address) ?? 10_000_000_000n;
+  }
+
+  async sendTransfer(
+    input: Parameters<WorthyBoundOracle["sendTransfer"]>[0],
+  ): ReturnType<WorthyBoundOracle["sendTransfer"]> {
+    this.#maybeFail();
+    // Throws unless the parties signed; the oracle signs last.
+    await completeTransferTransaction(input.transaction, input.signatures, this.signer);
+    const payment = this.#payments.get(input.transaction);
+    if (payment && this.losePayments) {
+      this.#lost.add(input.transaction);
+      throw new Error("transaction confirmation timed out");
+    }
+    if (payment) {
+      this.#payments.delete(input.transaction);
+      if (this.failNextPayment) {
+        this.failNextPayment = false;
+        throw new TransferFailedError("insufficient lamports");
+      }
+      this.#credit(payment.buyer, -payment.price);
+      this.escrows.set(payment.escrow, (this.escrows.get(payment.escrow) ?? 0n) + payment.price);
+      this.calls.push({ kind: "payment", buyer: payment.buyer, price: payment.price });
+      return this.#sign();
+    }
+    const prepared = this.#prepared.get(input.transaction);
+    const record = prepared && this.records.get(prepared.wbId);
+    if (!prepared || !record) throw new Error("AccountNotInitialized");
+    if (record.status !== "TRANSFER_PENDING") throw new Error("NotTransferPending");
+    if (record.owner !== prepared.seller) throw new Error("NotOwner");
+    if (prepared.seq <= record.statusSeq) throw new Error("StaleUpdate");
+    if (prepared.escrow) {
+      const held = this.escrows.get(prepared.nonceAccount) ?? 0n;
+      if (this.#advanced.has(prepared.nonceAccount) || held < prepared.price) {
+        throw new TransferFailedError("nonce has advanced");
+      }
+      this.escrows.set(prepared.nonceAccount, held - prepared.price);
+      this.#credit(prepared.seller, prepared.price);
+    }
+    this.calls.push({ kind: "transfer", wbId: prepared.wbId, buyer: prepared.buyer });
+    Object.assign(record, {
+      owner: prepared.buyer as Address,
+      status: prepared.status,
+      statusSeq: prepared.seq,
+    });
+    return this.#sign();
+  }
+}
+
+/** A fresh oracle key, loaded the way the server loads its keypair file. */
+export async function oracleSigner(): Promise<Signer> {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const secret = Buffer.from(privateKey.export({ format: "jwk" }).d as string, "base64url");
+  const pub = Buffer.from(publicKey.export({ format: "jwk" }).x as string, "base64url");
+  const dir = await mkdtemp(join(tmpdir(), "wb-oracle-"));
+  try {
+    const path = join(dir, "oracle.json");
+    await writeFile(path, JSON.stringify([...secret, ...pub]));
+    return await loadKeypairSigner(path);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }

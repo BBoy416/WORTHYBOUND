@@ -34,7 +34,8 @@ acting on recorded facts (expiry, chain confirmation, template evaluation), neve
 Key rules:
 
 - Assets: `DRAFT` is private; `TOKENIZED` means registered on-chain but not yet published; `ACTIVE`
-  is a published passport. Tokenization of a published asset is tracked by `tokenizationStatus`.
+  is a published passport. Assets are tokenized before they are published (ADR 0016); progress is
+  tracked by `tokenizationStatus`.
 - Only the system sets `VERIFIED`, after template evaluation; no person can mark an asset verified.
 - Transfers start only from `ACTIVE`, `VERIFIED` or `REVERIFICATION_REQUIRED` (ADR 0002).
 - Owners can report a published asset lost or stolen at any time; only an admin can clear a stolen

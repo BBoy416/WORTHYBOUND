@@ -3,11 +3,13 @@ import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { passportLabelSvg } from "@worthybound/shared";
 import { grantAdmin } from "../src/cli/admin-grant.js";
+import { recordKyc } from "../src/cli/kyc-record.js";
 import {
   createTestDatabase,
   signIn,
   TEST_DATABASE_URL,
   testApp,
+  testAppWithOracle,
   TestWallet,
   type TestDatabase,
 } from "./helpers.js";
@@ -20,7 +22,7 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
 
   beforeAll(async () => {
     db = await createTestDatabase();
-    app = await testApp(db.prisma);
+    app = await testAppWithOracle(db.prisma);
   });
 
   afterAll(async () => {
@@ -33,9 +35,18 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
     token: string;
   }
 
-  const owner = async (): Promise<Owner> => {
+  const owner = async ({ kyc = true } = {}): Promise<Owner> => {
     const wallet = new TestWallet();
-    return { wallet, token: await signIn(app, wallet) };
+    const token = await signIn(app, wallet);
+    if (kyc) {
+      await recordKyc(db.prisma, {
+        walletAddress: wallet.address,
+        provider: "test-kyc",
+        reference: randomUUID(),
+        status: "VERIFIED",
+      });
+    }
+    return { wallet, token };
   };
 
   const call = (
@@ -74,7 +85,9 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
   const published = async (who: Owner, body: object = {}) => {
     const { wbId } = await registered(who, body);
     const res = await call(who, "POST", `/assets/${wbId}/publish`);
-    expect(res.statusCode, res.body).toBe(200);
+    expect(res.statusCode, res.body).toBe(202);
+    await app.chainSync!.runOnce();
+    expect((await assetRow(wbId)).status).toBe("ACTIVE");
     return wbId;
   };
 
@@ -380,10 +393,11 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
       });
       expect(events.map((e) => e.type)).toEqual([
         "REGISTERED",
+        "TOKENIZED",
         "STATUS_CHANGED",
         "DETAILS_UPDATED",
       ]);
-      expect(events[2]?.payload).toEqual({ fields: ["publicDescription"] });
+      expect(events[3]?.payload).toEqual({ fields: ["publicDescription"] });
     });
 
     it("sends condition changes of a published asset to the condition endpoint", async () => {
@@ -419,16 +433,46 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
       });
     });
 
-    it("publishes the passport and records it", async () => {
+    it("needs a verified identity", async () => {
+      const bob = await owner({ kyc: false });
+      const { wbId } = await registered(bob);
+      const res = await call(bob, "POST", `/assets/${wbId}/publish`);
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error.code).toBe("identity_verification_required");
+      expect((await assetRow(wbId)).tokenizationStatus).toBe("NOT_TOKENIZED");
+    });
+
+    it("tokenizes first and publishes the passport once the token is confirmed", async () => {
       const alice = await owner();
       const { wbId } = await registered(alice);
       const res = await call(alice, "POST", `/assets/${wbId}/publish`);
-      expect(res.statusCode).toBe(200);
+      expect(res.statusCode, res.body).toBe(202);
       expect(res.json()).toMatchObject({
+        status: "DRAFT",
+        publishedAt: null,
+        tokenizationStatus: "PENDING",
+      });
+      // Still private, and frozen while the token is minted.
+      expect((await call(null, "GET", `/passport/${wbId}`)).statusCode).toBe(404);
+      for (const [method, suffix, payload] of [
+        ["PATCH", "", { model: "Daytona" }],
+        ["POST", "/status", { toStatus: "REVOKED" }],
+      ] as const) {
+        const blocked = await call(alice, method, `/assets/${wbId}${suffix}`, payload);
+        expect(blocked.statusCode).toBe(409);
+        expect(blocked.json().error.code).toBe("publication_pending");
+      }
+      expect((await call(alice, "POST", `/assets/${wbId}/publish`)).statusCode).toBe(202);
+
+      await app.chainSync!.runOnce();
+      const view = (await call(alice, "GET", `/assets/${wbId}`)).json();
+      expect(view).toMatchObject({
         status: "ACTIVE",
+        tokenizationStatus: "TOKENIZED",
         passportUrl: `https://worthybound.test/passport/${wbId}`,
       });
-      expect(res.json().publishedAt).not.toBeNull();
+      expect(view.publishedAt).not.toBeNull();
+      expect((await call(null, "GET", `/passport/${wbId}`)).statusCode).toBe(200);
       const asset = await db.prisma.asset.findUniqueOrThrow({
         where: { wbId },
         include: { statusEvents: { orderBy: { createdAt: "asc" } } },
@@ -463,6 +507,7 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
       });
       expect(events.map((e) => e.type)).toEqual([
         "REGISTERED",
+        "TOKENIZED",
         "STATUS_CHANGED",
         "REPORTED_LOST",
         "RECOVERED",
@@ -639,7 +684,7 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
         status: "ACTIVE",
         verificationLevel: "UNVERIFIED",
         trust: {
-          score: 7,
+          score: 15,
           engineVersion: "1.4.0",
           weightsVersion: "weights-2026.5",
           disclaimer: expect.stringContaining("does not guarantee authenticity"),
@@ -650,6 +695,7 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
       });
       expect(passport.provenance.map((p: { type: string }) => p.type)).toEqual([
         "REGISTERED",
+        "TOKENIZED",
         "STATUS_CHANGED",
       ]);
       expect(res.body).not.toContain("PRIVATE");

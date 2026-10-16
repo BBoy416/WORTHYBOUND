@@ -373,20 +373,27 @@ describe("sign-in", () => {
 });
 
 describe("owner asset page", () => {
-  it("tokenizes a published asset and polls until the mint is confirmed", async () => {
-    let state: OwnerAsset = asset();
+  it("tokenizes and publishes a draft, polling until the mint is confirmed", async () => {
+    const draft = { status: "DRAFT", publishedAt: null } as const;
+    let state: OwnerAsset = asset(draft);
     const calls = mockFetch({
       ...ownerRoutes(state),
       [`GET /assets/${WB}`]: () => ({ json: state }),
-      [`POST /assets/${WB}/tokenize`]: () => (
-        (state = asset({ tokenizationStatus: "PENDING" })),
+      [`POST /assets/${WB}/publish`]: () => (
+        (state = asset({ ...draft, tokenizationStatus: "PENDING" })),
         { status: 202, json: state }
       ),
     });
     renderAt(`/assets/${WB}`);
-    fireEvent.click(await screen.findByText("Tokenize on Solana devnet"));
-    expect(await screen.findByText(/Minting on devnet/)).toBeTruthy();
-    expect(calls.some((c) => c.method === "POST" && c.url === `/assets/${WB}/tokenize`)).toBe(true);
+    expect(await screen.findByText(/Every passport is backed by a token/)).toBeTruthy();
+    fireEvent.click(screen.getByText("Tokenize and publish"));
+    expect(
+      await screen.findByText(/the passport goes public once the token is confirmed/),
+    ).toBeTruthy();
+    expect(calls.some((c) => c.method === "POST" && c.url === `/assets/${WB}/publish`)).toBe(true);
+    // The draft cannot change while it is minted.
+    expect(screen.queryByText("Discard draft")).toBeNull();
+    expect(screen.queryByText("Tokenize and publish")).toBeNull();
     state = asset({
       tokenizationStatus: "TOKENIZED",
       chainAssetAddress: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin",
@@ -394,10 +401,13 @@ describe("owner asset page", () => {
     await waitFor(() => expect(screen.getByText("9xQe…VFin ↗")).toBeTruthy(), { timeout: 5000 });
   });
 
-  it("blocks tokenization until the owner's identity is verified", async () => {
-    mockFetch({ ...ownerRoutes(asset()), "GET /auth/me": { json: me(["USER"], "UNVERIFIED") } });
+  it("blocks publishing until the owner's identity is verified", async () => {
+    mockFetch({
+      ...ownerRoutes(asset({ status: "DRAFT", publishedAt: null })),
+      "GET /auth/me": { json: me(["USER"], "UNVERIFIED") },
+    });
     renderAt(`/assets/${WB}`);
-    const button = (await screen.findByText("Tokenize on Solana devnet")) as HTMLButtonElement;
+    const button = (await screen.findByText("Tokenize and publish")) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     expect(screen.getByText(/Needs a verified identity/)).toBeTruthy();
   });
@@ -408,7 +418,7 @@ describe("owner asset page", () => {
     );
     renderAt(`/assets/${WB}`);
     expect(await screen.findByText("To publish, add: model.")).toBeTruthy();
-    expect(screen.queryByText("Publish passport")).toBeNull();
+    expect(screen.queryByText("Tokenize and publish")).toBeNull();
   });
 
   it("adds the missing brand and model to a draft, then offers to publish", async () => {
@@ -434,7 +444,7 @@ describe("owner asset page", () => {
       target: { value: "Datejust" },
     });
     fireEvent.click(screen.getByText("Save details"));
-    expect(await screen.findByText("Publish passport")).toBeTruthy();
+    expect(await screen.findByText("Tokenize and publish")).toBeTruthy();
     expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({
       brand: "Rolex",
       model: "Datejust",
@@ -466,7 +476,7 @@ describe("owner asset page", () => {
   it("offers no editing once the passport is published", async () => {
     mockFetch(ownerRoutes(asset()));
     renderAt(`/assets/${WB}`);
-    await screen.findByText("Tokenize on Solana devnet");
+    await screen.findByText("Details");
     expect(screen.queryByText("Edit details")).toBeNull();
   });
 
@@ -1676,9 +1686,9 @@ describe("transfers", () => {
   });
 
   it("offers no transfer before the asset is tokenized", async () => {
-    mockFetch(ownerRoutes(asset()));
+    mockFetch(ownerRoutes(asset({ status: "DRAFT", publishedAt: null })));
     renderAt(`/assets/${WB}`);
-    await screen.findByText("Tokenize on Solana devnet");
+    await screen.findByText("Tokenize and publish");
     expect(screen.queryByText("Start transfer")).toBeNull();
   });
 

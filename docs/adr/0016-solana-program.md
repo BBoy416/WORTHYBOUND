@@ -49,7 +49,7 @@ it or pause the program. On devnet the upgrade authority is a single wallet; the
 ADR 0002 comes before mainnet.
 
 **Chain sync (outbox).** The API writes `chain_transactions` jobs in the same database
-transaction as the change: `POST /assets/:wbId/tokenize` queues `REGISTER_ASSET`, and every Trust
+transaction as the change: `POST /assets/:wbId/publish` queues `REGISTER_ASSET`, and every Trust
 Score recomputation (`recordTrust`, ADR 0015), which follows every status change, queues
 `UPDATE_ASSET_STATUS` and `COMMIT_TRUST_SCORE` for tokenized assets. Idempotency keys include the
 sequence number, so a recomputation without a change queues nothing. A worker in the API sends
@@ -63,11 +63,19 @@ jobs with the oracle key, always with the asset's current state:
 
 Only one worker may run per database, so the API runs as a single instance.
 
-**Tokenization.** Owner only, for published assets that are `ACTIVE`, `VERIFIED` or
-`REVERIFICATION_REQUIRED`, with a verified identity (ADR 0004). The response is `202` with
-`tokenizationStatus: PENDING`; it becomes `TOKENIZED` (with a `TOKENIZED` provenance event) or,
-after the last failed attempt, `FAILED`, after which the owner can try again. Without an oracle
-key the endpoint answers `503`.
+**Tokenization before publication (2026-10-16).** Every public passport has a token: publishing
+tokenizes first. `POST /assets/:wbId/publish` is for the owner of an unpublished `DRAFT` with brand
+and model and a verified identity (ADR 0004). It answers `202` with `tokenizationStatus: PENDING`
+and the draft stays private; the owner cannot edit or discard it meanwhile. The record is
+registered as `ACTIVE`, with the sequence number of the status event that will publish it. Once
+registration is confirmed, the same transaction sets `TOKENIZED` (with a `TOKENIZED` provenance
+event), publishes the passport (`DRAFT` → `ACTIVE`, recorded for the owner, then the Trust Score),
+and queues the score for the record. After the last failed attempt the asset is `FAILED` and stays
+a private draft; the owner can edit it or try again. A draft revoked by an administrator before
+registration is not minted. Without an oracle key the endpoint answers `503`. This replaces the
+earlier order (publish, then a separate `POST /assets/:wbId/tokenize` for published assets): a
+token is the point of a passport, and the token's metadata, built from the public passport, exists
+as soon as the token does.
 
 **Metadata.** `GET /metadata/:wbId` serves the token metadata (Metaplex JSON) registered as the
 Core asset's URI. It is built from the public passport, so it shows nothing the passport does

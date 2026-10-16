@@ -192,13 +192,27 @@ export const assetRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx) =
       view(await service.update(request.params.wbId, request.body, actor(request))),
   );
 
+  /**
+   * Tokenizes and publishes. Accepted: registration on-chain runs in the background and the
+   * passport is published once it is confirmed; poll the asset's `tokenizationStatus`.
+   */
   app.post(
     "/assets/:wbId/publish",
     {
       ...write,
-      schema: { params: assetParamsSchema, response: { 200: ownerAssetSchema, ...errors } },
+      schema: {
+        params: assetParamsSchema,
+        response: { 202: ownerAssetSchema, 503: errorSchema, ...errors },
+      },
     },
-    async (request) => view(await service.publish(request.params.wbId, actor(request))),
+    async (request, reply) => {
+      if (!chainSync) {
+        throw new ApiError(503, "tokenization_unavailable", "Tokenization is not available");
+      }
+      const asset = await service.publish(request.params.wbId, actor(request));
+      chainSync.kick();
+      return reply.code(202).send(view(asset));
+    },
   );
 
   app.post(
@@ -230,26 +244,6 @@ export const assetRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx) =
       const asset = await service.revoke(request.params.wbId, request.body, actor(request));
       chainSync?.kick();
       return view(asset);
-    },
-  );
-
-  /** Accepted: registration runs in the background; poll the asset's `tokenizationStatus`. */
-  app.post(
-    "/assets/:wbId/tokenize",
-    {
-      ...write,
-      schema: {
-        params: assetParamsSchema,
-        response: { 202: ownerAssetSchema, 503: errorSchema, ...errors },
-      },
-    },
-    async (request, reply) => {
-      if (!chainSync) {
-        throw new ApiError(503, "tokenization_unavailable", "Tokenization is not available");
-      }
-      const asset = await service.tokenize(request.params.wbId, actor(request));
-      chainSync.kick();
-      return reply.code(202).send(view(asset));
     },
   );
 

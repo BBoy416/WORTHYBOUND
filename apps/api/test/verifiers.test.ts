@@ -11,6 +11,7 @@ import {
   signIn,
   TEST_DATABASE_URL,
   testApp,
+  testAppWithOracle,
   testClock,
   TestWallet,
   type TestDatabase,
@@ -129,7 +130,7 @@ describe.skipIf(!TEST_DATABASE_URL)("verifier system", () => {
   beforeAll(async () => {
     db = await createTestDatabase();
     clock = testClock();
-    app = await testApp(db.prisma, { now: clock.now, checkEngine: engine });
+    app = await testAppWithOracle(db.prisma, { now: clock.now, checkEngine: engine });
     admin = await person();
     await grantAdmin(db.prisma, admin.wallet.address);
   });
@@ -541,7 +542,9 @@ describe.skipIf(!TEST_DATABASE_URL)("verifier system", () => {
         }),
         201,
       );
-      await expectOk(call(owner, "POST", `/assets/${created.wbId}/publish`));
+      await kyc(owner);
+      await expectOk(call(owner, "POST", `/assets/${created.wbId}/publish`), 202);
+      await app.chainSync!.runOnce();
       const asset = await db.prisma.asset.findUniqueOrThrow({ where: { wbId: created.wbId } });
       const template = await db.prisma.verificationTemplate.create({
         data: { code: `tpl-${randomUUID()}`, category: "LUXURY_WATCH", name: "Watch" },

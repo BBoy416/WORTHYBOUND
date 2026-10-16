@@ -29,7 +29,6 @@ import type {
   PublishedTemplate,
 } from "../types.js";
 
-const TOKENIZABLE = ["ACTIVE", "VERIFIED", "REVERIFICATION_REQUIRED"];
 const PUBLISHED = ["ACTIVE", "VERIFIED", "REVERIFICATION_REQUIRED"];
 const REPORTABLE = [...PUBLISHED, "TRANSFER_PENDING"];
 
@@ -47,7 +46,7 @@ export function AssetDetailPage({ wbId }: { wbId: string }) {
   const pending = asset.data?.tokenizationStatus === "PENDING";
   useEffect(() => {
     if (!pending) return;
-    const timer = setInterval(() => asset.reload(), 3000);
+    const timer = setInterval(reloadAll, 3000);
     return () => clearInterval(timer);
   }, [pending]);
 
@@ -123,9 +122,9 @@ export function AssetDetailPage({ wbId }: { wbId: string }) {
             ]}
           />
           {a.publicDescription && <p className="small">{a.publicDescription}</p>}
-          {a.publishedAt === null && a.status !== "REVOKED" && (
-            <EditDraft asset={a} onChange={reloadAll} />
-          )}
+          {a.publishedAt === null &&
+            a.status !== "REVOKED" &&
+            a.tokenizationStatus !== "PENDING" && <EditDraft asset={a} onChange={reloadAll} />}
         </Card>
         <Lifecycle asset={a} onChange={reloadAll} />
       </div>
@@ -379,10 +378,9 @@ function Lifecycle({ asset: a, onChange }: { asset: OwnerAsset; onChange: () => 
   const base = `/assets/${a.wbId}`;
   const act = (path: string, body?: unknown) =>
     run(async () => (await post(path, body), onChange()));
-  const canPublish = a.publishedAt === null && (a.status === "DRAFT" || a.status === "TOKENIZED");
-  const canTokenize =
-    a.publishedAt !== null &&
-    TOKENIZABLE.includes(a.status) &&
+  const canPublish =
+    a.publishedAt === null &&
+    a.status === "DRAFT" &&
     (a.tokenizationStatus === "NOT_TOKENIZED" || a.tokenizationStatus === "FAILED");
   const kycMissing = me?.user.identityStatus !== "VERIFIED";
 
@@ -392,26 +390,28 @@ function Lifecycle({ asset: a, onChange }: { asset: OwnerAsset; onChange: () => 
         (a.missingForPublish.length > 0 ? (
           <p className="muted">To publish, add: {a.missingForPublish.join(" and ")}.</p>
         ) : (
-          <p>
-            <button disabled={busy} onClick={() => void act(`${base}/publish`)}>
-              Publish passport
-            </button>{" "}
-            <span className="muted small">Brand, model and serial are locked once published.</span>
-          </p>
+          <>
+            <p className="small">
+              Every passport is backed by a token. Your item is minted as a frozen token to your
+              wallet on Solana devnet, then its passport goes public. Brand, model and serial are
+              locked once published.
+            </p>
+            <p>
+              <button disabled={busy || kycMissing} onClick={() => void act(`${base}/publish`)}>
+                Tokenize and publish
+              </button>
+              {kycMissing && <span className="muted small"> Needs a verified identity (KYC).</span>}
+            </p>
+          </>
         ))}
-      {canTokenize && (
-        <p>
-          <button disabled={busy || kycMissing} onClick={() => void act(`${base}/tokenize`)}>
-            Tokenize on Solana devnet
-          </button>
-          {kycMissing && <span className="muted small"> Needs a verified identity (KYC).</span>}
+      {a.tokenizationStatus === "PENDING" && a.publishedAt === null && (
+        <p className="muted">
+          Minting on devnet… the passport goes public once the token is confirmed. This updates
+          automatically.
         </p>
       )}
-      {a.tokenizationStatus === "PENDING" && (
-        <p className="muted">Minting on devnet… this updates automatically.</p>
-      )}
       {a.tokenizationStatus === "FAILED" && (
-        <p className="error">Tokenization failed. You can try again.</p>
+        <p className="error">Tokenization failed, so the passport is not public yet. Try again.</p>
       )}
       <Facts
         rows={[
@@ -462,7 +462,7 @@ function Lifecycle({ asset: a, onChange }: { asset: OwnerAsset; onChange: () => 
           Mark recovered
         </button>
       )}
-      {a.status === "DRAFT" && (
+      {a.status === "DRAFT" && a.tokenizationStatus !== "PENDING" && (
         <button
           className="ghost small danger"
           disabled={busy}

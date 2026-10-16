@@ -12,7 +12,7 @@ import {
   signIn,
   TEST_DATABASE_URL,
   TEST_STORAGE_AVAILABLE,
-  testApp,
+  testAppWithOracle,
   testClock,
   TestWallet,
   type TestDatabase,
@@ -173,7 +173,9 @@ function fixtures(get: () => { app: FastifyInstance; db: TestDatabase; clock: Cl
       }),
       201,
     );
-    await expectOk(call(owner, "POST", `/assets/${wbId}/publish`));
+    await kyc(owner);
+    await expectOk(call(owner, "POST", `/assets/${wbId}/publish`), 202);
+    await get().app.chainSync!.runOnce();
     return wbId as string;
   };
 
@@ -254,7 +256,7 @@ describe.skipIf(!TEST_DATABASE_URL)("verification", () => {
   beforeAll(async () => {
     db = await createTestDatabase();
     clock = testClock();
-    app = await testApp(db.prisma, { now: clock.now });
+    app = await testAppWithOracle(db.prisma, { now: clock.now });
     adminA = await f.newAdmin();
     adminB = await f.newAdmin();
   });
@@ -817,7 +819,7 @@ describe.skipIf(!TEST_DATABASE_URL)("templates with a single administrator", () 
   beforeAll(async () => {
     db = await createTestDatabase();
     clock = testClock();
-    app = await testApp(db.prisma, { now: clock.now });
+    app = await testAppWithOracle(db.prisma, { now: clock.now });
   });
 
   afterAll(async () => {
@@ -868,7 +870,7 @@ describe.skipIf(!TEST_DATABASE_URL)("trust score and verified status", () => {
   beforeAll(async () => {
     db = await createTestDatabase();
     clock = testClock();
-    app = await testApp(db.prisma, { now: clock.now });
+    app = await testAppWithOracle(db.prisma, { now: clock.now });
     adminA = await f.newAdmin();
     adminB = await f.newAdmin();
   });
@@ -910,18 +912,23 @@ describe.skipIf(!TEST_DATABASE_URL)("trust score and verified status", () => {
     const owner = await f.person();
     const wbId = await f.asset(owner);
     const score = await trust(owner, wbId);
+    // Publishing requires a verified identity (KYC), which the score counts.
     expect(score).toMatchObject({
-      score: 7,
+      score: 15,
       verificationLevel: "UNVERIFIED",
       capsApplied: [],
       engineVersion: "1.4.0",
       weightsVersion: "weights-2026.5",
       disclaimer: expect.stringContaining("does not guarantee authenticity"),
     });
-    expect(codes(score.factors)).toEqual(["OWNER_WALLET_VERIFIED", "CUSTODY_CONTINUITY"]);
+    expect(codes(score.factors).sort()).toEqual([
+      "CUSTODY_CONTINUITY",
+      "OWNER_IDENTITY_VERIFIED",
+      "OWNER_WALLET_VERIFIED",
+    ]);
     expect(score.inputsHash).toMatch(/^[0-9a-f]{64}$/);
-    expect((await expectOk(call(owner, "GET", `/assets/${wbId}`))).trustScore).toBe(7);
-    expect((await passport(wbId)).trust.score).toBe(7);
+    expect((await expectOk(call(owner, "GET", `/assets/${wbId}`))).trustScore).toBe(15);
+    expect((await passport(wbId)).trust.score).toBe(15);
     expect(await errorCode(call(await f.person(), "GET", `/assets/${wbId}/trust`), 404)).toBe(
       "not_found",
     );
@@ -946,7 +953,7 @@ describe.skipIf(!TEST_DATABASE_URL)("trust score and verified status", () => {
     expect(asset).toMatchObject({
       status: "ACTIVE",
       verificationLevel: "AUTHENTICATED",
-      trustScore: 57,
+      trustScore: 60,
     });
 
     await expectOk(
@@ -954,7 +961,7 @@ describe.skipIf(!TEST_DATABASE_URL)("trust score and verified status", () => {
       201,
     );
     asset = await expectOk(call(owner, "GET", `/assets/${wbId}`));
-    expect(asset).toMatchObject({ status: "VERIFIED", trustScore: 65 });
+    expect(asset).toMatchObject({ status: "VERIFIED", trustScore: 73 });
     const score = await trust(owner, wbId);
     expect(codes(score.factors)).toEqual(
       expect.arrayContaining(["PROOF_AUTHENTICATION", "PROOF_CONDITION"]),
@@ -963,7 +970,7 @@ describe.skipIf(!TEST_DATABASE_URL)("trust score and verified status", () => {
     expect(p).toMatchObject({
       status: "VERIFIED",
       verificationLevel: "AUTHENTICATED",
-      trust: { score: 65 },
+      trust: { score: 73 },
     });
 
     const { id } = await db.prisma.asset.findUniqueOrThrow({ where: { wbId } });
@@ -1010,23 +1017,14 @@ describe.skipIf(!TEST_DATABASE_URL)("trust score and verified status", () => {
     );
     let asset = await expectOk(call(owner, "GET", `/assets/${wbId}`));
     expect(asset.status).toBe("ACTIVE");
-    expect(asset.trustScore).toBeLessThan(65);
+    expect(asset.trustScore).toBeLessThan(73);
     expect(codes((await trust(owner, wbId)).deductions)).toContain("SUSPENDED_SOURCE");
 
     await expectOk(
       call(adminA, "POST", `/review/verifiers/${v.verifierId}/status`, { status: "APPROVED" }),
     );
     asset = await expectOk(call(owner, "GET", `/assets/${wbId}`));
-    expect(asset).toMatchObject({ status: "VERIFIED", trustScore: 65 });
-  });
-
-  it("adds the owner's verified identity (KYC) to the score", async () => {
-    const owner = await f.person();
-    const wbId = await f.asset(owner);
-    await f.kyc(owner);
-    const score = await trust(owner, wbId);
-    expect(score.score).toBe(15);
-    expect(codes(score.factors)).toContain("OWNER_IDENTITY_VERIFIED");
+    expect(asset).toMatchObject({ status: "VERIFIED", trustScore: 73 });
   });
 
   it("caps lost assets and needs new attestations after recovery", async () => {
@@ -1297,7 +1295,7 @@ describe.skipIf(!TEST_DATABASE_URL)("trust score and verified status", () => {
       ).toMatchObject({ status: "REJECTED", attestation: { status: "ACTIVE" } });
       expect(await expectOk(call(owner, "GET", `/assets/${wbId}`))).toMatchObject({
         status: "VERIFIED",
-        trustScore: 65,
+        trustScore: 73,
       });
     });
 
@@ -1361,7 +1359,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("verifier evidenc
     db = await createTestDatabase();
     storage = await createTestStorage();
     clock = testClock();
-    app = await testApp(db.prisma, { storage, now: clock.now });
+    app = await testAppWithOracle(db.prisma, { storage, now: clock.now });
     adminA = await f.newAdmin();
     adminB = await f.newAdmin();
   });

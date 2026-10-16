@@ -111,7 +111,7 @@ ADR 0008 and 0004. Identity states are UNVERIFIED, PENDING, VERIFIED, REJECTED a
 
 ## 2 Register and publish an asset
 
-Publishing changes DRAFT to ACTIVE. Tokenization has a separate progress field.
+Every item is tokenized before its passport is published. Publishing first mints the token; DRAFT changes to ACTIVE only once the mint is confirmed.
 
 ```mermaid
 flowchart TD
@@ -121,14 +121,16 @@ Fingerprint --> Draft["Create DRAFT asset and WB ID"]
 Draft --> Log["Append AssetStatusEvent and ProvenanceEvent"]
 Log --> Ready{"Ready to publish?"}
 Ready -->|"No"| Missing["List missing requirements"]
-Ready -->|"Yes"| Publish["Publish and make ACTIVE"]
-Publish --> Identity{"Owner identity VERIFIED?"}
-Identity -->|"No"| Block["Tokenization blocked"]
-Identity -->|"Yes, owner requests"| Job["REGISTER_ASSET chain job"]
-Job --> Mint["Create record and frozen Metaplex Core asset"]
+Ready -->|"Yes, owner asks to tokenize and publish"| Identity{"Owner identity VERIFIED?"}
+Identity -->|"No"| Block["Publishing blocked"]
+Identity -->|"Yes"| Job["tokenizationStatus PENDING; REGISTER_ASSET chain job; draft frozen"]
+Job --> Mint["Create record and frozen Metaplex Core asset, registered as ACTIVE"]
+Mint --> Confirmed{"Confirmed?"}
+Confirmed -->|"Yes"| Publish["TOKENIZED; DRAFT to ACTIVE; passport public"]
+Confirmed -->|"No, after retries"| Failed["FAILED; stays a private DRAFT; owner can retry"]
 ```
 
-ADR 0009 and 0016. Tokenization progresses separately through NOT_TOKENIZED, PENDING, TOKENIZED or FAILED. The domain status TOKENIZED is a system-controlled lifecycle status; it is not the tokenization progress field. Every status change writes status and provenance events.
+ADR 0009 and 0016. Tokenization progresses through NOT_TOKENIZED, PENDING, TOKENIZED or FAILED. While PENDING, the owner cannot edit or discard the draft. The domain status TOKENIZED is a system-controlled lifecycle status; it is not the tokenization progress field. Every status change writes status and provenance events.
 
 ## 3a Evidence and guided capture
 
@@ -326,8 +328,8 @@ register_asset creates the WorthyBound record and mints a real frozen Metaplex C
 
 ```mermaid
 flowchart TD
-Request["Owner requests tokenization of published asset"] --> Identity{"Owner identity VERIFIED?"}
-Identity -->|"No"| Block["Block tokenization"]
+Request["Owner asks to tokenize and publish a draft"] --> Identity{"Owner identity VERIFIED?"}
+Identity -->|"No"| Block["Block tokenization and publishing"]
 Identity -->|"Yes"| Queue["tokenizationStatus PENDING; REGISTER_ASSET job"]
 Queue --> Oracle["Oracle signs registration"]
 Oracle --> WB["WorthyBound register_asset"]
@@ -337,7 +339,7 @@ Core --> Plugins["Config PDA controls update, permanent freeze and transfer perm
 Plugins --> Frozen["Token frozen with metadata URI to API"]
 Record --> Result["Worker records chain result"]
 Frozen --> Result
-Result --> State["tokenizationStatus TOKENIZED or FAILED"]
+Result --> State["TOKENIZED and passport published, or FAILED and still a private draft"]
 ```
 
 ADR 0009 and 0016. The token name is WorthyBound <WB ID> and its URI is GET /metadata/:wbId. This is a Metaplex Core asset, not an SPL token. The AssetRecord and Core token are separate accounts that refer to the same physical item. Token metadata uses the same standard authenticity sentence as the passport and site footer (7b Public passport). Revocation leaves the token frozen; it does not burn it. An owner-signed burn instruction is planned after the hackathon.
@@ -566,7 +568,7 @@ stateDiagram-v2
 
 ```
 
-TOKENIZED is system-controlled. Publishing moves DRAFT to ACTIVE; tokenizationStatus tracks chain progress separately. Lost, stolen, disputed and revoked states can be reached from most statuses under actor permissions. REVOKED is final. The built admin revocation action can revoke any asset that is not already revoked; the diagram above summarizes the existing lifecycle paths rather than enumerating every admin-revocation path. Drafts are discarded without deleting records; published revoked passports stay public with a warning.
+TOKENIZED is system-controlled. Publishing moves DRAFT to ACTIVE once the token is minted; tokenizationStatus tracks chain progress. Lost, stolen, disputed and revoked states can be reached from most statuses under actor permissions. REVOKED is final. The built admin revocation action can revoke any asset that is not already revoked; the diagram above summarizes the existing lifecycle paths rather than enumerating every admin-revocation path. Drafts are discarded without deleting records; published revoked passports stay public with a warning.
 
 ## Transfer states
 
@@ -950,7 +952,7 @@ Proposed launch prices in Canadian dollars, not confirmed costs. For Demo Day ev
 
 The demo is devnet only. In-person checks, remote checks and shipped-item SOL escrow are built on devnet.
 
-Register, publish and tokenize an item. Show its frozen Metaplex Core account, AssetRecord, metadata and passport. Demonstrate score/status anchoring, in-person checks, remote code/video checks, and controlled SOL transfer. Demonstrate escrow funding, shipment capture, delivery/receipt check, release and refund.
+Register, tokenize and publish an item. Show its frozen Metaplex Core account, AssetRecord, metadata and passport. Demonstrate score/status anchoring, in-person checks, remote code/video checks, and controlled SOL transfer. Demonstrate escrow funding, shipment capture, delivery/receipt check, release and refund.
 
 Proof commands: node packages/solana/scripts/devnet.mjs smoke <oracle keypair>; node packages/solana/scripts/devnet.mjs escrow <oracle keypair> release|refund. Rehearse the website with two identity-verified wallets (seller and buyer) holding devnet SOL, and a tokenized asset.
 
@@ -962,11 +964,11 @@ Proof commands: node packages/solana/scripts/devnet.mjs smoke <oracle keypair>; 
 
 ## Built API route inventory
 
-There are 96 built API routes.
+There are 95 built API routes.
 
 - **Auth:** `POST /auth/nonce`, `POST /auth/verify`, `GET /auth/me`, `POST /auth/logout`, `GET /health`
 - **Assets:**
-  - Create and view: `GET|POST /assets`, `GET|PATCH /assets/:wbId`, `POST /assets/:wbId/publish`, `POST /assets/:wbId/tokenize`, `GET /assets/:wbId/passport-label`
+  - Create and view: `GET|POST /assets`, `GET|PATCH /assets/:wbId`, `POST /assets/:wbId/publish` (tokenizes, then publishes), `GET /assets/:wbId/passport-label`
   - Updates and status: `POST /assets/:wbId/status`, `POST /assets/:wbId/condition`, `GET /assets/:wbId/trust`, `GET /assets/:wbId/automated-checks`, `GET /metadata/:wbId`
 - **Evidence:**
   - Upload: `POST /assets/:wbId/evidence/uploads`, `POST /evidence/uploads/:uploadId/complete`

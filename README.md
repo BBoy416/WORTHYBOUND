@@ -22,15 +22,15 @@ The live app at [worthybound.com](https://worthybound.com) runs on **Solana devn
 payments use devnet SOL, which has no value. You need a Solana wallet such as Phantom, set to
 devnet, and some devnet SOL from [faucet.solana.com](https://faucet.solana.com) for the buyer.
 
-**Identity verification.** Tokenizing needs an identity-verified owner, and buying needs an
-identity-verified buyer. No identity-verification (KYC) provider is integrated yet: a server
+**Identity verification.** Publishing needs an identity-verified owner, because every item is
+tokenized before its passport goes public, and buying needs an identity-verified buyer. No identity-verification (KYC) provider is integrated yet: a server
 operator records a wallet's status with `pnpm kyc:record` after the wallet has signed in once. For
 the complete demo, both the seller's and the buyer's wallets must be recorded as verified.
 
-To test tokenizing or buying, sign in once with each wallet, then email
+To test publishing or buying, sign in once with each wallet, then email
 [support@worthybound.com](mailto:support@worthybound.com) with the wallet addresses and we will
-record them as verified on devnet. Signing in, registering an item, adding evidence and publishing
-need no verification.
+record them as verified on devnet. Signing in, registering an item and adding evidence need no
+verification.
 
 ### Walkthrough: register, tokenize and sell in person
 
@@ -40,14 +40,16 @@ need no verification.
 3. **Add evidence:** live camera photos in a guided capture session (each session has a one-time
    code that must appear in a photo), plus receipts or certificates. Files are hashed and sealed,
    and owner evidence goes through automatic checks.
-4. **Publish** the item to create its public passport.
-5. **Tokenize** (verified owner only). A frozen Metaplex Core token is minted to the owner's
-   wallet, and the status and Trust Score are written to the item's WorthyBound record on Solana.
-6. **Inspect the passport** (`/passport/<WB ID>`): Trust Score, status, verification history and
-   links to the token, the WorthyBound record and each transaction on Solscan and Solana Explorer.
-   Private evidence and identity data are not shown. The owner's asset page also has a printable
-   2 × 2 inch **passport label** with a QR code, to cut out and keep with the item; scan it with a
-   phone camera or the site's **Scan** page to open the passport.
+4. **Tokenize and publish** (verified owner only). A frozen Metaplex Core token is minted to the
+   owner's wallet and the item's WorthyBound record is created on Solana. Once the transaction is
+   confirmed, the public passport is published and its status and Trust Score are written to the
+   record. Every public passport has a token.
+5. **Print the passport label** (optional). The owner's asset page has a printable 2 × 2 inch
+   label with a QR code, to cut out and keep with the item.
+6. **Inspect the passport** (`/passport/<WB ID>`, or scan the label with a phone camera or the
+   site's **Scan** page): Trust Score, status, verification history and links to the token, the
+   WorthyBound record and each transaction on Solscan and Solana Explorer. Private evidence and
+   identity data are not shown.
 7. **Sell in person with SOL.** On the buyer's phone, the buyer opens the passport and starts a
    check before buying: the seller signs a one-time code with the owner's wallet ("confirmed
    current owner"), and the buyer photographs the item, which is compared with the recorded
@@ -241,7 +243,7 @@ passport links (`/passport/:wbId`) share one domain. Page loads get the app; API
 `Accept: application/json` reach the API. Sign-in needs a Solana wallet extension such as Phantom.
 
 To tokenize assets, set `SOLANA_TRUST_ORACLE_KEYPAIR_PATH` to the oracle keypair (outside the
-repository). Without it the API starts, but `POST /assets/:wbId/tokenize` and `POST /transfers`
+repository). Without it the API starts, but `POST /assets/:wbId/publish` and `POST /transfers`
 answer 503.
 
 To enable AI checks of owner evidence and reports on verifier applications (ADR 0013), set

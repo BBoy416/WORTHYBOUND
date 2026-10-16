@@ -78,8 +78,8 @@ export function HomePage() {
             "Add live camera photos, receipts and certificates. Every file is hashed, sealed and checked automatically.",
           ],
           [
-            "Tokenize",
-            "Once your identity is verified, the asset is minted on Solana, frozen, and moves only through WorthyBound.",
+            "Tokenize and publish",
+            "Once your identity is verified, the asset is minted on Solana, frozen, and moves only through WorthyBound. Its passport then goes public.",
           ],
           [
             "Verify (optional)",

@@ -1,19 +1,6 @@
-import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import { getAddressEncoder } from "@solana/addresses";
-import {
-  buildEscrowPaymentTransaction,
-  buildTransferTransaction,
-  chainAddresses,
-  type ChainRecordState,
-  completeTransferTransaction,
-  loadKeypairSigner,
-  StaleChainUpdateError,
-  TransferFailedError,
-  type WorthyBoundOracle,
-} from "@worthybound/solana";
+import { chainAddresses } from "@worthybound/solana";
 import type { Storage } from "@worthybound/storage";
 import type { FastifyInstance } from "fastify";
 import sharp from "sharp";
@@ -22,8 +9,11 @@ import { closeNoncesJobKey, MAX_CHAIN_ATTEMPTS } from "../src/chain/sync.js";
 import { grantAdmin } from "../src/cli/admin-grant.js";
 import { recordKyc } from "../src/cli/kyc-record.js";
 import {
+  type Address,
   type Clock,
   createTestDatabase,
+  FakeOracle,
+  oracleSigner,
   createTestStorage,
   fakeCheckEngine,
   signIn,
@@ -34,297 +24,6 @@ import {
   TestWallet,
   type TestDatabase,
 } from "./helpers.js";
-
-type Address = ChainRecordState["owner"];
-type Signature = Awaited<ReturnType<WorthyBoundOracle["updateStatus"]>>;
-
-type Call =
-  | { kind: "register"; wbId: string; owner: string; uri: string; status: string; seq: bigint }
-  | { kind: "status"; wbId: string; status: string; seq: bigint }
-  | { kind: "trust"; wbId: string; score: number; level: string; seq: bigint }
-  | {
-      kind: "prepare";
-      wbId: string;
-      seller: string;
-      buyer: string;
-      status: string;
-      seq: bigint;
-      price: bigint;
-    }
-  | { kind: "transfer"; wbId: string; buyer: string }
-  | { kind: "payment" | "payment_reset"; buyer: string; price: bigint }
-  | { kind: "refund"; buyer: string; price: bigint }
-  | { kind: "close"; accounts: string[] };
-
-type Signer = Awaited<ReturnType<typeof loadKeypairSigner>>;
-
-/** In-memory stand-in for the program: keeps records and rejects stale sequence numbers. */
-class FakeOracle implements WorthyBoundOracle {
-  readonly records = new Map<string, ChainRecordState & { status: string; score?: number }>();
-  readonly calls: Call[] = [];
-  /** Prepared transfers by transaction, to apply when sent. */
-  readonly #prepared = new Map<
-    string,
-    {
-      wbId: string;
-      seller: string;
-      buyer: string;
-      status: string;
-      seq: bigint;
-      nonceAccount: string;
-      escrow: boolean;
-      price: bigint;
-    }
-  >();
-  /** Prepared payments into escrow by transaction. */
-  readonly #payments = new Map<string, { buyer: string; escrow: string; price: bigint }>();
-  /** Escrow nonce accounts whose nonce moved on with a refund; their transfer cannot run. */
-  readonly #advanced = new Set<string>();
-  failures = 0;
-  /** Makes the next sent payment land and fail, as when the buyer spent the SOL meanwhile. */
-  failNextPayment = false;
-  /**
-   * Payments are sent but never seen to confirm, as during an outage; they stay valid, and land
-   * with `landLostPayments`, until their payment nonce is advanced.
-   */
-  losePayments = false;
-  readonly #lost = new Set<string>();
-  /** Lamports by wallet; wallets not listed hold 10 SOL. */
-  readonly balances = new Map<string, bigint>();
-  /** Lamports held in escrow, by nonce account. */
-  readonly escrows = new Map<string, bigint>();
-  /** Nonce accounts created and not yet closed. */
-  readonly nonces = new Set<string>();
-  #n = 0;
-
-  constructor(readonly signer: Signer) {}
-
-  get oracleAddress() {
-    return this.signer.address;
-  }
-
-  #sign(): Signature {
-    this.#n += 1;
-    return `sig-${this.#n}-${randomUUID()}` as Signature;
-  }
-
-  #maybeFail() {
-    if (this.failures > 0) {
-      this.failures -= 1;
-      throw new Error("RPC unavailable");
-    }
-  }
-
-  async fetchRecord(wbId: string) {
-    return this.records.get(wbId) ?? null;
-  }
-
-  async registerAsset(input: Parameters<WorthyBoundOracle["registerAsset"]>[0]) {
-    this.#maybeFail();
-    this.calls.push({ kind: "register", ...input, seq: input.statusSeq });
-    this.records.set(input.wbId, {
-      owner: input.owner as Address,
-      status: input.status,
-      statusSeq: input.statusSeq,
-      trustSeq: 0n,
-    });
-    return this.#sign();
-  }
-
-  async updateStatus(input: Parameters<WorthyBoundOracle["updateStatus"]>[0]) {
-    this.#maybeFail();
-    const record = this.records.get(input.wbId);
-    if (!record) throw new Error("AccountNotInitialized");
-    if (input.statusSeq <= record.statusSeq) throw new StaleChainUpdateError();
-    this.calls.push({ kind: "status", ...input, seq: input.statusSeq });
-    Object.assign(record, { status: input.status, statusSeq: input.statusSeq });
-    return this.#sign();
-  }
-
-  async commitTrustScore(input: Parameters<WorthyBoundOracle["commitTrustScore"]>[0]) {
-    this.#maybeFail();
-    const record = this.records.get(input.wbId);
-    if (!record) throw new Error("AccountNotInitialized");
-    if (input.trustSeq <= record.trustSeq) throw new StaleChainUpdateError();
-    this.calls.push({
-      kind: "trust",
-      wbId: input.wbId,
-      score: input.score,
-      level: input.level,
-      seq: input.trustSeq,
-    });
-    Object.assign(record, { score: input.score, trustSeq: input.trustSeq });
-    return this.#sign();
-  }
-
-  async prepareTransfer(input: Parameters<WorthyBoundOracle["prepareTransfer"]>[0]) {
-    this.#maybeFail();
-    this.calls.push({
-      kind: "prepare",
-      wbId: input.wbId,
-      seller: input.seller,
-      buyer: input.buyer,
-      status: input.statusAfter,
-      seq: input.statusSeq,
-      price: input.priceLamports,
-    });
-    const nonceAccount = new TestWallet().address as Address;
-    const transaction = await buildTransferTransaction({
-      ...input,
-      oracle: this.oracleAddress,
-      seller: input.seller as Address,
-      buyer: input.buyer as Address,
-      nonceAccount,
-      nonce: new TestWallet().address,
-    });
-    this.#prepared.set(transaction, {
-      ...input,
-      status: input.statusAfter,
-      seq: input.statusSeq,
-      nonceAccount,
-      escrow: input.escrow === true,
-      price: input.priceLamports,
-    });
-    const paymentNonceAccount =
-      input.escrow && input.priceLamports > 0n ? new TestWallet().address : null;
-    this.nonces.add(nonceAccount);
-    if (paymentNonceAccount) this.nonces.add(paymentNonceAccount);
-    return { transaction, nonceAccount, paymentNonceAccount };
-  }
-
-  async prepareEscrowPayment(input: Parameters<WorthyBoundOracle["prepareEscrowPayment"]>[0]) {
-    this.#maybeFail();
-    const transaction = buildEscrowPaymentTransaction({
-      ...input,
-      oracle: this.oracleAddress,
-      buyer: input.buyer as Address,
-      escrowAccount: input.escrowAccount as Address,
-      paymentNonceAccount: input.paymentNonceAccount as Address,
-      nonce: new TestWallet().address,
-    });
-    this.#payments.set(transaction, {
-      buyer: input.buyer,
-      escrow: input.escrowAccount,
-      price: input.priceLamports,
-    });
-    return transaction;
-  }
-
-  /** Lands the payments that were sent and are still valid. */
-  landLostPayments() {
-    for (const transaction of this.#lost) {
-      const payment = this.#payments.get(transaction);
-      if (!payment) continue;
-      this.#payments.delete(transaction);
-      this.#credit(payment.buyer, -payment.price);
-      this.escrows.set(payment.escrow, (this.escrows.get(payment.escrow) ?? 0n) + payment.price);
-      this.calls.push({ kind: "payment", buyer: payment.buyer, price: payment.price });
-    }
-    this.#lost.clear();
-  }
-
-  async resetEscrowPayment(
-    input: Parameters<WorthyBoundOracle["resetEscrowPayment"]>[0],
-  ): ReturnType<WorthyBoundOracle["resetEscrowPayment"]> {
-    this.#maybeFail();
-    // Advancing the payment nonce invalidates every payment prepared for this escrow.
-    for (const [transaction, payment] of this.#payments) {
-      if (payment.escrow === input.escrowAccount) this.#payments.delete(transaction);
-    }
-    this.calls.push({ kind: "payment_reset", buyer: input.buyer, price: input.priceLamports });
-    if ((this.escrows.get(input.escrowAccount) ?? 0n) >= input.priceLamports) return { held: true };
-    return { held: false, transaction: await this.prepareEscrowPayment(input) };
-  }
-
-  async refundEscrow(input: Parameters<WorthyBoundOracle["refundEscrow"]>[0]) {
-    this.#maybeFail();
-    const held = this.escrows.get(input.escrowAccount) ?? 0n;
-    if (held < input.priceLamports) return null;
-    this.escrows.set(input.escrowAccount, held - input.priceLamports);
-    this.#credit(input.buyer, input.priceLamports);
-    this.#advanced.add(input.escrowAccount);
-    this.calls.push({ kind: "refund", buyer: input.buyer, price: input.priceLamports });
-    return this.#sign();
-  }
-
-  async closeNonceAccounts(accounts: string[]) {
-    this.#maybeFail();
-    const closing = accounts.filter(
-      (a) => this.nonces.has(a) && (this.escrows.get(a) ?? 0n) === 0n,
-    );
-    if (closing.length === 0) return null;
-    for (const a of closing) this.nonces.delete(a);
-    this.calls.push({ kind: "close", accounts: closing });
-    return this.#sign();
-  }
-
-  #credit(wallet: string, lamports: bigint) {
-    this.balances.set(wallet, (this.balances.get(wallet) ?? 10_000_000_000n) + lamports);
-  }
-
-  async getBalance(address: string) {
-    this.#maybeFail();
-    return this.balances.get(address) ?? 10_000_000_000n;
-  }
-
-  async sendTransfer(input: Parameters<WorthyBoundOracle["sendTransfer"]>[0]) {
-    this.#maybeFail();
-    // Throws unless the parties signed; the oracle signs last.
-    await completeTransferTransaction(input.transaction, input.signatures, this.signer);
-    const payment = this.#payments.get(input.transaction);
-    if (payment && this.losePayments) {
-      this.#lost.add(input.transaction);
-      throw new Error("transaction confirmation timed out");
-    }
-    if (payment) {
-      this.#payments.delete(input.transaction);
-      if (this.failNextPayment) {
-        this.failNextPayment = false;
-        throw new TransferFailedError("insufficient lamports");
-      }
-      this.#credit(payment.buyer, -payment.price);
-      this.escrows.set(payment.escrow, (this.escrows.get(payment.escrow) ?? 0n) + payment.price);
-      this.calls.push({ kind: "payment", buyer: payment.buyer, price: payment.price });
-      return this.#sign();
-    }
-    const prepared = this.#prepared.get(input.transaction);
-    const record = prepared && this.records.get(prepared.wbId);
-    if (!prepared || !record) throw new Error("AccountNotInitialized");
-    if (record.status !== "TRANSFER_PENDING") throw new Error("NotTransferPending");
-    if (record.owner !== prepared.seller) throw new Error("NotOwner");
-    if (prepared.seq <= record.statusSeq) throw new Error("StaleUpdate");
-    if (prepared.escrow) {
-      const held = this.escrows.get(prepared.nonceAccount) ?? 0n;
-      if (this.#advanced.has(prepared.nonceAccount) || held < prepared.price) {
-        throw new TransferFailedError("nonce has advanced");
-      }
-      this.escrows.set(prepared.nonceAccount, held - prepared.price);
-      this.#credit(prepared.seller, prepared.price);
-    }
-    this.calls.push({ kind: "transfer", wbId: prepared.wbId, buyer: prepared.buyer });
-    Object.assign(record, {
-      owner: prepared.buyer as Address,
-      status: prepared.status,
-      statusSeq: prepared.seq,
-    });
-    return this.#sign();
-  }
-}
-
-/** A fresh oracle key, loaded the way the server loads its keypair file. */
-async function oracleSigner(): Promise<Signer> {
-  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-  const secret = Buffer.from(privateKey.export({ format: "jwk" }).d as string, "base64url");
-  const pub = Buffer.from(publicKey.export({ format: "jwk" }).x as string, "base64url");
-  const dir = await mkdtemp(join(tmpdir(), "wb-oracle-"));
-  try {
-    const path = join(dir, "oracle.json");
-    await writeFile(path, JSON.stringify([...secret, ...pub]));
-    return await loadKeypairSigner(path);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-}
 
 /** Signs a base64 wire transaction with the wallet, as a browser wallet does. */
 function walletSign(wallet: TestWallet, transaction: string): string {
@@ -420,17 +119,15 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
     return res.json<{ wbId: string }>().wbId;
   };
 
-  const published = async (who: Owner) => {
-    const wbId = await draft(who);
-    expect((await call(who, "POST", `/assets/${wbId}/publish`)).statusCode).toBe(200);
-    return wbId;
-  };
-
+  /** Tokenized and published: the token is minted, then the passport is public. */
   const tokenized = async (who: Owner) => {
-    const wbId = await published(who);
-    expect((await call(who, "POST", `/assets/${wbId}/tokenize`)).statusCode).toBe(202);
+    const wbId = await draft(who);
+    expect((await call(who, "POST", `/assets/${wbId}/publish`)).statusCode).toBe(202);
     await app.chainSync?.runOnce();
-    expect((await assetRow(wbId)).tokenizationStatus).toBe("TOKENIZED");
+    expect(await assetRow(wbId)).toMatchObject({
+      status: "ACTIVE",
+      tokenizationStatus: "TOKENIZED",
+    });
     oracle.calls.length = 0;
     return wbId;
   };
@@ -446,71 +143,63 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
   const statusSeq = async (wbId: string) =>
     BigInt(await db.prisma.assetStatusEvent.count({ where: { asset: { wbId } } }));
 
-  describe("POST /assets/:wbId/tokenize", () => {
+  describe("POST /assets/:wbId/publish", () => {
     it("is unavailable without an oracle key", async () => {
       const alice = await owner();
-      const wbId = await published(alice);
+      const wbId = await draft(alice);
       const res = await offline.inject({
         method: "POST",
-        url: `/assets/${wbId}/tokenize`,
+        url: `/assets/${wbId}/publish`,
         cookies: { wb_session: alice.token },
       });
       expect(res.statusCode).toBe(503);
       expect(res.json().error.code).toBe("tokenization_unavailable");
+      expect(await jobs(wbId)).toEqual([]);
     });
 
-    it("needs a published asset, a verified identity and the owner", async () => {
+    it("needs an unpublished draft, a verified identity and the owner", async () => {
       const alice = await owner();
-      const unpublished = await draft(alice);
-      const res = await call(alice, "POST", `/assets/${unpublished}/tokenize`);
+      const done = await tokenized(alice);
+      const res = await call(alice, "POST", `/assets/${done}/publish`);
       expect(res.statusCode).toBe(409);
-      expect(res.json().error.code).toBe("not_tokenizable");
+      expect(res.json().error.code).toBe("invalid_transition");
 
       const bob = await owner({ kyc: false });
-      const bobs = await published(bob);
-      const noKyc = await call(bob, "POST", `/assets/${bobs}/tokenize`);
+      const bobs = await draft(bob);
+      const noKyc = await call(bob, "POST", `/assets/${bobs}/publish`);
       expect(noKyc.statusCode).toBe(403);
       expect(noKyc.json().error.code).toBe("identity_verification_required");
 
-      expect((await call(alice, "POST", `/assets/${bobs}/tokenize`)).statusCode).toBe(404);
-      expect((await call(null, "POST", `/assets/${bobs}/tokenize`)).statusCode).toBe(401);
+      expect((await call(alice, "POST", `/assets/${bobs}/publish`)).statusCode).toBe(404);
+      expect((await call(null, "POST", `/assets/${bobs}/publish`)).statusCode).toBe(401);
       expect(await jobs(bobs)).toEqual([]);
     });
 
-    it("refuses lost or stolen assets", async () => {
+    it("mints a frozen token to the owner's wallet, then publishes and mirrors the Trust Score", async () => {
       const alice = await owner();
-      const wbId = await published(alice);
-      await call(alice, "POST", `/assets/${wbId}/status`, { toStatus: "REPORTED_STOLEN" });
-      const res = await call(alice, "POST", `/assets/${wbId}/tokenize`);
-      expect(res.statusCode).toBe(409);
-      expect(res.json().error.code).toBe("not_tokenizable");
-    });
-
-    it("mints a frozen token to the owner's wallet and mirrors status and Trust Score", async () => {
-      const alice = await owner();
-      const wbId = await published(alice);
+      const wbId = await draft(alice);
       const { record, coreAsset } = await chainAddresses(wbId);
 
-      const res = await call(alice, "POST", `/assets/${wbId}/tokenize`);
+      const res = await call(alice, "POST", `/assets/${wbId}/publish`);
       expect(res.statusCode, res.body).toBe(202);
       expect(res.json()).toMatchObject({
+        status: "DRAFT",
+        publishedAt: null,
         tokenizationStatus: "PENDING",
         chainAssetAddress: coreAsset,
         chainRecordAddress: record,
       });
       // Repeating the request while pending changes nothing.
-      expect((await call(alice, "POST", `/assets/${wbId}/tokenize`)).statusCode).toBe(202);
-      const pending = (await call(null, "GET", `/passport/${wbId}`)).json().passport;
-      expect(pending.tokenization).toEqual({
-        status: "PENDING",
-        chainAssetAddress: null,
-        chainRecordAddress: null,
-      });
+      expect((await call(alice, "POST", `/assets/${wbId}/publish`)).statusCode).toBe(202);
+      // No passport until the token exists.
+      expect((await call(null, "GET", `/passport/${wbId}`)).statusCode).toBe(404);
 
       await app.chainSync?.runOnce();
 
       const asset = await assetRow(wbId);
-      expect(asset.tokenizationStatus).toBe("TOKENIZED");
+      expect(asset).toMatchObject({ status: "ACTIVE", tokenizationStatus: "TOKENIZED" });
+      expect(asset.publishedAt).not.toBeNull();
+      // Registered as ACTIVE with the sequence number of the status event that publishes it.
       expect(oracle.calls).toEqual([
         {
           kind: "register",
@@ -523,7 +212,7 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
         },
         expect.objectContaining({ kind: "trust", wbId, score: asset.currentTrustScore, seq: 1n }),
       ]);
-      // The status job queued after registration was already covered by it.
+      // The status job queued on publication was already covered by the registration.
       expect((await jobs(wbId)).map((j) => [j.kind, j.status])).toEqual([
         ["REGISTER_ASSET", "CONFIRMED"],
         ["UPDATE_ASSET_STATUS", "SUPERSEDED"],
@@ -531,6 +220,7 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
       ]);
 
       const passport = (await call(null, "GET", `/passport/${wbId}`)).json().passport;
+      expect(passport).toMatchObject({ status: "ACTIVE" });
       expect(passport.tokenization).toEqual({
         status: "TOKENIZED",
         chainAssetAddress: coreAsset,
@@ -540,26 +230,25 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
         "COMMIT_TRUST_SCORE",
         "REGISTER_ASSET",
       ]);
-      const provenance = await db.prisma.provenanceEvent.findFirstOrThrow({
-        where: { assetId: asset.id, type: "TOKENIZED" },
+      const provenance = await db.prisma.provenanceEvent.findMany({
+        where: { assetId: asset.id },
+        orderBy: { sequence: "asc" },
       });
-      expect(provenance.payload).toMatchObject({ cluster: "devnet", record, coreAsset });
-
-      const again = await call(alice, "POST", `/assets/${wbId}/tokenize`);
-      expect(again.statusCode).toBe(409);
-      expect(again.json().error.code).toBe("already_tokenized");
+      expect(provenance.map((e) => e.type)).toEqual(["REGISTERED", "TOKENIZED", "STATUS_CHANGED"]);
+      expect(provenance[1]?.payload).toMatchObject({ cluster: "devnet", record, coreAsset });
+      expect(
+        await db.prisma.auditLog.count({ where: { action: "asset.published", targetId: wbId } }),
+      ).toBe(1);
     });
 
     it("starts registration right after the request", async () => {
       const alice = await owner();
-      const wbId = await published(alice);
+      const wbId = await draft(alice);
       const sync = app.chainSync!;
       sync.kick = kick;
       try {
-        expect((await call(alice, "POST", `/assets/${wbId}/tokenize`)).statusCode).toBe(202);
-        await vi.waitFor(async () =>
-          expect((await assetRow(wbId)).tokenizationStatus).toBe("TOKENIZED"),
-        );
+        expect((await call(alice, "POST", `/assets/${wbId}/publish`)).statusCode).toBe(202);
+        await vi.waitFor(async () => expect((await assetRow(wbId)).status).toBe("ACTIVE"));
       } finally {
         sync.kick = () => {};
       }
@@ -587,39 +276,37 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
       expect(oracle.calls).toEqual([]);
     });
 
-    it("queues changes made while pending and sends them after registration", async () => {
+    it("mints nothing for a draft an administrator revoked while pending", async () => {
       const alice = await owner();
-      const wbId = await published(alice);
-      await call(alice, "POST", `/assets/${wbId}/tokenize`);
-      await call(alice, "POST", `/assets/${wbId}/status`, { toStatus: "REPORTED_LOST" });
+      const admin = await owner();
+      await grantAdmin(db.prisma, admin.wallet.address);
+      const wbId = await draft(alice);
+      await call(alice, "POST", `/assets/${wbId}/publish`);
+      const revoked = await call(admin, "POST", `/admin/assets/${wbId}/revoke`, {
+        reason: "Duplicate registration",
+      });
+      expect(revoked.statusCode, revoked.body).toBe(200);
 
       await app.chainSync?.runOnce();
-      expect((await assetRow(wbId)).tokenizationStatus).toBe("FAILED");
       expect(oracle.calls).toEqual([]);
+      expect(await assetRow(wbId)).toMatchObject({
+        status: "REVOKED",
+        publishedAt: null,
+        tokenizationStatus: "FAILED",
+      });
       const [register] = await jobs(wbId);
       expect(register).toMatchObject({
         kind: "REGISTER_ASSET",
         status: "FAILED",
         attempts: MAX_CHAIN_ATTEMPTS,
-        lastError: "asset_not_tokenizable: status REPORTED_LOST",
+        lastError: "asset_not_tokenizable: status REVOKED",
       });
-
-      // Once the item is found again it can be tokenized; the latest state is registered.
-      await call(alice, "POST", `/assets/${wbId}/status`, { toStatus: "REVERIFICATION_REQUIRED" });
-      expect((await call(alice, "POST", `/assets/${wbId}/tokenize`)).statusCode).toBe(202);
-      await app.chainSync?.runOnce();
-      expect((await assetRow(wbId)).tokenizationStatus).toBe("TOKENIZED");
-      expect(oracle.records.get(wbId)).toMatchObject({
-        status: "REVERIFICATION_REQUIRED",
-        statusSeq: await statusSeq(wbId),
-      });
-      expect(oracle.calls.filter((c) => c.kind === "status")).toEqual([]);
     });
 
     it("retries failed jobs with a delay and gives up after the last attempt", async () => {
       const alice = await owner();
-      const wbId = await published(alice);
-      await call(alice, "POST", `/assets/${wbId}/tokenize`);
+      const wbId = await draft(alice);
+      await call(alice, "POST", `/assets/${wbId}/publish`);
 
       oracle.failures = 1;
       await app.chainSync?.runOnce();
@@ -628,7 +315,10 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
         attempts: 1,
         lastError: "RPC unavailable",
       });
-      expect((await assetRow(wbId)).tokenizationStatus).toBe("PENDING");
+      expect(await assetRow(wbId)).toMatchObject({
+        status: "DRAFT",
+        tokenizationStatus: "PENDING",
+      });
 
       // Not due yet.
       await app.chainSync?.runOnce();
@@ -636,15 +326,18 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
 
       clock.advance(10 * 60_000);
       await app.chainSync?.runOnce();
-      expect((await assetRow(wbId)).tokenizationStatus).toBe("TOKENIZED");
+      expect(await assetRow(wbId)).toMatchObject({
+        status: "ACTIVE",
+        tokenizationStatus: "TOKENIZED",
+      });
       expect((await jobs(wbId))[0]).toMatchObject({
         status: "CONFIRMED",
         attempts: 2,
         lastError: null,
       });
 
-      const bobWbId = await published(alice);
-      await call(alice, "POST", `/assets/${bobWbId}/tokenize`);
+      const bobWbId = await draft(alice);
+      await call(alice, "POST", `/assets/${bobWbId}/publish`);
       oracle.failures = MAX_CHAIN_ATTEMPTS;
       for (let i = 0; i < MAX_CHAIN_ATTEMPTS; i++) {
         await app.chainSync?.runOnce();
@@ -654,12 +347,19 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
         status: "FAILED",
         attempts: MAX_CHAIN_ATTEMPTS,
       });
-      expect((await assetRow(bobWbId)).tokenizationStatus).toBe("FAILED");
-
-      // The owner can try again.
-      expect((await call(alice, "POST", `/assets/${bobWbId}/tokenize`)).statusCode).toBe(202);
+      // The passport stays private, and the owner can change the draft again or retry.
+      expect(await assetRow(bobWbId)).toMatchObject({
+        status: "DRAFT",
+        publishedAt: null,
+        tokenizationStatus: "FAILED",
+      });
+      expect((await call(null, "GET", `/passport/${bobWbId}`)).statusCode).toBe(404);
+      expect((await call(alice, "POST", `/assets/${bobWbId}/publish`)).statusCode).toBe(202);
       await app.chainSync?.runOnce();
-      expect((await assetRow(bobWbId)).tokenizationStatus).toBe("TOKENIZED");
+      expect(await assetRow(bobWbId)).toMatchObject({
+        status: "ACTIVE",
+        tokenizationStatus: "TOKENIZED",
+      });
     });
   });
 
@@ -850,14 +550,17 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
       ).rejects.toThrow(/transfer price cannot change/);
     });
 
-    it("needs a tokenized asset and a signed-in recipient with a verified identity", async () => {
+    it("needs a transferable asset and a signed-in recipient with a verified identity", async () => {
       const alice = await owner();
       const bob = await owner();
       const unverified = await owner({ kyc: false });
 
-      const notTokenized = await start(alice, await published(alice), bob, false);
-      expect(notTokenized.statusCode).toBe(409);
-      expect(notTokenized.json().error.code).toBe("not_transferable");
+      expect((await start(alice, await draft(alice), bob, false)).statusCode).toBe(404);
+      const lost = await tokenized(alice);
+      await call(alice, "POST", `/assets/${lost}/status`, { toStatus: "REPORTED_LOST" });
+      const notTransferable = await start(alice, lost, bob, false);
+      expect(notTransferable.statusCode).toBe(409);
+      expect(notTransferable.json().error.code).toBe("not_transferable");
 
       const wbId = await tokenized(alice);
       const stranger = await call(alice, "POST", "/transfers", {

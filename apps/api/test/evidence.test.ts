@@ -17,6 +17,7 @@ import {
   TEST_DATABASE_URL,
   TEST_STORAGE_AVAILABLE,
   testApp,
+  testAppWithOracle,
   testClock,
   TestWallet,
   type TestDatabase,
@@ -110,7 +111,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
     db = await createTestDatabase();
     storage = await createTestStorage();
     clock = testClock();
-    app = await testApp(db.prisma, { storage, now: clock.now, checkEngine: engine });
+    app = await testAppWithOracle(db.prisma, { storage, now: clock.now, checkEngine: engine });
   });
 
   afterAll(async () => {
@@ -132,14 +133,31 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       cookies: who ? { wb_session: who.token } : {},
     });
 
-  const asset = async (who: Owner, publish = false) => {
+  /** Tokenizes and publishes, as an owner with a verified identity. */
+  const publish = async (who: Owner, wbId: string) => {
+    await recordKyc(
+      db.prisma,
+      {
+        walletAddress: who.wallet.address,
+        provider: "test-kyc",
+        reference: randomUUID(),
+        status: "VERIFIED",
+      },
+      clock.now,
+    );
+    const res = await call(who, "POST", `/assets/${wbId}/publish`);
+    expect(res.statusCode, res.body).toBe(202);
+    await app.chainSync!.runOnce();
+  };
+
+  const asset = async (who: Owner, andPublish = false) => {
     const res = await call(who, "POST", "/assets", {
       category: "LUXURY_WATCH",
       brand: "Rolex",
       model: "Submariner",
     });
     const { wbId } = res.json<{ wbId: string }>();
-    if (publish) await call(who, "POST", `/assets/${wbId}/publish`);
+    if (andPublish) await publish(who, wbId);
     return wbId;
   };
 
@@ -679,7 +697,7 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
 
       // Not visible while the asset is a draft.
       expect((await call(null, "GET", evidence.publicPath as string)).statusCode).toBe(404);
-      await call(alice, "POST", `/assets/${wbId}/publish`);
+      await publish(alice, wbId);
 
       const passport = (await call(null, "GET", `/passport/${wbId}`)).json().passport;
       expect(passport.publicEvidence).toEqual([
