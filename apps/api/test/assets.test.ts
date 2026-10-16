@@ -5,6 +5,7 @@ import { passportLabelSvg } from "@worthybound/shared";
 import { grantAdmin } from "../src/cli/admin-grant.js";
 import { recordKyc } from "../src/cli/kyc-record.js";
 import {
+  addProfilePhoto,
   createTestDatabase,
   signIn,
   TEST_DATABASE_URL,
@@ -84,6 +85,7 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
 
   const published = async (who: Owner, body: object = {}) => {
     const { wbId } = await registered(who, body);
+    await addProfilePhoto(db.prisma, wbId);
     const res = await call(who, "POST", `/assets/${wbId}/publish`);
     expect(res.statusCode, res.body).toBe(202);
     await app.chainSync!.runOnce();
@@ -122,7 +124,8 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
         verificationLevel: "UNVERIFIED",
         publishedAt: null,
         passportUrl: null,
-        missingForPublish: [],
+        profileEvidenceId: null,
+        missingForPublish: ["a profile photo"],
       });
       expect(body.wbId).toMatch(/^WB-[0-9A-F]{8}$/);
       expect(body).not.toHaveProperty("serialFingerprint");
@@ -418,24 +421,49 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
   });
 
   describe("publishing", () => {
-    it("requires brand and model", async () => {
+    it("requires brand, model and a profile photo", async () => {
       const alice = await owner();
       const { wbId } = await registered(alice, { brand: undefined, model: undefined });
       expect((await call(alice, "GET", `/assets/${wbId}`)).json().missingForPublish).toEqual([
         "brand",
         "model",
+        "a profile photo",
       ]);
       const res = await call(alice, "POST", `/assets/${wbId}/publish`);
       expect(res.statusCode).toBe(409);
       expect(res.json().error).toEqual({
         code: "publish_requirements_missing",
-        message: "Add brand and model before publishing",
+        message: "Add brand, model and a profile photo before publishing",
       });
+    });
+
+    it("refuses a profile photo that was rejected", async () => {
+      const alice = await owner();
+      const { wbId } = await registered(alice);
+      const photo = await addProfilePhoto(db.prisma, wbId);
+      const reviewer = await db.prisma.user.create({
+        data: { walletAddress: new TestWallet().address },
+      });
+      await grantAdmin(db.prisma, reviewer.walletAddress);
+      await db.prisma.evidence.update({
+        where: { id: photo },
+        data: {
+          reviewStatus: "REJECTED",
+          reviewedById: reviewer.id,
+          reviewedAt: new Date(),
+          reviewReason: "Not this item",
+        },
+      });
+      const res = await call(alice, "POST", `/assets/${wbId}/publish`);
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error.code).toBe("profile_photo_unavailable");
+      expect((await assetRow(wbId)).tokenizationStatus).toBe("NOT_TOKENIZED");
     });
 
     it("needs a verified identity", async () => {
       const bob = await owner({ kyc: false });
       const { wbId } = await registered(bob);
+      await addProfilePhoto(db.prisma, wbId);
       const res = await call(bob, "POST", `/assets/${wbId}/publish`);
       expect(res.statusCode).toBe(403);
       expect(res.json().error.code).toBe("identity_verification_required");
@@ -445,6 +473,7 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
     it("tokenizes first and publishes the passport once the token is confirmed", async () => {
       const alice = await owner();
       const { wbId } = await registered(alice);
+      await addProfilePhoto(db.prisma, wbId);
       const res = await call(alice, "POST", `/assets/${wbId}/publish`);
       expect(res.statusCode, res.body).toBe(202);
       expect(res.json()).toMatchObject({
@@ -671,6 +700,7 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
         publicDescription: "Stainless steel diver's watch",
         attributes: { purchasePrice: "PRIVATE-PRICE" },
       });
+      const { profileEvidenceId } = await assetRow(wbId);
       const res = await call(null, "GET", `/passport/${wbId.toLowerCase()}`);
       expect(res.statusCode).toBe(200);
       const { passport, url } = res.json();
@@ -682,16 +712,22 @@ describe.skipIf(!TEST_DATABASE_URL)("assets and passports", () => {
         model: "Submariner",
         description: "Stainless steel diver's watch",
         status: "ACTIVE",
-        verificationLevel: "UNVERIFIED",
+        // The profile photo is the first evidence.
+        verificationLevel: "SELF_DOCUMENTED",
         trust: {
-          score: 15,
+          score: 18,
           engineVersion: "1.4.0",
           weightsVersion: "weights-2026.5",
           disclaimer: expect.stringContaining("does not guarantee authenticity"),
         },
         custody: { transferCount: 0 },
         attestations: [],
-        publicEvidence: [],
+        publicEvidence: [
+          expect.objectContaining({
+            evidenceId: profileEvidenceId,
+            path: `/passport/${wbId}/evidence/${profileEvidenceId}`,
+          }),
+        ],
       });
       expect(passport.provenance.map((p: { type: string }) => p.type)).toEqual([
         "REGISTERED",

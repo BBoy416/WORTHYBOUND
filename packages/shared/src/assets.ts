@@ -7,11 +7,16 @@ export type AssetIdentityField = (typeof ASSET_IDENTITY_FIELDS)[number];
 /** Fields that must be filled in before a passport can be published. */
 export const PUBLISH_REQUIRED_FIELDS = ["brand", "model"] as const;
 
+/** What is still needed before a passport can be published: fields, then a profile photo. */
 export function missingPublishFields(asset: {
   brand: string | null;
   model: string | null;
-}): (typeof PUBLISH_REQUIRED_FIELDS)[number][] {
-  return PUBLISH_REQUIRED_FIELDS.filter((field) => !asset[field]?.trim());
+  profileEvidenceId: string | null;
+}): ((typeof PUBLISH_REQUIRED_FIELDS)[number] | "a profile photo")[] {
+  return [
+    ...PUBLISH_REQUIRED_FIELDS.filter((field) => !asset[field]?.trim()),
+    ...(asset.profileEvidenceId ? [] : (["a profile photo"] as const)),
+  ];
 }
 
 /** Statuses from which the owner may publish (DRAFT, or TOKENIZED before publication). */

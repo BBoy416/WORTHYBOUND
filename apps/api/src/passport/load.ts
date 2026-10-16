@@ -52,6 +52,7 @@ export async function loadPassportSource(
       verificationLevel: true,
       condition: true,
       publishedAt: true,
+      profileEvidenceId: true,
     },
   });
   if (!asset?.publishedAt) return null;

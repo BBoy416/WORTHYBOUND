@@ -1,4 +1,4 @@
-import { ASSET_CATEGORIES } from "@worthybound/shared";
+import { ASSET_CATEGORIES, ITEM_CONDITIONS } from "@worthybound/shared";
 import { useEffect, useState, type FormEvent } from "react";
 import { get, patch, post } from "../api.js";
 import { GuidedCapture } from "../components/Capture.js";
@@ -30,6 +30,10 @@ import type {
 } from "../types.js";
 
 const PUBLISHED = ["ACTIVE", "VERIFIED", "REVERIFICATION_REQUIRED"];
+
+/** "a", "a and b", "a, b and c". */
+const listed = (items: readonly string[]) =>
+  items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : (items[0] ?? "");
 const REPORTABLE = [...PUBLISHED, "TRANSFER_PENDING"];
 
 export function AssetDetailPage({ wbId }: { wbId: string }) {
@@ -96,9 +100,10 @@ export function AssetDetailPage({ wbId }: { wbId: string }) {
       {needsPhotos && (
         <Card title="Add photos of your item">
           <p className="muted small">
-            Photos appear as the item's thumbnail and stay private unless you choose to show them on
-            the public passport. Add receipts, certificates and other documents in the evidence
-            vault below.
+            Every item needs a profile photo: you choose it in the evidence vault below, and it is
+            shown on the public passport and as the token&apos;s image, without its location or
+            camera data. Other photos stay private unless you choose to show them. Add receipts,
+            certificates and other documents in the evidence vault too.
           </p>
           <UploadForm
             requestPath={`${base}/evidence/uploads`}
@@ -122,9 +127,10 @@ export function AssetDetailPage({ wbId }: { wbId: string }) {
             ]}
           />
           {a.publicDescription && <p className="small">{a.publicDescription}</p>}
-          {a.publishedAt === null &&
-            a.status !== "REVOKED" &&
-            a.tokenizationStatus !== "PENDING" && <EditDraft asset={a} onChange={reloadAll} />}
+          {a.status !== "REVOKED" &&
+            !(a.publishedAt === null && a.tokenizationStatus === "PENDING") && (
+              <EditDetails asset={a} onChange={reloadAll} />
+            )}
         </Card>
         <Lifecycle asset={a} onChange={reloadAll} />
       </div>
@@ -154,6 +160,24 @@ export function AssetDetailPage({ wbId }: { wbId: string }) {
               });
               reloadAll();
             }}
+            profileEvidenceId={a.profileEvidenceId}
+            onProfile={
+              a.status === "REVOKED" ||
+              (a.publishedAt === null && a.tokenizationStatus === "PENDING")
+                ? undefined
+                : async (e) => {
+                    if (
+                      e.visibility !== "PUBLIC" &&
+                      !confirm(
+                        "The profile photo is shown on the public passport and as the token's image, without its location or camera data. Use this photo?",
+                      )
+                    ) {
+                      return;
+                    }
+                    await post(`${base}/evidence/${e.id}/profile`);
+                    reloadAll();
+                  }
+            }
           />
         ) : (
           <Loading error={evidence.error} />
@@ -269,37 +293,42 @@ function PassportLabel({ base, wbId }: { base: string; wbId: string }) {
   );
 }
 
-const DRAFT_FIELDS = [
-  "category",
-  "brand",
-  "model",
-  "serialNumber",
-  "publicDescription",
-  "description",
-] as const;
+const IDENTITY_FIELDS = ["category", "brand", "model", "serialNumber"] as const;
+const DETAIL_FIELDS = ["publicDescription", "description", "condition"] as const;
+type EditableField = (typeof IDENTITY_FIELDS)[number] | (typeof DETAIL_FIELDS)[number];
 
-/** Edits a draft's details; they are locked once the passport is published. */
-function EditDraft({ asset: a, onChange }: { asset: OwnerAsset; onChange: () => void }) {
+/**
+ * Edits an asset's details. Category, brand, model and serial are locked once the passport is
+ * published; the descriptions and the stated condition can still be updated.
+ */
+function EditDetails({ asset: a, onChange }: { asset: OwnerAsset; onChange: () => void }) {
   const { busy, error, run } = useAction();
-  const initial = Object.fromEntries(DRAFT_FIELDS.map((f) => [f, a[f] ?? ""])) as Record<
-    (typeof DRAFT_FIELDS)[number],
+  const published = a.publishedAt !== null;
+  const fields: readonly EditableField[] = published
+    ? DETAIL_FIELDS
+    : [...IDENTITY_FIELDS, ...DETAIL_FIELDS];
+  const initial = Object.fromEntries(fields.map((f) => [f, a[f] ?? ""])) as Record<
+    EditableField,
     string
   >;
-  const [open, setOpen] = useState(a.missingForPublish.length > 0);
+  const [open, setOpen] = useState(
+    !published && a.missingForPublish.some((m) => m === "brand" || m === "model"),
+  );
   const [form, setForm] = useState(initial);
-  const set = (name: keyof typeof form) => (e: { target: { value: string } }) =>
+  const set = (name: EditableField) => (e: { target: { value: string } }) =>
     setForm({ ...form, [name]: e.target.value });
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     void run(async () => {
-      const body = Object.fromEntries(
-        DRAFT_FIELDS.filter((f) => form[f].trim() !== "" && form[f] !== initial[f]).map((f) => [
-          f,
-          form[f],
-        ]),
-      );
+      const changed = fields.filter((f) => form[f].trim() !== "" && form[f] !== initial[f]);
+      // A published asset's condition change is recorded in its history.
+      const viaPatch = changed.filter((f) => !(published && f === "condition"));
+      const body = Object.fromEntries(viaPatch.map((f) => [f, form[f]]));
       if (Object.keys(body).length > 0) await patch(`/assets/${a.wbId}`, body);
+      if (published && changed.includes("condition")) {
+        await post(`/assets/${a.wbId}/condition`, { condition: form.condition });
+      }
       setOpen(false);
       onChange();
     });
@@ -316,33 +345,51 @@ function EditDraft({ asset: a, onChange }: { asset: OwnerAsset; onChange: () => 
   }
   return (
     <form className="form" onSubmit={submit}>
-      <Field label="Category">
-        <select value={form.category} onChange={set("category")}>
-          {ASSET_CATEGORIES.map((c) => (
-            <option key={c} value={c}>
-              {humanize(c)}
-            </option>
-          ))}
-        </select>
-      </Field>
-      <div className="row">
-        <Field label="Brand">
-          <input value={form.brand} onChange={set("brand")} placeholder="Rolex" />
-        </Field>
-        <Field label="Model">
-          <input value={form.model} onChange={set("model")} placeholder="Submariner 124060" />
-        </Field>
-      </div>
-      <Field label="Serial number (private, never shown or written on-chain)">
-        <input value={form.serialNumber} onChange={set("serialNumber")} autoComplete="off" />
-      </Field>
+      {!published && (
+        <>
+          <Field label="Category">
+            <select value={form.category} onChange={set("category")}>
+              {ASSET_CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {humanize(c)}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <div className="row">
+            <Field label="Brand">
+              <input value={form.brand} onChange={set("brand")} placeholder="Rolex" />
+            </Field>
+            <Field label="Model">
+              <input value={form.model} onChange={set("model")} placeholder="Submariner 124060" />
+            </Field>
+          </div>
+          <Field label="Serial number (private, never shown or written on-chain)">
+            <input value={form.serialNumber} onChange={set("serialNumber")} autoComplete="off" />
+          </Field>
+        </>
+      )}
       <Field label="Public description (shown on the passport)">
         <textarea value={form.publicDescription} onChange={set("publicDescription")} rows={3} />
       </Field>
       <Field label="Private notes (you and your verifiers only)">
         <textarea value={form.description} onChange={set("description")} rows={2} />
       </Field>
-      <p className="muted small">Category, brand, model and serial are locked once published.</p>
+      <Field label="Condition (your own assessment)">
+        <select value={form.condition} onChange={set("condition")}>
+          <option value="">Not stated</option>
+          {ITEM_CONDITIONS.map((c) => (
+            <option key={c} value={c}>
+              {humanize(c)}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <p className="muted small">
+        {published
+          ? "Category, brand, model and serial are locked. Add photos and documents in the evidence vault at any time."
+          : "Category, brand, model and serial are locked once published."}
+      </p>
       <ErrorText error={error} />
       <button type="submit" disabled={busy}>
         {busy ? "Saving…" : "Save details"}
@@ -388,7 +435,11 @@ function Lifecycle({ asset: a, onChange }: { asset: OwnerAsset; onChange: () => 
     <Card title="Passport and token">
       {canPublish &&
         (a.missingForPublish.length > 0 ? (
-          <p className="muted">To publish, add: {a.missingForPublish.join(" and ")}.</p>
+          <p className="muted">
+            To publish, add: {listed(a.missingForPublish)}.
+            {a.missingForPublish.includes("a profile photo") &&
+              " Choose one of your photos with “Use as profile photo” in the evidence vault."}
+          </p>
         ) : (
           <>
             <p className="small">

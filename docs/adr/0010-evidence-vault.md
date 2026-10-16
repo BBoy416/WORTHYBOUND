@@ -21,6 +21,7 @@ reveal where the owner lives.
 | `POST /assets/:wbId/evidence/:evidenceId/download`   | 5-minute download link                             |
 | `GET /assets/:wbId/evidence/:evidenceId/preview`     | Small private preview of a JPEG, PNG or WebP file  |
 | `POST /assets/:wbId/evidence/:evidenceId/visibility` | Makes a photo public or private again              |
+| `POST /assets/:wbId/evidence/:evidenceId/profile`    | Makes a photo the profile photo (ADR 0009)         |
 | `GET /passport/:wbId/evidence/:evidenceId`           | Public photo of a published passport; no sign-in   |
 
 **Upload.** The client declares type, file type, size and SHA-256, then sends the file straight to
@@ -64,7 +65,7 @@ gets a WebP preview of at most 480 × 480 pixels, re-encoded the same way as pub
 made on first request, kept at `previews/<asset id>/<evidence id>.webp`, and served only to the
 owner and the assigned verifier with `Content-Security-Policy: default-src 'none'; sandbox` and
 `Cache-Control: private`. The owner's asset list shows one photo per asset as its thumbnail: the
-first public photo, or else the first private one. Receipts and other documents cannot be public;
+profile photo (ADR 0009), else the first public photo, else the first private one. Receipts and other documents cannot be public;
 sharing them with a buyer belongs to the transfer flow (ADR 0014).
 
 **Duplicates.** The same file twice on one asset is rejected (`409 duplicate_evidence`, also a

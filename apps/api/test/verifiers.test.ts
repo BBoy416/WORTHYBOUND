@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { grantAdmin } from "../src/cli/admin-grant.js";
 import { recordKyc } from "../src/cli/kyc-record.js";
 import {
+  addProfilePhoto,
   type Clock,
   createTestDatabase,
   fakeCheckEngine,
@@ -543,6 +544,7 @@ describe.skipIf(!TEST_DATABASE_URL)("verifier system", () => {
         201,
       );
       await kyc(owner);
+      await addProfilePhoto(db.prisma, created.wbId);
       await expectOk(call(owner, "POST", `/assets/${created.wbId}/publish`), 202);
       await app.chainSync!.runOnce();
       const asset = await db.prisma.asset.findUniqueOrThrow({ where: { wbId: created.wbId } });

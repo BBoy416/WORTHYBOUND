@@ -9,6 +9,7 @@ import { closeNoncesJobKey, MAX_CHAIN_ATTEMPTS } from "../src/chain/sync.js";
 import { grantAdmin } from "../src/cli/admin-grant.js";
 import { recordKyc } from "../src/cli/kyc-record.js";
 import {
+  addProfilePhoto,
   type Address,
   type Clock,
   createTestDatabase,
@@ -116,7 +117,9 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
       serialNumber: `SN-${randomUUID().slice(0, 13)}`,
     });
     expect(res.statusCode, res.body).toBe(201);
-    return res.json<{ wbId: string }>().wbId;
+    const { wbId } = res.json<{ wbId: string }>();
+    await addProfilePhoto(db.prisma, wbId);
+    return wbId;
   };
 
   /** Tokenized and published: the token is minted, then the passport is public. */

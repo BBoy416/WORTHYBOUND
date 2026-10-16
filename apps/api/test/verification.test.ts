@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { grantAdmin } from "../src/cli/admin-grant.js";
 import { recordKyc } from "../src/cli/kyc-record.js";
 import {
+  addProfilePhoto,
   type Clock,
   createTestDatabase,
   createTestStorage,
@@ -174,6 +175,7 @@ function fixtures(get: () => { app: FastifyInstance; db: TestDatabase; clock: Cl
       201,
     );
     await kyc(owner);
+    await addProfilePhoto(get().db.prisma, wbId);
     await expectOk(call(owner, "POST", `/assets/${wbId}/publish`), 202);
     await get().app.chainSync!.runOnce();
     return wbId as string;
@@ -1486,7 +1488,8 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("verifier evidenc
     const evidence = await expectOk(ownerUpload.complete(), 201);
 
     const list = await expectOk(call(v, "GET", `/verifier/requests/${requestId}/evidence`));
-    expect(list.items.map((e: { id: string }) => e.id)).toEqual([evidence.id]);
+    const { profileEvidenceId } = await db.prisma.asset.findUniqueOrThrow({ where: { wbId } });
+    expect(list.items.map((e: { id: string }) => e.id)).toEqual([evidence.id, profileEvidenceId]);
     const link = await expectOk(
       call(v, "POST", `/verifier/requests/${requestId}/evidence/${evidence.id}/download`),
     );
@@ -1581,6 +1584,14 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("verifier evidenc
       }),
     );
     expect(await factorIds()).toEqual([]);
+    // Without the profile photo, the template's required photo is missing.
+    const { profileEvidenceId } = await db.prisma.asset.findUniqueOrThrow({ where: { wbId } });
+    await expectOk(
+      call(v, "POST", `/verifier/requests/${requestId}/evidence/${profileEvidenceId}/review`, {
+        status: "REJECTED",
+        reason: "Not this watch",
+      }),
+    );
     const score = await expectOk(call(owner, "GET", `/assets/${wbId}/trust`));
     expect(score.excludedProofs).toContainEqual({
       proofId: `evidence:${ownerEvidence.id}`,

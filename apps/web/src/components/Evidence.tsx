@@ -163,6 +163,8 @@ export function EvidenceList({
   downloadPath,
   previewPath,
   onVisibility,
+  profileEvidenceId = null,
+  onProfile,
   onReview,
 }: {
   items: OwnerEvidence[];
@@ -170,6 +172,9 @@ export function EvidenceList({
   /** Private previews of JPEG, PNG and WebP files. */
   previewPath?: (id: string) => string;
   onVisibility?: (item: OwnerEvidence) => Promise<void>;
+  /** The asset's profile photo, which always stays public. */
+  profileEvidenceId?: string | null;
+  onProfile?: ((item: OwnerEvidence) => Promise<void>) | undefined;
   onReview?: (item: OwnerEvidence, status: "ACCEPTED" | "REJECTED") => Promise<void>;
 }) {
   const { error, run } = useAction();
@@ -195,6 +200,11 @@ export function EvidenceList({
             <div className="grow">
               <div>
                 <strong>{humanize(e.type)}</strong> <Badge value={e.visibility} />{" "}
+                {e.id === profileEvidenceId && (
+                  <>
+                    <Badge value="VERIFIED" label="Profile photo" />{" "}
+                  </>
+                )}
                 <Badge
                   value={e.reviewStatus}
                   label={`Verifier ${humanize(e.reviewStatus).toLowerCase()}`}
@@ -229,7 +239,15 @@ export function EvidenceList({
               <button className="ghost small" onClick={() => void open(e.id)}>
                 Open
               </button>
-              {onVisibility && canBePublic(e.type, e.mimeType) && (
+              {onProfile &&
+                e.id !== profileEvidenceId &&
+                canBePublic(e.type, e.mimeType) &&
+                e.reviewStatus !== "REJECTED" && (
+                  <button className="ghost small" onClick={() => void run(() => onProfile(e))}>
+                    Use as profile photo
+                  </button>
+                )}
+              {onVisibility && canBePublic(e.type, e.mimeType) && e.id !== profileEvidenceId && (
                 <button className="ghost small" onClick={() => void run(() => onVisibility(e))}>
                   Make {e.visibility === "PUBLIC" ? "private" : "public"}
                 </button>

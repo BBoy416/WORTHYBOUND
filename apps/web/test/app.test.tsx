@@ -100,6 +100,7 @@ const asset = (overrides: Partial<OwnerAsset> = {}): OwnerAsset => ({
   createdAt: "2026-09-29T09:00:00.000Z",
   updatedAt: "2026-09-29T10:00:00.000Z",
   passportUrl: `http://localhost/passport/${WB}`,
+  profileEvidenceId: "0199a000-0000-7000-8000-00000000e001",
   missingForPublish: [],
   ...overrides,
 });
@@ -473,11 +474,76 @@ describe("owner asset page", () => {
     expect(screen.queryByText("Passport label")).toBeNull();
   });
 
-  it("offers no editing once the passport is published", async () => {
-    mockFetch(ownerRoutes(asset()));
+  it("lets the owner update descriptions and condition once published, but not the identity", async () => {
+    const calls = mockFetch({
+      ...ownerRoutes(asset()),
+      [`PATCH /assets/${WB}`]: { json: asset() },
+      [`POST /assets/${WB}/condition`]: { json: asset() },
+    });
     renderAt(`/assets/${WB}`);
-    await screen.findByText("Details");
-    expect(screen.queryByText("Edit details")).toBeNull();
+    fireEvent.click(await screen.findByText("Edit details"));
+    expect(screen.queryByPlaceholderText("Rolex")).toBeNull();
+    expect(
+      screen.getByText(/Category, brand, model and serial are locked\. Add photos/),
+    ).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Public description (shown on the passport)"), {
+      target: { value: "Serviced in 2026" },
+    });
+    fireEvent.change(screen.getByLabelText("Condition (your own assessment)"), {
+      target: { value: "GOOD" },
+    });
+    fireEvent.click(screen.getByText("Save details"));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
+    expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({
+      publicDescription: "Serviced in 2026",
+    });
+    expect(calls.find((c) => c.url === `/assets/${WB}/condition`)?.body).toEqual({
+      condition: "GOOD",
+    });
+  });
+
+  it("asks for a profile photo, and confirms before a private photo becomes it", async () => {
+    const privatePhoto = evidence({ id: "0199a000-0000-7000-8000-00000000e002" });
+    const publicPhoto = evidence({
+      id: "0199a000-0000-7000-8000-00000000e003",
+      visibility: "PUBLIC",
+      publicPath: `/passport/${WB}/evidence/0199a000-0000-7000-8000-00000000e003`,
+    });
+    let state = asset({
+      status: "DRAFT",
+      publishedAt: null,
+      profileEvidenceId: null,
+      missingForPublish: ["a profile photo"],
+    });
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirm);
+    const calls = mockFetch({
+      ...ownerRoutes(state),
+      [`GET /assets/${WB}`]: () => ({ json: state }),
+      [`GET /assets/${WB}/evidence`]: { json: { items: [privatePhoto, publicPhoto] } },
+      [`POST /assets/${WB}/evidence/${privatePhoto.id}/profile`]: () => (
+        (state = asset({
+          status: "DRAFT",
+          publishedAt: null,
+          profileEvidenceId: privatePhoto.id,
+        })),
+        { json: state }
+      ),
+    });
+    renderAt(`/assets/${WB}`);
+    expect(await screen.findByText(/To publish, add: a profile photo\./)).toBeTruthy();
+    const choose = await screen.findAllByText("Use as profile photo");
+    expect(choose).toHaveLength(2);
+    fireEvent.click(choose[0] as HTMLElement);
+    await screen.findByText("Profile photo");
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("shown on the public passport"));
+    expect(calls.some((c) => c.url === `/assets/${WB}/evidence/${privatePhoto.id}/profile`)).toBe(
+      true,
+    );
+    // The profile photo stays public; the other photo can still become it.
+    expect(screen.getAllByText("Use as profile photo")).toHaveLength(1);
+    expect(screen.getAllByText(/^Make (private|public)$/)).toHaveLength(1);
+    expect(await screen.findByText("Tokenize and publish")).toBeTruthy();
   });
 
   it("hashes, uploads straight to storage and completes an evidence upload", async () => {

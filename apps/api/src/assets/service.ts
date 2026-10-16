@@ -27,6 +27,7 @@ import type {
 } from "@worthybound/validation";
 import { type RequestFingerprint, writeAudit } from "../audit.js";
 import { registerJobKey } from "../chain/sync.js";
+import { notUpheld } from "../disputes/view.js";
 import { ApiError, fromDomainError, notFound } from "../errors.js";
 import { cancelOpenTransfer } from "../transfers/service.js";
 import { recordTrust } from "../trust/record.js";
@@ -125,6 +126,10 @@ async function recordStatusChange(
     },
   });
 }
+
+/** "a", "a and b", "a, b and c". */
+const listed = (items: readonly string[]) =>
+  items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : (items[0] ?? "");
 
 /** Discarded drafts are hidden from everyone, including their owner. */
 const isDiscardedDraft = (asset: Asset) => asset.status === "REVOKED" && asset.publishedAt === null;
@@ -252,7 +257,8 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
         ...(cursor ? { cursor: { wbId: cursor }, skip: 1 } : {}),
       });
       const page = items.slice(0, limit);
-      // One photo per asset for its thumbnail: the first public one, else the first private one.
+      // One photo per asset for its thumbnail: the profile photo, else the first public one, else
+      // the first private one.
       const photos = await prisma.evidence.findMany({
         where: {
           assetId: { in: page.map((a) => a.id) },
@@ -268,7 +274,7 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
       return {
         items: page.map((asset) => ({
           asset,
-          thumbnailEvidenceId: thumbnails.get(asset.id) ?? null,
+          thumbnailEvidenceId: asset.profileEvidenceId ?? thumbnails.get(asset.id) ?? null,
         })),
         nextCursor: items.length > limit ? (page.at(-1)?.wbId ?? null) : null,
       };
@@ -490,7 +496,23 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
           throw new ApiError(
             409,
             "publish_requirements_missing",
-            `Add ${missing.join(" and ")} before publishing`,
+            `Add ${listed(missing)} before publishing`,
+          );
+        }
+        const profile = await tx.evidence.findFirst({
+          where: {
+            id: asset.profileEvidenceId as string,
+            visibility: "PUBLIC",
+            reviewStatus: { not: "REJECTED" },
+            ...notUpheld,
+          },
+          select: { id: true },
+        });
+        if (!profile) {
+          throw new ApiError(
+            409,
+            "profile_photo_unavailable",
+            "The profile photo was rejected; choose another profile photo before publishing",
           );
         }
         try {

@@ -9,6 +9,7 @@ import { grantAdmin } from "../src/cli/admin-grant.js";
 import { recordKyc } from "../src/cli/kyc-record.js";
 import { readAll } from "../src/evidence/inspect.js";
 import {
+  addProfilePhoto,
   type Clock,
   createTestDatabase,
   createTestStorage,
@@ -145,6 +146,8 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       },
       clock.now,
     );
+    const { profileEvidenceId } = await db.prisma.asset.findUniqueOrThrow({ where: { wbId } });
+    if (!profileEvidenceId) await addProfilePhoto(db.prisma, wbId);
     const res = await call(who, "POST", `/assets/${wbId}/publish`);
     expect(res.statusCode, res.body).toBe(202);
     await app.chainSync!.runOnce();
@@ -697,6 +700,8 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
 
       // Not visible while the asset is a draft.
       expect((await call(null, "GET", evidence.publicPath as string)).statusCode).toBe(404);
+      const profile = `/assets/${wbId}/evidence/${evidence.id}/profile`;
+      expect((await call(alice, "POST", profile)).statusCode).toBe(200);
       await publish(alice, wbId);
 
       const passport = (await call(null, "GET", `/passport/${wbId}`)).json().passport;
@@ -750,9 +755,11 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       expect(hide.json()).toMatchObject({ visibility: "PRIVATE", publicPath: null });
       expect((await call(null, "GET", evidence.publicPath as string)).statusCode).toBe(404);
       expect(await storage.head(firstKey)).toBeNull();
-      expect((await call(null, "GET", `/passport/${wbId}`)).json().passport.publicEvidence).toEqual(
-        [],
-      );
+      const shown = async () =>
+        (await call(null, "GET", `/passport/${wbId}`))
+          .json()
+          .passport.publicEvidence.map((e: { evidenceId: string }) => e.evidenceId);
+      expect(await shown()).not.toContain(evidence.id);
 
       const show = await call(alice, "POST", `/assets/${wbId}/evidence/${evidence.id}/visibility`, {
         visibility: "PUBLIC",
@@ -771,6 +778,80 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       const [row] = await db.prisma.$queryRaw<{ broken: number | null }[]>`
         SELECT wb_verify_provenance_chain(${await assetId(wbId)}::uuid) AS broken`;
       expect(row?.broken).toBeNull();
+    });
+
+    it("lets the owner choose the profile photo, shown first on the passport and as the token image", async () => {
+      const alice = await owner();
+      const wbId = await asset(alice);
+      const first = await added(alice, wbId, { body: await phonePhoto("#0a0b0c") });
+      const second = await added(alice, wbId, {
+        body: await phonePhoto("#0c0b0a"),
+        visibility: "PUBLIC",
+      });
+      const receipt = await added(alice, wbId, {
+        body: pdf(),
+        type: "RECEIPT",
+        mimeType: "application/pdf",
+      });
+      const choose = (who: Owner | null, id: string) =>
+        call(who, "POST", `/assets/${wbId}/evidence/${id}/profile`);
+      expect((await call(alice, "GET", `/assets/${wbId}`)).json().missingForPublish).toEqual([
+        "a profile photo",
+      ]);
+
+      // A private photo is made public when chosen.
+      const chosen = await choose(alice, first.id);
+      expect(chosen.statusCode, chosen.body).toBe(200);
+      expect(chosen.json()).toMatchObject({ profileEvidenceId: first.id, missingForPublish: [] });
+      const row = await db.prisma.evidence.findUniqueOrThrow({ where: { id: first.id } });
+      expect(row.visibility).toBe("PUBLIC");
+      expect(row.publicStorageKey).not.toBeNull();
+      const thumbnails = (await call(alice, "GET", "/assets")).json<{
+        items: { wbId: string; thumbnailPath: string | null }[];
+      }>().items;
+      expect(thumbnails.find((a) => a.wbId === wbId)?.thumbnailPath).toBe(
+        `/assets/${wbId}/evidence/${first.id}/preview`,
+      );
+
+      const hide = await call(alice, "POST", `/assets/${wbId}/evidence/${first.id}/visibility`, {
+        visibility: "PRIVATE",
+      });
+      expect(hide.statusCode).toBe(409);
+      expect(hide.json().error.code).toBe("profile_photo");
+      const document = await choose(alice, receipt.id);
+      expect(document.statusCode).toBe(409);
+      expect(document.json().error.code).toBe("cannot_be_profile_photo");
+      expect((await choose(await owner(), second.id)).statusCode).toBe(404);
+      expect((await choose(null, second.id)).statusCode).toBe(401);
+
+      await publish(alice, wbId);
+      const firstShown = async () => {
+        const { passport } = (await call(null, "GET", `/passport/${wbId}`)).json();
+        const metadata = (await call(null, "GET", `/metadata/${wbId}`)).json();
+        return { first: passport.publicEvidence[0].evidenceId, image: metadata.image };
+      };
+      expect(await firstShown()).toEqual({
+        first: first.id,
+        image: expect.stringContaining(`/passport/${wbId}/evidence/${first.id}`),
+      });
+
+      // Changing it after publication is recorded.
+      expect((await choose(alice, second.id)).json().profileEvidenceId).toBe(second.id);
+      expect(await firstShown()).toEqual({
+        first: second.id,
+        image: expect.stringContaining(`/passport/${wbId}/evidence/${second.id}`),
+      });
+      const events = await db.prisma.provenanceEvent.findMany({
+        where: { assetId: await assetId(wbId), type: "DETAILS_UPDATED" },
+      });
+      expect(events.map((e) => e.payload)).toEqual([
+        { fields: ["profilePhoto"], evidenceId: second.id },
+      ]);
+      // The previous profile photo can be made private again.
+      const hidden = await call(alice, "POST", `/assets/${wbId}/evidence/${first.id}/visibility`, {
+        visibility: "PRIVATE",
+      });
+      expect(hidden.statusCode).toBe(200);
     });
 
     it("refuses to make documents public", async () => {
@@ -849,7 +930,9 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       expect(decided.json()).toMatchObject({ evidence: { type: "PHOTO", visibility: "PUBLIC" } });
 
       const passport = (await call(null, "GET", `/passport/${wbId}`)).json().passport;
-      expect(passport.publicEvidence).toEqual([]);
+      expect(
+        passport.publicEvidence.map((e: { evidenceId: string }) => e.evidenceId),
+      ).not.toContain(pub.id);
       expect((await call(null, "GET", pub.publicPath as string)).statusCode).toBe(404);
       const trust = (await call(alice, "GET", `/assets/${wbId}/trust`)).json();
       expect(trust.excludedProofs).toContainEqual({
@@ -898,10 +981,12 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
         mimeType: "application/pdf",
       });
       const pending = { status: "PENDING", problems: [], checkedAt: null };
+      const { profileEvidenceId } = await db.prisma.asset.findUniqueOrThrow({ where: { wbId } });
       expect(await evidenceChecks(alice, wbId)).toEqual({
         [photo.id]: pending,
         [receipt.id]: pending,
         [other.id]: null,
+        [profileEvidenceId as string]: null,
       });
       expect((await call(alice, "GET", `/assets/${wbId}/automated-checks`)).json()).toEqual({
         available: true,
@@ -1957,7 +2042,8 @@ describe.skipIf(!TEST_DATABASE_URL || !TEST_STORAGE_AVAILABLE)("evidence vault",
       it("does not count the shots toward the evidence limit", async () => {
         const alice = await owner();
         const wbId = await asset(alice, true);
-        for (let i = 0; i < 100; i++) {
+        // The profile photo is the 100th file.
+        for (let i = 0; i < 99; i++) {
           const res = await requestUpload(alice, wbId, {
             body: pdf(`${i}`),
             type: "RECEIPT",

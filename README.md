@@ -39,7 +39,9 @@ verification.
 2. **Register an item:** category, brand, model and serial number.
 3. **Add evidence:** live camera photos in a guided capture session (each session has a one-time
    code that must appear in a photo), plus receipts or certificates. Files are hashed and sealed,
-   and owner evidence goes through automatic checks.
+   and owner evidence goes through automatic checks. Choose one photo as the **profile photo**: it
+   is required to publish, comes first on the passport and is the token's image. Descriptions,
+   condition, evidence and the profile photo can still be updated after publishing.
 4. **Tokenize and publish** (verified owner only). A frozen Metaplex Core token is minted to the
    owner's wallet and the item's WorthyBound record is created on Solana. Once the transaction is
    confirmed, the public passport is published and its status and Trust Score are written to the

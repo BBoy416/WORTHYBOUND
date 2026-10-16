@@ -13,17 +13,17 @@ learn private details of other people's items.
 
 **Endpoints** (signed in, owner only unless noted):
 
-| Endpoint                           | Does                                                              |
-| ---------------------------------- | ----------------------------------------------------------------- |
-| `POST /assets`                     | Registers a private `DRAFT`; accepts an `Idempotency-Key`         |
-| `GET /assets`                      | The caller's assets, newest first, cursor pagination              |
-| `GET /assets/:wbId`                | Private view, including the serial                                |
-| `PATCH /assets/:wbId`              | Edits details (limits below)                                      |
-| `POST /assets/:wbId/publish`       | Mints the token, then `DRAFT` → `ACTIVE` (ADR 0016); brand, model |
-| `POST /assets/:wbId/status`        | Owner status changes the lifecycle allows (below)                 |
-| `POST /assets/:wbId/condition`     | Owner-stated condition, recorded as `CONDITION_UPDATED`           |
-| `GET /passport/:wbId`              | Public passport and its link (for QR codes); no sign-in           |
-| `GET /assets/:wbId/passport-label` | Owner only: printable 2 × 2 in label with the passport QR code    |
+| Endpoint                           | Does                                                           |
+| ---------------------------------- | -------------------------------------------------------------- |
+| `POST /assets`                     | Registers a private `DRAFT`; accepts an `Idempotency-Key`      |
+| `GET /assets`                      | The caller's assets, newest first, cursor pagination           |
+| `GET /assets/:wbId`                | Private view, including the serial                             |
+| `PATCH /assets/:wbId`              | Edits details (limits below)                                   |
+| `POST /assets/:wbId/publish`       | Mints the token, then `DRAFT` → `ACTIVE` (ADR 0016); see below |
+| `POST /assets/:wbId/status`        | Owner status changes the lifecycle allows (below)              |
+| `POST /assets/:wbId/condition`     | Owner-stated condition, recorded as `CONDITION_UPDATED`        |
+| `GET /passport/:wbId`              | Public passport and its link (for QR codes); no sign-in        |
+| `GET /assets/:wbId/passport-label` | Owner only: printable 2 × 2 in label with the passport QR code |
 
 Registration runs in one transaction: random WB ID (retried on collision), asset, first custody
 period, status event, `REGISTERED` provenance event (hash-chained, ADR 0005), idempotency key and
@@ -43,8 +43,19 @@ ID) for admin review. Items without a serial are not checked.
 **Identity lock.** Once published, category, brand, model and serial cannot change, and
 `publishedAt` is set once. A database trigger enforces this, and also that the WB ID never
 changes, assets are never deleted and `REVOKED` is final. The public description, private notes,
-attributes and condition stay editable; public description and condition changes are recorded in
-the provenance history.
+attributes and condition stay editable, and the owner's asset page offers them after publication;
+public description and condition changes are recorded in the provenance history. Evidence can be
+added at any time.
+
+**Profile photo (2026-10-16).** Publishing requires brand, model and a profile photo. The owner
+chooses one of the asset's JPEG, PNG or WebP photos (`POST /assets/:wbId/evidence/:evidenceId/profile`);
+a private photo is first made public, with its metadata removed (ADR 0010). It comes first on the
+passport, is the token's image in the metadata (ADR 0016) and is the thumbnail in the owner's
+list. Rejected photos and photos taken for a buyer's check cannot be chosen. The owner can choose
+another at any time; after publication the change is recorded as `DETAILS_UPDATED`. Database
+triggers keep the profile photo a public photo of the same asset, so it cannot be made private
+while it is the profile photo. A profile photo rejected later is no longer shown, and the owner
+chooses another. Passports published before this rule have none until their owner chooses one.
 
 **Owner status changes:** report lost, report stolen, lost → recovered (`REVERIFICATION_REQUIRED`,
 recorded as `RECOVERED`) and discarding a draft (`REVOKED`). Clearing a stolen report and

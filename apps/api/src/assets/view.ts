@@ -37,12 +37,14 @@ export const ownerAssetSchema = z.object({
   updatedAt: z.iso.datetime(),
   /** Public passport address (for QR codes), once published. */
   passportUrl: z.string().nullable(),
-  /** Fields still needed before the draft can be published. */
+  /** The owner's chosen profile photo: shown first on the passport and as the token's image. */
+  profileEvidenceId: z.string().nullable(),
+  /** Fields and the profile photo still needed before the draft can be published. */
   missingForPublish: z.array(z.string()),
 });
 export type OwnerAsset = z.infer<typeof ownerAssetSchema>;
 
-/** An asset in the owner's list, with the private preview of one of its photos. */
+/** An asset in the owner's list, with the private preview of its profile photo or another photo. */
 export const ownerAssetListItemSchema = ownerAssetSchema.extend({
   thumbnailPath: z.string().nullable(),
 });
@@ -69,6 +71,7 @@ export function toOwnerAsset(asset: Asset, publicWebUrl: string): OwnerAsset {
     createdAt: asset.createdAt.toISOString(),
     updatedAt: asset.updatedAt.toISOString(),
     passportUrl: published ? passportUrl(publicWebUrl, asset.wbId) : null,
+    profileEvidenceId: asset.profileEvidenceId,
     missingForPublish: asset.publishedAt === null ? missingPublishFields(asset) : [],
   };
 }

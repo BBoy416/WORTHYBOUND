@@ -456,10 +456,14 @@ model Asset {
   verificationLevel           VerificationLevel  @default(UNVERIFIED)
   /// Set once when the owner publishes the passport. Identity fields are locked from then on.
   publishedAt                 DateTime?          @db.Timestamptz(3)
+  /// Chosen by the owner: a public photo of this asset, shown first on the passport and as the
+  /// token's image. Required to publish.
+  profileEvidenceId           String?            @unique @db.Uuid
   createdAt                   DateTime           @default(now()) @db.Timestamptz(3)
   updatedAt                   DateTime           @updatedAt @db.Timestamptz(3)
 
   owner                User                  @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  profileEvidence      Evidence?             @relation("AssetProfilePhoto", fields: [profileEvidenceId], references: [id], onDelete: Restrict)
   statusEvents         AssetStatusEvent[]
   ownerships           Ownership[]
   transferRequests     TransferRequest[]
@@ -640,6 +644,7 @@ model Evidence {
   attestations        AttestationEvidence[]
   disputes            Dispute[]
   automatedChecks     AutomatedCheck[]
+  profileOf           Asset?                   @relation("AssetProfilePhoto")
 
   @@unique([assetId, sha256])
   @@unique([captureSessionId, captureShot])

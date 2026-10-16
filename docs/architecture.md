@@ -111,7 +111,7 @@ ADR 0008 and 0004. Identity states are UNVERIFIED, PENDING, VERIFIED, REJECTED a
 
 ## 2 Register and publish an asset
 
-Every item is tokenized before its passport is published. Publishing first mints the token; DRAFT changes to ACTIVE only once the mint is confirmed.
+Every item is tokenized before its passport is published. Publishing needs brand, model and a profile photo chosen by the owner, which comes first on the passport and is the token's image. Publishing first mints the token; DRAFT changes to ACTIVE only once the mint is confirmed. Afterwards the descriptions, condition and profile photo can still be changed, and evidence added.
 
 ```mermaid
 flowchart TD
@@ -120,7 +120,7 @@ Validate --> Fingerprint["Store keyed serial fingerprint"]
 Fingerprint --> Draft["Create DRAFT asset and WB ID"]
 Draft --> Log["Append AssetStatusEvent and ProvenanceEvent"]
 Log --> Ready{"Ready to publish?"}
-Ready -->|"No"| Missing["List missing requirements"]
+Ready -->|"No: brand, model or profile photo"| Missing["List missing requirements"]
 Ready -->|"Yes, owner asks to tokenize and publish"| Identity{"Owner identity VERIFIED?"}
 Identity -->|"No"| Block["Publishing blocked"]
 Identity -->|"Yes"| Job["tokenizationStatus PENDING; REGISTER_ASSET chain job; draft frozen"]
@@ -964,7 +964,7 @@ Proof commands: node packages/solana/scripts/devnet.mjs smoke <oracle keypair>; 
 
 ## Built API route inventory
 
-There are 95 built API routes.
+There are 96 built API routes.
 
 - **Auth:** `POST /auth/nonce`, `POST /auth/verify`, `GET /auth/me`, `POST /auth/logout`, `GET /health`
 - **Assets:**
@@ -972,7 +972,7 @@ There are 95 built API routes.
   - Updates and status: `POST /assets/:wbId/status`, `POST /assets/:wbId/condition`, `GET /assets/:wbId/trust`, `GET /assets/:wbId/automated-checks`, `GET /metadata/:wbId`
 - **Evidence:**
   - Upload: `POST /assets/:wbId/evidence/uploads`, `POST /evidence/uploads/:uploadId/complete`
-  - View and manage: `GET /assets/:wbId/evidence`, `GET /assets/:wbId/evidence/:evidenceId/preview`, `POST /assets/:wbId/evidence/:evidenceId/download`, `POST /assets/:wbId/evidence/:evidenceId/visibility`
+  - View and manage: `GET /assets/:wbId/evidence`, `GET /assets/:wbId/evidence/:evidenceId/preview`, `POST /assets/:wbId/evidence/:evidenceId/download`, `POST /assets/:wbId/evidence/:evidenceId/visibility`, `POST /assets/:wbId/evidence/:evidenceId/profile`
 - **Capture:** `GET|POST /assets/:wbId/capture-sessions`
 - **Passport:** `GET /passport/:wbId`, `GET /passport/:wbId/evidence/:evidenceId`
 - **Checks before buying:**

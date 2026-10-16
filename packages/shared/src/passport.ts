@@ -42,6 +42,7 @@ export interface PassportSource {
     verificationLevel: VerificationLevel;
     condition: ItemCondition | null;
     publishedAt: Date | null;
+    profileEvidenceId: string | null;
   };
   trust: { score: number; computedAt: Date; engineVersion: string; weightsVersion: string } | null;
   /** Passed automated checks counted in the latest Trust Score, if none failed (ADR 0013). */
@@ -141,6 +142,7 @@ export interface PublicPassport {
   custody: { currentSince: string | null; transferCount: number };
   /** Disputes open or under review; who opened them and why stays private (ADR 0017). */
   openDisputes: number;
+  /** Oldest first, except that the owner's profile photo comes first. */
   publicEvidence: {
     evidenceId: string;
     type: EvidenceType;
@@ -293,6 +295,10 @@ export function toPublicPassport(source: PassportSource): PublicPassport | null 
     publicEvidence: source.evidence
       .filter((e) => e.visibility === "PUBLIC" && e.reviewStatus !== "REJECTED")
       .sort(byTime((e) => e.createdAt))
+      .sort(
+        (a, b) =>
+          Number(b.id === asset.profileEvidenceId) - Number(a.id === asset.profileEvidenceId),
+      )
       .map((e) => ({
         evidenceId: e.id,
         type: e.type,

@@ -103,6 +103,13 @@ const CONFLICTS: readonly Rejection[] = [
 const rejectionError = (reason: Rejection) =>
   new ApiError(CONFLICTS.includes(reason) ? 409 : 422, reason, REJECTIONS[reason]);
 
+const profilePhotoStaysPublic = () =>
+  new ApiError(
+    409,
+    "profile_photo",
+    "This is the profile photo, which is always public. Choose another profile photo first.",
+  );
+
 /** Discarded drafts are hidden from everyone, including their owner. */
 const isDiscardedDraft = (asset: Asset) => asset.status === "REVOKED" && asset.publishedAt === null;
 
@@ -119,7 +126,7 @@ const counted = (assetId: string) => ({
 });
 
 /** Whether a shot belongs to a session filmed for a remote check or before shipping (ADR 0014). */
-async function forSale(tx: Tx, captureSessionId: string | null | undefined) {
+async function forSale(tx: Tx | PrismaClient, captureSessionId: string | null | undefined) {
   if (!captureSessionId) return false;
   const session = await tx.captureSession.findUnique({
     where: { id: captureSessionId },
@@ -381,7 +388,7 @@ export function createEvidenceService({
     return { upload, form };
   }
 
-  return {
+  const api = {
     /** In the order the files were added, as in the latest seal. */
     async list(wbId: string, actor: Actor) {
       const asset = await ownedAsset(prisma, wbId, actor);
@@ -768,6 +775,7 @@ export function createEvidenceService({
       const evidence = await ownedEvidence(asset, evidenceId);
       if (evidence.visibility === input.visibility) return { evidence, wbId };
       const toPublic = input.visibility === "PUBLIC";
+      if (!toPublic && asset.profileEvidenceId === evidence.id) throw profilePhotoStaysPublic();
       if (toPublic) {
         if (asset.status === "REVOKED") {
           throw new ApiError(
@@ -805,6 +813,9 @@ export function createEvidenceService({
           const locked = await lockOwned(tx, wbId, actor);
           const current = await tx.evidence.findUniqueOrThrow({ where: { id: evidence.id } });
           if (current.visibility === input.visibility) return { updated: current, previous: null };
+          if (!toPublic && locked.profileEvidenceId === evidence.id) {
+            throw profilePhotoStaysPublic();
+          }
           const at = now();
           const updated = await tx.evidence.update({
             where: { id: evidence.id },
@@ -841,6 +852,92 @@ export function createEvidenceService({
       }
     },
 
+    /**
+     * Makes a photo the asset's profile photo, shown first on the passport and as the token's
+     * image. A private photo is made public first. Recorded in the provenance once published.
+     */
+    async setProfilePhoto(wbId: string, evidenceId: string, actor: Actor): Promise<Asset> {
+      const asset = await ownedAsset(prisma, wbId, actor);
+      const evidence = await ownedEvidence(asset, evidenceId);
+      const usable = async (db: Tx | PrismaClient, a: Asset) => {
+        if (a.status === "REVOKED") {
+          throw new ApiError(409, "asset_revoked", "A revoked asset can no longer be changed");
+        }
+        if (a.publishedAt === null && a.tokenizationStatus === "PENDING") {
+          throw new ApiError(
+            409,
+            "publication_pending",
+            "This asset is being tokenized; try again once its passport is published",
+          );
+        }
+        const rejected = await db.evidence.count({
+          where: { id: evidence.id, disputes: { some: { status: "UPHELD" } } },
+        });
+        if (evidence.reviewStatus === "REJECTED" || rejected > 0) {
+          throw new ApiError(
+            409,
+            "evidence_rejected",
+            "A rejected photo cannot be the profile photo",
+          );
+        }
+      };
+      if (!canBePublic(evidence.type, evidence.mimeType)) {
+        throw new ApiError(
+          409,
+          "cannot_be_profile_photo",
+          "Only JPEG, PNG or WebP photos can be the profile photo",
+        );
+      }
+      if (await forSale(prisma, evidence.captureSessionId)) {
+        throw new ApiError(
+          409,
+          "cannot_be_profile_photo",
+          "Photos taken for a buyer's check cannot be the profile photo",
+        );
+      }
+      await usable(prisma, asset);
+      if (asset.profileEvidenceId === evidence.id) return asset;
+      if (evidence.visibility !== "PUBLIC") {
+        await api.changeVisibility(wbId, evidenceId, { visibility: "PUBLIC" }, actor);
+      }
+      return prisma.$transaction(async (tx) => {
+        const locked = await lockOwned(tx, wbId, actor);
+        await usable(tx, locked);
+        const current = await tx.evidence.findUniqueOrThrow({ where: { id: evidence.id } });
+        if (current.visibility !== "PUBLIC") {
+          throw new ApiError(409, "conflict", "The photo was made private meanwhile; try again");
+        }
+        const at = now();
+        const updated = await tx.asset.update({
+          where: { id: locked.id },
+          data: { profileEvidenceId: evidence.id, updatedAt: at },
+        });
+        if (locked.publishedAt !== null) {
+          await tx.provenanceEvent.create({
+            data: {
+              assetId: locked.id,
+              type: "DETAILS_UPDATED",
+              actorId: actor.userId,
+              occurredAt: at,
+              payload: { fields: ["profilePhoto"], evidenceId: evidence.id },
+            },
+          });
+        }
+        await writeAudit(
+          tx,
+          {
+            actorId: actor.userId,
+            action: "asset.profile_photo_set",
+            targetType: "asset",
+            targetId: locked.wbId,
+            metadata: { evidenceId: evidence.id, previous: locked.profileEvidenceId },
+          },
+          actor.fp,
+        );
+        return updated;
+      });
+    },
+
     /** A public photo of a published passport, or null. Same answer for every kind of miss. */
     async publicPhoto(wbId: string, evidenceId: string) {
       const evidence = await prisma.evidence.findFirst({
@@ -862,6 +959,7 @@ export function createEvidenceService({
       };
     },
   };
+  return api;
 }
 
 export type EvidenceService = ReturnType<typeof createEvidenceService>;

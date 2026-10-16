@@ -15,6 +15,7 @@ import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 import { fingerprint } from "../audit.js";
 import type { Actor } from "../assets/service.js";
+import { ownerAssetSchema, toOwnerAsset } from "../assets/view.js";
 import type { AuthContext } from "../auth/guard.js";
 import { evidenceCheckStates } from "../checks/view.js";
 import type { AppContext, RateLimit } from "../context.js";
@@ -190,6 +191,27 @@ export const evidenceRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx
       );
       return toOwnerEvidence(evidence, wbId);
     },
+  );
+
+  /** The owner's profile photo: shown first on the passport and as the token's image. */
+  app.post(
+    "/assets/:wbId/evidence/:evidenceId/profile",
+    {
+      ...write,
+      schema: {
+        params: evidenceParamsSchema,
+        response: { 200: ownerAssetSchema, ...errors },
+      },
+    },
+    async (request) =>
+      toOwnerAsset(
+        await service.setProfilePhoto(
+          request.params.wbId,
+          request.params.evidenceId,
+          actor(request),
+        ),
+        config.publicWebUrl,
+      ),
   );
 
   // ─── The verifier assigned to a verification request ───────────────────────

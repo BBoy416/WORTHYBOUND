@@ -80,8 +80,9 @@ as soon as the token does.
 **Metadata.** `GET /metadata/:wbId` serves the token metadata (Metaplex JSON) registered as the
 Core asset's URI. It is built from the public passport, so it shows nothing the passport does
 not, and says that a token alone is not proof of authenticity and that independent in-person
-verification is the strongest proof WorthyBound records. The passport shows the token and
-record addresses once tokenized.
+verification is the strongest proof WorthyBound records. Its image is the passport's first public
+photo, which is the owner's profile photo (ADR 0009). The passport shows the token and record
+addresses once tokenized.
 
 **Hosting (demo).** Render runs the API and PostgreSQL 16 (`render.yaml`); evidence is stored in
 Cloudflare R2 through its S3 API (`S3_REGION=auto`). The oracle keypair is a Render secret file.

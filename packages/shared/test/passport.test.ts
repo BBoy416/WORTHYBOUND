@@ -36,6 +36,7 @@ function source(overrides: Partial<PassportSource> = {}): PassportSource {
     verificationLevel: "AUTHENTICATED",
     condition: "EXCELLENT",
     publishedAt: d("2025-12-01T00:00:00Z"),
+    profileEvidenceId: null,
     id: `${SECRET}-asset-uuid`,
     ownerId: `${SECRET}-owner`,
     serialNumber: `${SECRET}-serial`,
@@ -197,6 +198,28 @@ describe("toPublicPassport", () => {
         path: "/passport/WB-7F93A281/evidence/ev-photo",
       },
     ]);
+  });
+
+  it("lists the profile photo first, then the others oldest first", () => {
+    const base = source();
+    const photo = (id: string, createdAt: string) => ({
+      ...base.evidence[1]!,
+      id,
+      createdAt: d(createdAt),
+    });
+    const evidence = [
+      photo("ev-new", "2026-03-01T00:00:00Z"),
+      photo("ev-old", "2026-01-01T00:00:00Z"),
+      photo("ev-profile", "2026-02-01T00:00:00Z"),
+    ];
+    const ids = (profileEvidenceId: string | null) =>
+      toPublicPassport({
+        ...base,
+        asset: { ...base.asset, profileEvidenceId },
+        evidence,
+      })?.publicEvidence.map((e) => e.evidenceId);
+    expect(ids("ev-profile")).toEqual(["ev-profile", "ev-old", "ev-new"]);
+    expect(ids(null)).toEqual(["ev-old", "ev-profile", "ev-new"]);
   });
 
   it("keeps revoked attestations visible, newest first, with verifier accountability", () => {

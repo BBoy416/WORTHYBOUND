@@ -63,11 +63,13 @@ export interface OwnerAsset {
   createdAt: string;
   updatedAt: string;
   passportUrl: string | null;
+  /** Shown first on the passport and as the token's image. */
+  profileEvidenceId: string | null;
   missingForPublish: string[];
 }
 
 export interface OwnerAssetListItem extends OwnerAsset {
-  /** Private preview of one of the asset's photos (the first public one if any). */
+  /** Private preview of the profile photo, else of another photo (a public one if any). */
   thumbnailPath: string | null;
 }
 

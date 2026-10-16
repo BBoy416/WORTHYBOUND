@@ -8,10 +8,18 @@ import {
 } from "../src/index.js";
 
 describe("asset rules", () => {
-  it("requires brand and model before publishing", () => {
-    expect(missingPublishFields({ brand: null, model: null })).toEqual(["brand", "model"]);
-    expect(missingPublishFields({ brand: "Rolex", model: "  " })).toEqual(["model"]);
-    expect(missingPublishFields({ brand: "Rolex", model: "Submariner" })).toEqual([]);
+  it("requires brand, model and a profile photo before publishing", () => {
+    const photo = { profileEvidenceId: "0199a1b2-0000-7000-8000-000000000001" };
+    expect(missingPublishFields({ brand: null, model: null, ...photo })).toEqual([
+      "brand",
+      "model",
+    ]);
+    expect(missingPublishFields({ brand: "Rolex", model: "  ", ...photo })).toEqual(["model"]);
+    expect(missingPublishFields({ brand: "Rolex", model: "Submariner", ...photo })).toEqual([]);
+    expect(missingPublishFields({ brand: "Rolex", model: null, profileEvidenceId: null })).toEqual([
+      "model",
+      "a profile photo",
+    ]);
   });
 
   it("publishes only drafts and tokenized assets that were never published", () => {

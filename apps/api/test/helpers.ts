@@ -561,3 +561,30 @@ export async function oracleSigner(): Promise<Signer> {
     await rm(dir, { recursive: true, force: true });
   }
 }
+
+/**
+ * Records a public photo of the asset as its profile photo, which publishing requires, without
+ * storing a file: for tests that publish without object storage. Recorded as a third party's, so
+ * no automated check is queued for it.
+ */
+export async function addProfilePhoto(prisma: PrismaClient, wbId: string): Promise<string> {
+  const asset = await prisma.asset.findUniqueOrThrow({ where: { wbId } });
+  const id = randomUUID();
+  await prisma.evidence.create({
+    data: {
+      id,
+      assetId: asset.id,
+      uploaderId: asset.ownerId,
+      type: "PHOTO",
+      source: "THIRD_PARTY",
+      storageKey: `evidence/${asset.id}/${id}.jpg`,
+      publicStorageKey: `public/${asset.id}/${id}`,
+      sha256: randomBytes(32).toString("hex"),
+      mimeType: "image/jpeg",
+      sizeBytes: 1024,
+      visibility: "PUBLIC",
+    },
+  });
+  await prisma.asset.update({ where: { id: asset.id }, data: { profileEvidenceId: id } });
+  return id;
+}

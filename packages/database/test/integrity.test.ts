@@ -1675,6 +1675,32 @@ describe.skipIf(!TEST_DATABASE_URL)("database integrity", () => {
       );
     });
 
+    it("keeps the profile photo a public photo of the same asset", async () => {
+      const a = await asset();
+      const own = { assetId: a.id, uploaderId: a.ownerId };
+      const shown = { visibility: "PUBLIC" as const, publicStorageKey: `public/${randomUUID()}` };
+      const priv = await evidence(own);
+      const pub = await evidence({ ...own, ...shown });
+      const elsewhere = await evidence({ ...shown, publicStorageKey: `public/${randomUUID()}` });
+      const setProfile = (profileEvidenceId: string | null) =>
+        db.prisma.asset.update({ where: { id: a.id }, data: { profileEvidenceId } });
+      await expectDbError(setProfile(priv.id), CHECK_VIOLATION);
+      await expectDbError(setProfile(elsewhere.id), CHECK_VIOLATION);
+      await setProfile(pub.id);
+      await expectDbError(
+        db.prisma.evidence.update({
+          where: { id: pub.id },
+          data: { visibility: "PRIVATE", publicStorageKey: null },
+        }),
+        CHECK_VIOLATION,
+      );
+      await setProfile(null);
+      await db.prisma.evidence.update({
+        where: { id: pub.id },
+        data: { visibility: "PRIVATE", publicStorageKey: null },
+      });
+    });
+
     it("does not let evidence be marked a duplicate of itself", async () => {
       const id = randomUUID();
       await expectDbError(evidence({ id, duplicateOfId: id }), CHECK_VIOLATION);
