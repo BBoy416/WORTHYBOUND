@@ -43,6 +43,9 @@ export function HomePage() {
               onChange={(e) => setWbId(e.target.value)}
             />
             <button type="submit">Check</button>
+            <button type="button" className="ghost" onClick={() => navigate("/scan")}>
+              Scan QR
+            </button>
           </form>
           <ErrorText error={error} />
           <p className="muted tiny powered-by">

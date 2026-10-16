@@ -138,6 +138,7 @@ export function AssetDetailPage({ wbId }: { wbId: string }) {
           <Card title="Confirm ownership to a buyer">
             <ConfirmOwnership asset={a} />
           </Card>
+          <PassportQr base={base} wbId={a.wbId} />
         </>
       )}
 
@@ -171,6 +172,60 @@ export function AssetDetailPage({ wbId }: { wbId: string }) {
       <Verification asset={a} requests={requests.data?.items ?? null} onChange={reloadAll} />
       <TrustBreakdown trust={trust.data} error={trust.error} />
     </div>
+  );
+}
+
+/** The owner's printable QR code of the public passport link. */
+function PassportQr({ base, wbId }: { base: string; wbId: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    let live = true;
+    fetch(`${base}/passport-qr`, {
+      headers: { accept: "image/svg+xml" },
+      credentials: "same-origin",
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error();
+        const blob = new Blob([await res.text()], { type: "image/svg+xml" });
+        if (!live) return;
+        objectUrl = URL.createObjectURL(blob);
+        setUrl(objectUrl);
+      })
+      .catch(() => live && setError("The QR code could not be loaded."));
+    return () => {
+      live = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [base]);
+  return (
+    <Card title="Passport QR code">
+      <div className="passport-qr">
+        {url && <img src={url} alt={`QR code of the passport ${wbId}`} width={180} height={180} />}
+        <div>
+          <p className="small">
+            Print it for the item's box, papers or display tag. Anyone who scans it sees the public
+            passport, never your identity, serial number or private evidence.
+          </p>
+          <p className="muted small">
+            A QR code can be copied, so it identifies the passport, not the item: buyers should
+            still run a check before buying. Avoid sticking it on the item itself.
+          </p>
+          {url && (
+            <p className="actions">
+              <a className="button ghost small" href={url} download={`${wbId}-passport-qr.svg`}>
+                Download
+              </a>
+              <a className="button ghost small" href={url} target="_blank" rel="noreferrer">
+                Open to print
+              </a>
+            </p>
+          )}
+          <ErrorText error={error} />
+        </div>
+      </div>
+    </Card>
   );
 }
 

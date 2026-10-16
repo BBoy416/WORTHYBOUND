@@ -45,7 +45,9 @@ need no verification.
    wallet, and the status and Trust Score are written to the item's WorthyBound record on Solana.
 6. **Inspect the passport** (`/passport/<WB ID>`): Trust Score, status, verification history and
    links to the token, the WorthyBound record and each transaction on Solscan and Solana Explorer.
-   Private evidence and identity data are not shown.
+   Private evidence and identity data are not shown. The owner's asset page also has a printable
+   **passport QR code**; scan it with a phone camera or the site's **Scan** page to open the
+   passport.
 7. **Sell in person with SOL.** On the buyer's phone, the buyer opens the passport and starts a
    check before buying: the seller signs a one-time code with the owner's wallet ("confirmed
    current owner"), and the buyer photographs the item, which is compared with the recorded
@@ -140,7 +142,12 @@ The Trust Score does not guarantee authenticity, ownership, legal title or value
 **Built (Solana devnet):** wallet sign-in, assets and passports, Evidence Vault, guided capture,
 automatic checks, verifier onboarding and signed attestations, Trust Score (engine 1.4.0),
 tokenization and chain sync, checks before buying (in person and remote), controlled SOL
-transfers, shipped-item SOL escrow, disputes and admin revocation.
+transfers, shipped-item SOL escrow, disputes, admin revocation and passport QR codes.
+
+**Passport QR codes:** the owner of a published passport can download or print a QR code of its
+public link. It shows only what the passport already shows. The site's scanner opens only
+WorthyBound passports and refuses any other code. A QR code can be copied, so it identifies the
+passport, not the item; buyers still run a check before buying.
 
 **Admin revocation:** an administrator revokes an item with a required reason. A published
 passport stays public with a revoked warning; a draft is discarded. Any open transfer and open
@@ -153,6 +160,7 @@ kept: nothing is deleted.
 - An integrated identity-verification (KYC) provider (today a server operator records the status).
 - Mainnet. Real-money escrow on mainnet requires legal review first.
 - On-chain anchors for evidence, verifiers and attestations.
+- Tamper-evident NFC tags fitted by a verifier, binding the passport to the item itself.
 - Pricing and fees are proposed only; WorthyBound charges nothing today.
 
 ## Repository layout
@@ -169,7 +177,7 @@ apps/
 packages/
   database/           Prisma schema, migrations and client (PostgreSQL)
   shared/             domain enums, asset IDs, lifecycle rules, public passport and verifier
-                      profile, evidence seals, attestation messages
+                      profile, evidence seals, attestation messages, passport QR codes
   solana/             client for the program (generated with Codama from the IDL), oracle
                       client, LiteSVM tests and devnet scripts
   storage/            S3-compatible object storage for evidence

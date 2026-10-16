@@ -137,6 +137,7 @@ const ownerRoutes = (a: OwnerAsset) => ({
   [`GET /assets/${WB}/verification-requests`]: { json: { items: [] } },
   [`GET /assets/${WB}/capture-sessions`]: { json: { items: [] } },
   [`GET /assets/${WB}/remote-checks`]: { json: { items: [] } },
+  [`GET /assets/${WB}/passport-qr`]: { json: "<svg/>" },
   "GET /templates": { json: { items: [] } },
 });
 
@@ -272,6 +273,60 @@ describe("public passport", () => {
     expect(await screen.findByText("Submariner")).toBeTruthy();
     expect(window.location.pathname).toBe(`/passport/${WB}`);
   });
+
+  describe("QR scanner", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    /** A camera and a built-in QR decoder that reports `codes` on each frame. */
+    const scanner = (codes: string[]) => {
+      const stop = vi.fn();
+      vi.stubGlobal("navigator", {
+        ...navigator,
+        mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [{ stop }] })) },
+      });
+      vi.spyOn(HTMLMediaElement.prototype, "readyState", "get").mockReturnValue(4);
+      vi.stubGlobal(
+        "BarcodeDetector",
+        class {
+          detect = async () => codes.map((rawValue) => ({ rawValue }));
+        },
+      );
+      return { stop };
+    };
+
+    it("opens the passport of a scanned WorthyBound QR code and stops the camera", async () => {
+      const { stop } = scanner([`${window.location.origin}/passport/${WB}`]);
+      mockFetch({
+        "GET /auth/me": unauthenticated,
+        [`GET /passport/${WB}`]: { json: { passport: passport(), url: "" } },
+      });
+      renderAt("/");
+      fireEvent.click(screen.getByText("Scan QR"));
+      expect(await screen.findByText("Submariner")).toBeTruthy();
+      expect(window.location.pathname).toBe(`/passport/${WB}`);
+      expect(stop).toHaveBeenCalled();
+    });
+
+    it("refuses a QR code that is not a WorthyBound passport", async () => {
+      scanner([`https://worthyb0und.example/passport/${WB}`]);
+      mockFetch({ "GET /auth/me": unauthenticated });
+      renderAt("/scan");
+      expect(await screen.findByText(/not a WorthyBound passport/)).toBeTruthy();
+      expect(window.location.pathname).toBe("/scan");
+    });
+
+    it("asks for the WB ID when the browser cannot scan", async () => {
+      mockFetch({
+        "GET /auth/me": unauthenticated,
+        [`GET /passport/${WB}`]: { json: { passport: passport(), url: "" } },
+      });
+      renderAt("/scan");
+      expect(await screen.findByText(/cannot scan QR codes/)).toBeTruthy();
+      fireEvent.change(screen.getByLabelText("WB ID"), { target: { value: WB } });
+      fireEvent.click(screen.getByText("Check"));
+      expect(await screen.findByText("Submariner")).toBeTruthy();
+    });
+  });
 });
 
 describe("sign-in", () => {
@@ -384,6 +439,21 @@ describe("owner asset page", () => {
       brand: "Rolex",
       model: "Datejust",
     });
+  });
+
+  it("offers the passport QR code of a published asset", async () => {
+    mockFetch(ownerRoutes(asset()));
+    renderAt(`/assets/${WB}`);
+    const img = (await screen.findByAltText(`QR code of the passport ${WB}`)) as HTMLImageElement;
+    expect(img.getAttribute("src")).toBe("blob:test");
+    expect(screen.getByText("Download").getAttribute("download")).toBe(`${WB}-passport-qr.svg`);
+  });
+
+  it("offers no QR code before the passport is published", async () => {
+    mockFetch(ownerRoutes(asset({ status: "DRAFT", publishedAt: null })));
+    renderAt(`/assets/${WB}`);
+    await screen.findByText("Details");
+    expect(screen.queryByText("Passport QR code")).toBeNull();
   });
 
   it("offers no editing once the passport is published", async () => {

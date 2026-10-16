@@ -12,3 +12,4 @@ export * from "./checks.js";
 export * from "./capture.js";
 export * from "./purchase.js";
 export * from "./escrow.js";
+export * from "./qr.js";

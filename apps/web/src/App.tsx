@@ -9,6 +9,7 @@ import { HomePage } from "./pages/Home.js";
 import { NewAssetPage } from "./pages/NewAsset.js";
 import { PurchaseCheckPage } from "./pages/PurchaseCheck.js";
 import { PassportPage } from "./pages/Passport.js";
+import { ScanPage } from "./pages/Scan.js";
 import { TransfersPage } from "./pages/Transfers.js";
 import { VerifierQueuePage, VerifierRequestPage } from "./pages/Verifier.js";
 import { VerifierApplyPage } from "./pages/VerifierApply.js";
@@ -25,6 +26,7 @@ function Header() {
         <Logo />
       </Link>
       <nav>
+        <Link to="/scan">Scan</Link>
         {me && <Link to="/assets">My assets</Link>}
         {me && <Link to="/transfers">Transfers</Link>}
         {hasRole(me, "VERIFIER") && <Link to="/verifier">Verify</Link>}
@@ -66,6 +68,7 @@ export function Page({ path }: { path: string }) {
   let m: Record<string, string> | null;
   if (path === "/" || path === "") return <HomePage />;
   if ((m = match("/passport/:wbId", path))) return <PassportPage wbId={m.wbId as string} />;
+  if (path === "/scan") return <ScanPage />;
   if (path === "/assets")
     return (
       <SignedIn>

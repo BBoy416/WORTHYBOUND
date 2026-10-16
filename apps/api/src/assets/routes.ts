@@ -1,4 +1,4 @@
-import { evidencePreviewPath } from "@worthybound/shared";
+import { evidencePreviewPath, isPassportPublic, passportUrl, qrSvg } from "@worthybound/shared";
 import {
   adminRevokeAssetSchema,
   assetConditionRequestSchema,
@@ -124,6 +124,37 @@ export const assetRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx) =
       schema: { params: assetParamsSchema, response: { 200: ownerAssetSchema, ...errors } },
     },
     async (request) => view(await service.get(request.params.wbId, actor(request))),
+  );
+
+  /**
+   * QR code of the public passport link, for the owner to print. It only links to the passport,
+   * which anyone may open; it does not prove that an item is the registered one.
+   */
+  app.get(
+    "/assets/:wbId/passport-qr",
+    {
+      preHandler: authenticate,
+      config: perUser(rateLimits.public),
+      schema: { params: assetParamsSchema },
+    },
+    async (request, reply) => {
+      const asset = await service.get(request.params.wbId, actor(request));
+      if (!isPassportPublic(asset.status) || asset.status === "REVOKED") {
+        throw new ApiError(
+          409,
+          "passport_not_public",
+          "Only published passports that are not revoked have a QR code",
+        );
+      }
+      return reply
+        .header("content-type", "image/svg+xml")
+        .header("content-disposition", `inline; filename="${asset.wbId}-passport-qr.svg"`)
+        .header("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'")
+        .header("cache-control", "private, max-age=3600")
+        .send(
+          qrSvg(passportUrl(config.publicWebUrl, asset.wbId), `WorthyBound passport ${asset.wbId}`),
+        );
+    },
   );
 
   app.get(

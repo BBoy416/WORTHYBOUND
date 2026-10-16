@@ -305,6 +305,21 @@ Every on-chain address and transaction in the app uses Solscan (devnet) as its m
 
 The Trust Score disclaimer is unchanged: it does not guarantee authenticity, ownership, legal title or value.
 
+### Passport QR codes
+
+Built on devnet (ADR 0009). The owner of a published, not revoked passport can download or print a QR code of its public link (`GET /assets/:wbId/passport-qr`, SVG). The code is public by design: it holds only the passport link, and the passport shows nothing private. Anyone can scan it with a phone camera app or with the site's scanner (`/scan`), which opens only WorthyBound passport links or a bare WB ID and refuses any other code. A QR code can be copied, so it identifies the passport, not the item; buyers still run a check before buying. Verifier-fitted, tamper-evident NFC tags that bind the passport to the item remain planned.
+
+```mermaid
+flowchart TD
+Owner["Owner of a published passport"] --> QR["GET /assets/:wbId/passport-qr: SVG of the passport link"]
+QR --> Print["Printed for box, papers or display tag"]
+Print --> Scan["Phone camera app or /scan"]
+Scan --> Valid{"WorthyBound passport link or WB ID?"}
+Valid -->|"No"| Refuse["Refused, not opened"]
+Valid -->|"Yes"| Passport["Public passport with status warnings"]
+Passport --> Check["Check before buying: owner confirmation and photo match"]
+```
+
 ## 8 Tokenization
 
 register_asset creates the WorthyBound record and mints a real frozen Metaplex Core asset.
@@ -947,11 +962,11 @@ Proof commands: node packages/solana/scripts/devnet.mjs smoke <oracle keypair>; 
 
 ## Built API route inventory
 
-There are 95 built API routes.
+There are 96 built API routes.
 
 - **Auth:** `POST /auth/nonce`, `POST /auth/verify`, `GET /auth/me`, `POST /auth/logout`, `GET /health`
 - **Assets:**
-  - Create and view: `GET|POST /assets`, `GET|PATCH /assets/:wbId`, `POST /assets/:wbId/publish`, `POST /assets/:wbId/tokenize`
+  - Create and view: `GET|POST /assets`, `GET|PATCH /assets/:wbId`, `POST /assets/:wbId/publish`, `POST /assets/:wbId/tokenize`, `GET /assets/:wbId/passport-qr`
   - Updates and status: `POST /assets/:wbId/status`, `POST /assets/:wbId/condition`, `GET /assets/:wbId/trust`, `GET /assets/:wbId/automated-checks`, `GET /metadata/:wbId`
 - **Evidence:**
   - Upload: `POST /assets/:wbId/evidence/uploads`, `POST /evidence/uploads/:uploadId/complete`

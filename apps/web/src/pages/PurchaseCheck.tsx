@@ -63,6 +63,10 @@ export function StartPurchaseCheck({ wbId }: { wbId: string }) {
         item with this page's camera. You never see who the seller is.
       </p>
       <p className="small">
+        Got here from a QR code? A QR code only opens this passport and can be copied onto another
+        item, so it is not proof on its own. Run a check.
+      </p>
+      <p className="small">
         Buying from afar? Request a remote check: within {REMOTE_CHECK_HOURS} hours, the owner films
         the item with a code you see, and you watch the video and get the result.
       </p>

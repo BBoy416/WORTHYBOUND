@@ -759,3 +759,15 @@ legend {
   font-size: 0.9rem;
   margin: 0 0 6px;
 }
+
+.passport-qr {
+  display: flex;
+  gap: 1.25rem;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.passport-qr img {
+  background: #fff;
+  border-radius: 8px;
+  padding: 6px;
+}

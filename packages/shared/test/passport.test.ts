@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
   ASSET_STATUSES,
+  encodeQr,
+  forEachDataModule,
+  formatBits,
+  gfMultiply,
   isPassportPublic,
   type PassportSource,
   passportPath,
   passportUrl,
+  QR_MASKS,
+  qrSvg,
+  rsRemainder,
   toPublicPassport,
   TRUST_SCORE_DISCLAIMER,
+  wbIdFromScan,
 } from "../src/index.js";
 
 const SECRET = "PRIVATE-SENTINEL";
@@ -389,5 +397,90 @@ describe("passport URLs", () => {
   it("rejects invalid IDs and non-web base URLs", () => {
     expect(() => passportPath("WB-123/../../admin")).toThrow();
     expect(() => passportUrl("javascript:alert(1)", "WB-7F93A281")).toThrow(TypeError);
+  });
+});
+
+describe("passport QR codes", () => {
+  const URL_TEXT = "https://worthybound.com/passport/WB-59D6C372";
+
+  it("adds Reed–Solomon codewords that make every syndrome zero", () => {
+    const data = [...new TextEncoder().encode(URL_TEXT)];
+    const ecc = rsRemainder(data, 18);
+    const codeword = [...data, ...ecc];
+    for (let i = 0, root = 1; i < 18; i++, root = gfMultiply(root, 2)) {
+      expect(codeword.reduce((acc, c) => gfMultiply(acc, root) ^ c, 0)).toBe(0);
+    }
+  });
+
+  it("draws finder patterns and the format bits of the chosen mask", () => {
+    const { modules, version, mask } = encodeQr(URL_TEXT);
+    expect(version).toBe(4);
+    expect(modules).toHaveLength(33);
+    expect(modules[0]!.slice(0, 7)).toEqual(new Array(7).fill(true));
+    expect(modules[1]!.slice(0, 7)).toEqual([true, false, false, false, false, false, true]);
+    const bits = formatBits(mask);
+    const read = [0, 1, 2, 3, 4, 5, 7, 8].map((y) => modules[y]![8]);
+    expect(read).toEqual([0, 1, 2, 3, 4, 5, 6, 7].map((i) => ((bits >>> i) & 1) === 1));
+  });
+
+  it("stores the text so it reads back from a version 1 code", () => {
+    const text = "WB-7F93A281";
+    const { modules, version, mask } = encodeQr(text);
+    expect(version).toBe(1);
+    const size = modules.length;
+    const reserved = modules.map((row, y) =>
+      row.map(
+        (_, x) =>
+          x === 6 ||
+          y === 6 ||
+          (x < 9 && y < 9) ||
+          (x > size - 9 && y < 9) ||
+          (x < 9 && y > size - 9),
+      ),
+    );
+    const bits: number[] = [];
+    forEachDataModule(size, reserved, (x, y) => {
+      bits.push(Number(modules[y]![x]! !== QR_MASKS[mask]!(x, y)));
+    });
+    const byte = (offset: number) => bits.slice(offset, offset + 8).reduce((a, b) => a * 2 + b, 0);
+    expect(bits.slice(0, 4)).toEqual([0, 1, 0, 0]);
+    expect(byte(4)).toBe(text.length);
+    const decoded = String.fromCharCode(...[...text].map((_, i) => byte(12 + i * 8)));
+    expect(decoded).toBe(text);
+  });
+
+  it("renders an SVG with a quiet zone and an escaped title", () => {
+    const svg = qrSvg(URL_TEXT, 'A <b> & "c"');
+    expect(svg).toMatch(/^<svg [^>]*viewBox="0 0 41 41"/);
+    expect(svg).toContain("<title>A &#60;b&#62; &#38; &#34;c&#34;</title>");
+    expect(svg).not.toContain("<script");
+  });
+
+  it("rejects text that does not fit", () => {
+    expect(() => encodeQr("x".repeat(214))).toThrow(RangeError);
+  });
+
+  describe("scanning", () => {
+    const origins = ["https://worthybound.com"];
+
+    it.each([
+      ["https://worthybound.com/passport/WB-59D6C372", "WB-59D6C372"],
+      ["https://worthybound.com/passport/wb-59d6c372/", "WB-59D6C372"],
+      ["  wb-59d6c372 ", "WB-59D6C372"],
+    ])("opens a WorthyBound passport: %s", (scanned, wbId) => {
+      expect(wbIdFromScan(scanned, origins)).toBe(wbId);
+    });
+
+    it.each([
+      "https://worthyb0und.com/passport/WB-59D6C372",
+      "https://worthybound.com.evil.example/passport/WB-59D6C372",
+      "http://worthybound.com/passport/WB-59D6C372",
+      "https://worthybound.com/assets/WB-59D6C372",
+      "https://worthybound.com/passport/WB-59D6C37",
+      "javascript:alert(1)",
+      "WIFI:S:home;T:WPA;P:secret;;",
+    ])("refuses anything else: %s", (scanned) => {
+      expect(wbIdFromScan(scanned, origins)).toBeNull();
+    });
   });
 });
