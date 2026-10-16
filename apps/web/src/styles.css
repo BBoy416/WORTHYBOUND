@@ -769,3 +769,15 @@ legend {
 .passport-label img {
   border-radius: 8px;
 }
+.passport-label > div {
+  flex: 1 1 280px;
+}
+.passport-label h3 {
+  font-size: 0.95rem;
+  margin: 0.9rem 0 0.3rem;
+}
+.passport-label ul,
+.passport-label ol {
+  margin: 0;
+  padding-left: 1.2rem;
+}

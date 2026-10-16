@@ -446,6 +446,8 @@ describe("owner asset page", () => {
     renderAt(`/assets/${WB}`);
     const img = (await screen.findByAltText(`Passport label of ${WB}`)) as HTMLImageElement;
     expect(img.getAttribute("src")).toBe("blob:test");
+    expect(screen.getByText("Only you can print this label.", { exact: false })).toBeTruthy();
+    expect(screen.getByText("How to keep it with the item")).toBeTruthy();
     expect(screen.getByText("Download").getAttribute("download")).toBe(`${WB}-passport-label.svg`);
     fireEvent.click(screen.getByText("Print label"));
     const frame = document.querySelector("iframe") as HTMLIFrameElement;

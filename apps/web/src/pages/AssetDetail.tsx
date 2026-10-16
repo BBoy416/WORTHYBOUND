@@ -225,14 +225,29 @@ function PassportLabel({ base, wbId }: { base: string; wbId: string }) {
         )}
         <div>
           <p className="small">
-            Print this 2 × 2 inch label, cut it out along the dashed line and keep it with the item:
-            in its box, with its papers or on its display tag. Scanning the QR code opens the public
-            passport, never your identity, serial number or private evidence.
+            Only you can print this label. Anyone who scans it sees the public passport, never your
+            identity, serial number or private evidence.
           </p>
+          <h3>What you can do with it</h3>
+          <ul className="small">
+            <li>Let a buyer, appraiser or insurer scan it to open this item&apos;s passport.</li>
+            <li>Show that the item has a WorthyBound record when you list, show or sell it.</li>
+          </ul>
+          <h3>How to keep it with the item</h3>
+          <ol className="small">
+            <li>Print at 100% (&quot;Actual size&quot;) and cut along the dashed line.</li>
+            <li>
+              Keep it in the item&apos;s box, with its papers or certificate, or on its display tag
+              or case. Do not stick it on the item itself.
+            </li>
+            <li>
+              A sleeve or laminated pouch keeps it readable. Reprint it here if it is damaged.
+            </li>
+            <li>When you sell the item, hand the label over with it.</li>
+          </ol>
           <p className="muted small">
-            Print at 100% (&quot;Actual size&quot;) so the QR code scans well. A label can be
-            copied, so it identifies the passport, not the item: buyers should still run a check
-            before buying.
+            A label can be copied, so it identifies the passport, not the item: buyers should still
+            run a check before buying.
           </p>
           {label && (
             <p className="actions">
