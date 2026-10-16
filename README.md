@@ -22,15 +22,11 @@ The live app at [worthybound.com](https://worthybound.com) runs on **Solana devn
 payments use devnet SOL, which has no value. You need a Solana wallet such as Phantom, set to
 devnet, and some devnet SOL from [faucet.solana.com](https://faucet.solana.com) for the buyer.
 
-**Identity verification.** Publishing needs an identity-verified owner, because every item is
-tokenized before its passport goes public, and buying needs an identity-verified buyer. No identity-verification (KYC) provider is integrated yet: a server
-operator records a wallet's status with `pnpm kyc:record` after the wallet has signed in once. For
-the complete demo, both the seller's and the buyer's wallets must be recorded as verified.
-
-To test publishing or buying, sign in once with each wallet, then email
-[support@worthybound.com](mailto:support@worthybound.com) with the wallet addresses and we will
-record them as verified on devnet. Signing in, registering an item and adding evidence need no
-verification.
+**Identity verification.** Not required on devnet: anyone who signs in can publish, buy and report
+a problem. The identity checks for owners and buyers are built and are turned on
+(`KYC_REQUIRED=true`) before going live (ADR 0004). Verifiers always need a verified identity; no
+identity-verification (KYC) provider is integrated yet, so a server operator records it with
+`pnpm kyc:record`.
 
 ### Walkthrough: register, tokenize and sell in person
 

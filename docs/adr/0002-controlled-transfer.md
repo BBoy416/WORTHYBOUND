@@ -15,7 +15,7 @@ WorthyBound asset tokens are **not freely transferable**.
 1. Tokens are frozen from creation. The freeze is controlled by the WorthyBound program, not the
    owner.
 2. Transfers happen only through the WorthyBound process: the seller starts a transfer
-   (`TRANSFER_PENDING`), the buyer must be KYC'd and accept, and the program unfreezes, transfers and
+   (`TRANSFER_PENDING`), the buyer must accept (and be KYC'd when KYC is required, ADR 0004), and the program unfreezes, transfers and
    re-freezes the token in a single transaction.
 3. Transfers are blocked while the asset is `DISPUTED` or `REPORTED_STOLEN`.
 4. After transfer a new custody period starts; POSSESSION and CONDITION claims stop counting until
@@ -28,7 +28,7 @@ WorthyBound asset tokens are **not freely transferable**.
 ## Implementation (API)
 
 - `POST /transfers` starts a transfer of a tokenized asset (`ACTIVE`, `VERIFIED` or
-  `REVERIFICATION_REQUIRED`) to a wallet that has signed in and has a verified identity. The asset
+  `REVERIFICATION_REQUIRED`) to a wallet that has signed in and, when KYC is required (ADR 0004), has a verified identity. The asset
   becomes `TRANSFER_PENDING`; one transfer can be open per asset. Transfers expire after
   `expiresInHours` (default 72) unless both parties have signed.
 - `POST /transfers/:id/accept` (recipient) prepares the `transfer_asset` transaction on a durable

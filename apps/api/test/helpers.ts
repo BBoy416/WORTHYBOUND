@@ -107,6 +107,7 @@ export const testConfig = (overrides: Record<string, string> = {}): Config =>
     SESSION_SECRET: "test-session-secret-at-least-32-characters",
     SERIAL_FINGERPRINT_KEY: "test-serial-fingerprint-key-at-least-32-chars",
     SOLANA_CLUSTER: "devnet",
+    KYC_REQUIRED: "true",
     S3_ACCESS_KEY_ID: "unused",
     S3_SECRET_ACCESS_KEY: "unused-secret",
     ...overrides,

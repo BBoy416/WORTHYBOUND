@@ -41,6 +41,8 @@ export interface Me {
   user: { id: string; walletAddress: string; displayName: string | null; identityStatus: string };
   roles: string[];
   session: { expiresAt: string };
+  /** Whether publishing, receiving a transfer and opening a dispute need a verified identity. */
+  kycRequired: boolean;
 }
 
 export interface OwnerAsset {

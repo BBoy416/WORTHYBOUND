@@ -278,7 +278,7 @@ function ReportProblem({ passport: p }: { passport: PublicPassport }) {
       </p>
       {!me ? (
         <p className="muted small">Connect your wallet to report a problem.</p>
-      ) : me.user.identityStatus !== "VERIFIED" ? (
+      ) : me.kycRequired && me.user.identityStatus !== "VERIFIED" ? (
         <p className="muted small">Verify your identity to report a problem.</p>
       ) : (
         <form onSubmit={submit}>

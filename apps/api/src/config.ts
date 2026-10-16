@@ -33,6 +33,14 @@ const configSchema = z.object({
       error: `must be ${WORTHYBOUND_PROGRAM_ADDRESS}, the program this build uses`,
     }),
   ),
+  /**
+   * Requires a verified identity (KYC, ADR 0004) to publish, receive a transfer or open a dispute.
+   * Off on devnet; turn on before going live. Verifiers always need one.
+   */
+  KYC_REQUIRED: z
+    .enum(["true", "false"], { error: "expected true or false" })
+    .default("false")
+    .transform((value) => value === "true"),
   /** Oracle keypair file, outside the repository. Tokenization is unavailable without it. */
   SOLANA_TRUST_ORACLE_KEYPAIR_PATH: optional(z.string()),
   /** Built web app (apps/web/dist) to serve on this origin; the API alone when unset. */

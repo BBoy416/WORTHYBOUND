@@ -65,7 +65,7 @@ Only one worker may run per database, so the API runs as a single instance.
 
 **Tokenization before publication (2026-10-16).** Every public passport has a token: publishing
 tokenizes first. `POST /assets/:wbId/publish` is for the owner of an unpublished `DRAFT` with brand
-and model and a verified identity (ADR 0004). It answers `202` with `tokenizationStatus: PENDING`
+and model, and a verified identity when KYC is required (ADR 0004). It answers `202` with `tokenizationStatus: PENDING`
 and the draft stays private; the owner cannot edit or discard it meanwhile. The record is
 registered as `ACTIVE`, with the sequence number of the status event that will publish it. Once
 registration is confirmed, the same transaction sets `TOKENIZED` (with a `TOKENIZED` provenance

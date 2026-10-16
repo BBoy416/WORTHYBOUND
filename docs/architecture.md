@@ -86,7 +86,7 @@ Wallet authentication is built. No KYC provider is integrated yet. A server oper
 
 `pnpm kyc:record <wallet> <provider> <reference> [VERIFIED|REJECTED|EXPIRED]`
 
-The wallet must have signed in once. Only the identity status and provider reference are stored, never identity documents. Tokenizing requires VERIFIED.
+The wallet must have signed in once. Only the identity status and provider reference are stored, never identity documents. Verifiers always need VERIFIED. Owners (to publish) and buyers (to receive a transfer), and anyone opening a dispute, need it only when `KYC_REQUIRED=true`; it is off on devnet and turned on before going live (ADR 0004).
 
 ```mermaid
 sequenceDiagram
@@ -121,9 +121,9 @@ Fingerprint --> Draft["Create DRAFT asset and WB ID"]
 Draft --> Log["Append AssetStatusEvent and ProvenanceEvent"]
 Log --> Ready{"Ready to publish?"}
 Ready -->|"No: brand, model or profile photo"| Missing["List missing requirements"]
-Ready -->|"Yes, owner asks to tokenize and publish"| Identity{"Owner identity VERIFIED?"}
-Identity -->|"No"| Block["Publishing blocked"]
-Identity -->|"Yes"| Job["tokenizationStatus PENDING; REGISTER_ASSET chain job; draft frozen"]
+Ready -->|"Yes, owner asks to tokenize and publish"| Identity{"KYC required and owner not VERIFIED?"}
+Identity -->|"Yes"| Block["Publishing blocked"]
+Identity -->|"No (always on devnet)"| Job["tokenizationStatus PENDING; REGISTER_ASSET chain job; draft frozen"]
 Job --> Mint["Create record and frozen Metaplex Core asset, registered as ACTIVE"]
 Mint --> Confirmed{"Confirmed?"}
 Confirmed -->|"Yes"| Publish["TOKENIZED; DRAFT to ACTIVE; passport public"]
@@ -328,9 +328,9 @@ register_asset creates the WorthyBound record and mints a real frozen Metaplex C
 
 ```mermaid
 flowchart TD
-Request["Owner asks to tokenize and publish a draft"] --> Identity{"Owner identity VERIFIED?"}
-Identity -->|"No"| Block["Block tokenization and publishing"]
-Identity -->|"Yes"| Queue["tokenizationStatus PENDING; REGISTER_ASSET job"]
+Request["Owner asks to tokenize and publish a draft"] --> Identity{"KYC required and owner not VERIFIED?"}
+Identity -->|"Yes"| Block["Block tokenization and publishing"]
+Identity -->|"No (always on devnet)"| Queue["tokenizationStatus PENDING; REGISTER_ASSET job"]
 Queue --> Oracle["Oracle signs registration"]
 Oracle --> WB["WorthyBound register_asset"]
 WB --> Record["Create AssetRecord"]

@@ -120,6 +120,7 @@ describe.skipIf(!TEST_DATABASE_URL)("wallet authentication", () => {
         identityStatus: "UNVERIFIED",
       });
       expect(body.roles).toEqual(["USER"]);
+      expect(body.kycRequired).toBe(true);
       expect(new Date(body.session.expiresAt).getTime()).toBe(
         clock.now().getTime() + SESSION_TTL_MS,
       );

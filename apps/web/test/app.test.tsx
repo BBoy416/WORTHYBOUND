@@ -257,6 +257,17 @@ describe("public passport", () => {
     expect(screen.queryByLabelText("What is wrong")).toBeNull();
   });
 
+  it("lets an unverified user report a problem when KYC is not required", async () => {
+    mockFetch({
+      "GET /auth/me": { json: me(["USER"], "UNVERIFIED", false) },
+      [`GET /passport/${WB}`]: { json: { passport: passport(), url: "" } },
+      "GET /disputes": { json: { items: [] } },
+    });
+    renderAt(`/passport/${WB}`);
+    expect(await screen.findByLabelText("What is wrong")).toBeTruthy();
+    expect(screen.queryByText("Verify your identity to report a problem.")).toBeNull();
+  });
+
   it("says when there is no passport", async () => {
     mockFetch({ "GET /auth/me": unauthenticated });
     renderAt(`/passport/${WB}`);
@@ -411,6 +422,17 @@ describe("owner asset page", () => {
     const button = (await screen.findByText("Tokenize and publish")) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     expect(screen.getByText(/Needs a verified identity/)).toBeTruthy();
+  });
+
+  it("lets an unverified owner publish when KYC is not required", async () => {
+    mockFetch({
+      ...ownerRoutes(asset({ status: "DRAFT", publishedAt: null })),
+      "GET /auth/me": { json: me(["USER"], "UNVERIFIED", false) },
+    });
+    renderAt(`/assets/${WB}`);
+    const button = (await screen.findByText("Tokenize and publish")) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    expect(screen.queryByText(/Needs a verified identity/)).toBeNull();
   });
 
   it("lists what is missing before a draft can be published", async () => {

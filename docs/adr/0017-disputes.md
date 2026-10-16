@@ -13,7 +13,7 @@ attestation, or that a public photo comes from a sales listing, had no way to sa
 
 ## Decision
 
-**Who.** Any signed-in user with a verified identity (ADR 0004) can open a dispute about a
+**Who.** Any signed-in user, with a verified identity when KYC is required (ADR 0004), can open a dispute about a
 published asset that is not revoked (`POST /disputes`). A dispute targets the asset, one
 attestation on it (active, expired or already disputed) or one evidence item on it (public, or
 any of the caller's own). One open dispute per person and target. The opener sees their disputes

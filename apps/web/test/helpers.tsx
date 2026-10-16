@@ -51,7 +51,7 @@ export function renderAt(path: string) {
   );
 }
 
-export const me = (roles = ["USER"], identityStatus = "VERIFIED") => ({
+export const me = (roles = ["USER"], identityStatus = "VERIFIED", kycRequired = true) => ({
   user: {
     id: "u1",
     walletAddress: "4WFo2nZ5eqWqnstZupSt6oqq6tN2MTM4C2ARixHrWfmv",
@@ -60,6 +60,7 @@ export const me = (roles = ["USER"], identityStatus = "VERIFIED") => ({
   },
   roles,
   session: { expiresAt: "2026-10-12T12:00:00.000Z" },
+  kycRequired,
 });
 
 export const unauthenticated = {

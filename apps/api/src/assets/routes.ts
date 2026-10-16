@@ -55,6 +55,7 @@ export const assetRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx) =
     prisma,
     now,
     serialFingerprintKey: config.SERIAL_FINGERPRINT_KEY,
+    kycRequired: config.KYC_REQUIRED,
   });
   const actor = (request: FastifyRequest): Actor => ({
     userId: (request.auth as AuthContext).user.id,

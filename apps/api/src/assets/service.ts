@@ -45,6 +45,8 @@ export interface AssetServiceOptions {
   prisma: PrismaClient;
   now: () => Date;
   serialFingerprintKey: string;
+  /** Publishing needs a verified identity (ADR 0004). */
+  kycRequired: boolean;
 }
 
 const REGISTER_SCOPE = "asset.register";
@@ -166,7 +168,12 @@ export async function publishTokenized(tx: Tx, assetId: string, at: Date): Promi
   await recordTrust(tx, asset.id, at);
 }
 
-export function createAssetService({ prisma, now, serialFingerprintKey }: AssetServiceOptions) {
+export function createAssetService({
+  prisma,
+  now,
+  serialFingerprintKey,
+  kycRequired,
+}: AssetServiceOptions) {
   const fingerprintOf = (asset: Pick<Asset, "category" | "brand" | "serialNumber">) =>
     asset.serialNumber
       ? serialFingerprint(serialFingerprintKey, { ...asset, serialNumber: asset.serialNumber })
@@ -481,8 +488,8 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
     /**
      * Queues registration on-chain: a frozen token minted to the owner's wallet (ADR 0002,
      * ADR 0016). The passport is published once registration is confirmed (`publishTokenized`),
-     * so every public passport has a token. Needs a verified identity (ADR 0004). Repeating the
-     * request while pending changes nothing; after a failure it retries.
+     * so every public passport has a token. Needs a verified identity when KYC is required
+     * (ADR 0004). Repeating the request while pending changes nothing; after a failure it retries.
      */
     async publish(wbId: string, actor: Actor): Promise<Asset> {
       return prisma.$transaction(async (tx) => {
@@ -520,16 +527,18 @@ export function createAssetService({ prisma, now, serialFingerprintKey }: AssetS
         } catch (error) {
           throw fromDomainError(error);
         }
-        const owner = await tx.user.findUniqueOrThrow({
-          where: { id: actor.userId },
-          select: { identityStatus: true },
-        });
-        if (owner.identityStatus !== "VERIFIED") {
-          throw new ApiError(
-            403,
-            "identity_verification_required",
-            "Verify your identity before publishing an asset",
-          );
+        if (kycRequired) {
+          const owner = await tx.user.findUniqueOrThrow({
+            where: { id: actor.userId },
+            select: { identityStatus: true },
+          });
+          if (owner.identityStatus !== "VERIFIED") {
+            throw new ApiError(
+              403,
+              "identity_verification_required",
+              "Verify your identity before publishing an asset",
+            );
+          }
         }
         const { record, coreAsset } = await chainAddresses(asset.wbId);
         const at = now();

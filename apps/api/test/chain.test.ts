@@ -22,6 +22,7 @@ import {
   TEST_STORAGE_AVAILABLE,
   testApp,
   testClock,
+  testConfig,
   TestWallet,
   type TestDatabase,
 } from "./helpers.js";
@@ -45,6 +46,8 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
   let db: TestDatabase;
   let app: FastifyInstance;
   let offline: FastifyInstance;
+  /** KYC not required, as on devnet. */
+  let devnet: FastifyInstance;
   let oracle: FakeOracle;
   let clock: Clock;
   let kick: () => void;
@@ -63,6 +66,12 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
       ...(storage ? { storage, checkEngine: engine } : {}),
     });
     offline = await testApp(db.prisma);
+    devnet = await testApp(db.prisma, {
+      oracle,
+      now: clock.now,
+      config: testConfig({ KYC_REQUIRED: "false" }),
+    });
+    devnet.chainSync!.kick = () => {};
     // Jobs run when a test calls runOnce, so tests control the order.
     const sync = app.chainSync!;
     kick = sync.kick.bind(sync);
@@ -72,6 +81,7 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
   afterAll(async () => {
     await app?.close();
     await offline?.close();
+    await devnet?.close();
     await storage?.deleteBucket();
     await db?.drop();
   });
@@ -176,6 +186,42 @@ describe.skipIf(!TEST_DATABASE_URL)("tokenization and chain sync", () => {
       expect((await call(alice, "POST", `/assets/${bobs}/publish`)).statusCode).toBe(404);
       expect((await call(null, "POST", `/assets/${bobs}/publish`)).statusCode).toBe(401);
       expect(await jobs(bobs)).toEqual([]);
+    });
+
+    it("lets unverified users publish, receive a transfer and open a dispute when KYC is not required", async () => {
+      const onDevnet = (who: Owner, method: "GET" | "POST", url: string, payload?: object) =>
+        devnet.inject({
+          method,
+          url,
+          ...(payload ? { payload } : {}),
+          cookies: { wb_session: who.token },
+        });
+      const bob = await owner({ kyc: false });
+      const carol = await owner({ kyc: false });
+      expect((await onDevnet(bob, "GET", "/auth/me")).json().kycRequired).toBe(false);
+      expect((await call(bob, "GET", "/auth/me")).json().kycRequired).toBe(true);
+
+      const wbId = await draft(bob);
+      const published = await onDevnet(bob, "POST", `/assets/${wbId}/publish`);
+      expect(published.statusCode, published.body).toBe(202);
+      await app.chainSync?.runOnce();
+      expect(await assetRow(wbId)).toMatchObject({
+        status: "ACTIVE",
+        tokenizationStatus: "TOKENIZED",
+      });
+
+      const transfer = await onDevnet(bob, "POST", "/transfers", {
+        assetId: wbId,
+        toWalletAddress: carol.wallet.address,
+      });
+      expect(transfer.statusCode, transfer.body).toBe(201);
+      const dispute = await onDevnet(carol, "POST", "/disputes", {
+        assetId: wbId,
+        reason: "The photos show another watch",
+      });
+      expect(dispute.statusCode, dispute.body).toBe(201);
+      await app.chainSync?.runOnce();
+      oracle.calls.length = 0;
     });
 
     it("mints a frozen token to the owner's wallet, then publishes and mirrors the Trust Score", async () => {

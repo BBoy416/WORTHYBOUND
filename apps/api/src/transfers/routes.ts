@@ -39,7 +39,13 @@ const perUser = (limit: RateLimit) => ({
 /** Controlled transfers between WorthyBound users (ADR 0002), shipped ones in escrow (ADR 0014). */
 export const transferRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx) => {
   const { config, prisma, now, authenticate, requireRole, rateLimits, oracle, chainSync } = ctx;
-  const service = createTransferService({ prisma, now, oracle, log: app.log });
+  const service = createTransferService({
+    prisma,
+    now,
+    oracle,
+    log: app.log,
+    kycRequired: config.KYC_REQUIRED,
+  });
   const actor = (request: FastifyRequest): Actor => ({
     userId: (request.auth as AuthContext).user.id,
     fp: fingerprint(config.SESSION_SECRET, request),

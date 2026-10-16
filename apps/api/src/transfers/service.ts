@@ -264,10 +264,18 @@ export interface TransferServiceOptions {
   /** Null without an oracle key; transfers are then unavailable. */
   oracle: WorthyBoundOracle | null;
   log: FastifyBaseLogger;
+  /** The recipient needs a verified identity (ADR 0004). */
+  kycRequired: boolean;
 }
 
-/** Controlled transfers (ADR 0002): the seller starts, the KYC'd buyer accepts, both sign. */
-export function createTransferService({ prisma, now, oracle, log }: TransferServiceOptions) {
+/** Controlled transfers (ADR 0002): the seller starts, the buyer accepts, both sign. */
+export function createTransferService({
+  prisma,
+  now,
+  oracle,
+  log,
+  kycRequired,
+}: TransferServiceOptions) {
   const load = (id: string) =>
     prisma.transferRequest.findUnique({ where: { id }, include: transferInclude });
 
@@ -414,8 +422,9 @@ export function createTransferService({ prisma, now, oracle, log }: TransferServ
     },
 
     /**
-     * Starts a transfer to a signed-in wallet with a verified identity. The asset must be
-     * tokenized and active, verified or awaiting reverification; it becomes TRANSFER_PENDING.
+     * Starts a transfer to a signed-in wallet, with a verified identity when KYC is required. The
+     * asset must be tokenized and active, verified or awaiting reverification; it becomes
+     * TRANSFER_PENDING.
      */
     async start(input: TransferRequestInput, actor: Actor) {
       if (!oracle) throw unavailable();
@@ -464,7 +473,7 @@ export function createTransferService({ prisma, now, oracle, log }: TransferServ
         if (recipient.id === actor.userId) {
           throw new ApiError(422, "same_owner", "You already own this asset");
         }
-        if (recipient.identityStatus !== "VERIFIED") {
+        if (kycRequired && recipient.identityStatus !== "VERIFIED") {
           throw new ApiError(
             422,
             "recipient_identity_not_verified",

@@ -11,5 +11,10 @@
 - KYC is always required for **verifiers**.
 - KYC is performed by a third-party provider; WorthyBound stores only the verification status and
   provider reference, never identity documents.
+- **Devnet (2026-10-16):** the owner and buyer requirements are off while WorthyBound runs on
+  Solana devnet, so anyone who signs in can publish, receive a transfer and open a dispute. They
+  stay built behind `KYC_REQUIRED` (default `false`) and are turned on before going live. Verifiers
+  still need KYC, which the database enforces; operators record it with `pnpm kyc:record`.
+  `GET /auth/me` returns `kycRequired` so the web app shows the requirement only when it applies.
 - A KYC'd owner earns a small Trust Score factor and a higher self-documented cap (45 instead of 35).
   KYC establishes who a person is, not whether an item or document is genuine.

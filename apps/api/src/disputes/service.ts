@@ -92,13 +92,16 @@ async function lockDispute(tx: Tx, id: string): Promise<Dispute> {
 export interface DisputeServiceOptions {
   prisma: PrismaClient;
   now: () => Date;
+  /** Opening a dispute needs a verified identity (ADR 0004). */
+  kycRequired: boolean;
 }
 
 /**
  * Disputes about an asset, one of its attestations or one of its evidence items (ADR 0017).
- * Anyone with a verified identity can open one; administrators review and decide.
+ * Anyone signed in (with a verified identity when KYC is required) can open one; administrators
+ * review and decide.
  */
-export function createDisputeService({ prisma, now }: DisputeServiceOptions) {
+export function createDisputeService({ prisma, now, kycRequired }: DisputeServiceOptions) {
   const load = (id: string) =>
     prisma.dispute.findUniqueOrThrow({ where: { id }, include: disputeInclude });
   const loadAdmin = (id: string) =>
@@ -153,16 +156,18 @@ export function createDisputeService({ prisma, now }: DisputeServiceOptions) {
      * asset's. One open dispute per person and target.
      */
     async open(input: OpenDisputeInput, actor: Actor) {
-      const user = await prisma.user.findUniqueOrThrow({
-        where: { id: actor.userId },
-        select: { identityStatus: true },
-      });
-      if (user.identityStatus !== "VERIFIED") {
-        throw new ApiError(
-          403,
-          "identity_verification_required",
-          "Verify your identity before opening a dispute",
-        );
+      if (kycRequired) {
+        const user = await prisma.user.findUniqueOrThrow({
+          where: { id: actor.userId },
+          select: { identityStatus: true },
+        });
+        if (user.identityStatus !== "VERIFIED") {
+          throw new ApiError(
+            403,
+            "identity_verification_required",
+            "Verify your identity before opening a dispute",
+          );
+        }
       }
       const at = now();
       const id = await prisma.$transaction(async (tx) => {

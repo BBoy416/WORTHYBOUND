@@ -603,6 +603,7 @@ export function StartTransfer({ asset: a, onChange }: { asset: OwnerAsset; onCha
   const { busy, error, run } = useAction();
   const priceLamports = price.trim() ? solToLamports(price) : "0";
   const shipped = delivery === "SHIPPED";
+  const { me } = useSession();
   if (a.status === "TRANSFER_PENDING") {
     return (
       <p className="small">
@@ -661,9 +662,9 @@ export function StartTransfer({ asset: a, onChange }: { asset: OwnerAsset; onCha
         {shipped
           ? `The buyer pays the price into escrow. You then film the item and the sealed package and ship within ${SHIP_WITHIN_DAYS} days; you are paid, and the item passes to the buyer, once the buyer's photos on arrival match yours, or ${RELEASE_AFTER_DAYS} days after delivery unless they report a problem.`
           : "With a price, the buyer pays you in SOL in the same transaction that transfers the item."}{" "}
-        On Solana devnet. The buyer must have signed in to WorthyBound with this wallet and verified
-        their identity. The item stays yours until the buyer accepts and both of you sign; the
-        transfer expires after 72 hours otherwise.
+        On Solana devnet. The buyer must have signed in to WorthyBound with this wallet
+        {me?.kycRequired ? " and verified their identity" : ""}. The item stays yours until the
+        buyer accepts and both of you sign; the transfer expires after 72 hours otherwise.
       </p>
       <button
         className="small"

@@ -429,7 +429,7 @@ function Lifecycle({ asset: a, onChange }: { asset: OwnerAsset; onChange: () => 
     a.publishedAt === null &&
     a.status === "DRAFT" &&
     (a.tokenizationStatus === "NOT_TOKENIZED" || a.tokenizationStatus === "FAILED");
-  const kycMissing = me?.user.identityStatus !== "VERIFIED";
+  const kycMissing = me?.kycRequired === true && me.user.identityStatus !== "VERIFIED";
 
   return (
     <Card title="Passport and token">

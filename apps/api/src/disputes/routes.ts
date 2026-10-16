@@ -36,7 +36,7 @@ const perUser = (limit: RateLimit) => ({
 /** Disputes about an asset, an attestation or an evidence item (ADR 0017). */
 export const disputeRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx) => {
   const { config, prisma, now, authenticate, requireRole, rateLimits } = ctx;
-  const service = createDisputeService({ prisma, now });
+  const service = createDisputeService({ prisma, now, kycRequired: config.KYC_REQUIRED });
   const actor = (request: FastifyRequest): Actor => ({
     userId: (request.auth as AuthContext).user.id,
     fp: fingerprint(config.SESSION_SECRET, request),

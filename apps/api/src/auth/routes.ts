@@ -37,18 +37,20 @@ const meSchema = z.object({
   }),
   roles: z.array(z.string()),
   session: z.object({ expiresAt: z.iso.datetime() }),
-});
-
-const me = (auth: AuthContext) => ({
-  user: auth.user,
-  roles: auth.roles,
-  session: { expiresAt: auth.sessionExpiresAt.toISOString() },
+  /** Whether publishing, receiving a transfer and opening a dispute need a verified identity. */
+  kycRequired: z.boolean(),
 });
 
 const errorSchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
 
 export const authRoutes: FastifyPluginAsyncZod<AppContext> = async (app, ctx) => {
   const { config, prisma, now, authenticate, rateLimits } = ctx;
+  const me = (auth: AuthContext) => ({
+    user: auth.user,
+    roles: auth.roles,
+    session: { expiresAt: auth.sessionExpiresAt.toISOString() },
+    kycRequired: config.KYC_REQUIRED,
+  });
   const limited = {
     rateLimit: { max: rateLimits.auth.max, timeWindow: rateLimits.auth.timeWindowMs },
   };

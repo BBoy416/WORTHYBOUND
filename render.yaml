@@ -59,6 +59,9 @@ services:
         value: https://api.devnet.solana.com
       - key: WORTHYBOUND_PROGRAM_ID
         value: 5stfBCcoD9mpW3514ycoKZBQ4Xzav3KpbZHTC9AUGMem
+      # Owners and buyers need no verified identity on devnet; true before going live (ADR 0004).
+      - key: KYC_REQUIRED
+        value: "false"
       - key: SOLANA_TRUST_ORACLE_KEYPAIR_PATH
         value: /etc/secrets/wb-oracle.json
       # Cloudflare R2: https://<account id>.r2.cloudflarestorage.com. The bucket is the default,

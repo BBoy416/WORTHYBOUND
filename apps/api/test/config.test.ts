@@ -23,7 +23,12 @@ describe("loadConfig", () => {
       publicWebUrl: "http://localhost:3000",
       S3_REGION: "us-east-1",
       S3_BUCKET_EVIDENCE_PRIVATE: "worthybound-evidence-private",
+      KYC_REQUIRED: false,
     });
+    expect(loadConfig({ ...valid, KYC_REQUIRED: "true" }).KYC_REQUIRED).toBe(true);
+    expect(() => loadConfig({ ...valid, KYC_REQUIRED: "yes" })).toThrow(
+      /KYC_REQUIRED: expected true or false/,
+    );
     expect(loadConfig({ ...valid, AUTH_DOMAIN: "app.worthybound.com" }).authUri).toBe(
       "https://app.worthybound.com",
     );
